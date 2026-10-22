@@ -13,7 +13,7 @@ Gravador de tela e editor para Windows, feito com Tauri 2 (Rust + TypeScript, We
 - **Desenhar na tela durante a gravação:** caneta, seta, retângulo e marca-texto (atalho global **Ctrl+Shift+D**). O desenho entra no vídeo.
 - **Gravar e parar de qualquer programa:** atalho global **Alt+Shift+R** (usa a fonte escolhida no app). **Ctrl+Shift+X** também para. O atalho não é Ctrl+Shift+R porque esse recarrega páginas nos navegadores.
 - **Marcar momentos:** **Alt+Shift+M** ou o botão "Marcar" da barra flutuante. As marcas aparecem como bandeiras na régua da timeline; clicar perto de uma vai até ela.
-- **Janela do app:** fica fora da gravação.
+- **Janela do app:** fica fora da gravação. Fora da gravação, ela aparece normalmente em compartilhamento de tela e acesso remoto (AnyDesk, Meet).
 - **Contagem 3-2-1** na tela escolhida antes de começar (chip "Contagem"; Esc cancela, clique começa na hora).
 - **Barra flutuante** durante a gravação, fora do vídeo: tempo, Pausar/Continuar, Desenhar, Marcar e Parar. O app se minimiza e volta sozinho ao parar.
 - **Pausar:** a gravação continua por baixo e o trecho pausado já abre cortado no editor.

@@ -219,26 +219,34 @@ fn save_project(app: AppHandle, dir: String, json: String) -> Result<(), String>
     std::fs::rename(&temporary, &path).map_err(|error| error.to_string())
 }
 
-/// Keeps a window out of every recording (the main window, the floating recording bar).
-pub(crate) fn exclude_window(window: &tauri::WebviewWindow) {
+/// Hides a window from every screen capture, or shows it again. Hidden windows also vanish from
+/// screen sharing and remote access (AnyDesk, Meet), so only recording-time windows stay hidden.
+/// `RECORTE_CAPTURABLE=1` never hides, for screenshots and UI automation during development.
+fn set_capture_hidden(window: &tauri::WebviewWindow, hidden: bool) {
     use windows::Win32::Foundation::HWND;
-    use windows::Win32::UI::WindowsAndMessaging::{SetWindowDisplayAffinity, WDA_EXCLUDEFROMCAPTURE};
+    use windows::Win32::UI::WindowsAndMessaging::{SetWindowDisplayAffinity, WDA_EXCLUDEFROMCAPTURE, WDA_NONE};
 
-    if std::env::var_os("RECORTE_CAPTURABLE").is_some_and(|value| value == "1") {
+    if hidden && std::env::var_os("RECORTE_CAPTURABLE").is_some_and(|value| value == "1") {
         return;
     }
     if let Ok(hwnd) = window.hwnd() {
         unsafe {
-            let _ = SetWindowDisplayAffinity(HWND(hwnd.0 as _), WDA_EXCLUDEFROMCAPTURE);
+            let _ = SetWindowDisplayAffinity(HWND(hwnd.0 as _), if hidden { WDA_EXCLUDEFROMCAPTURE } else { WDA_NONE });
         }
     }
 }
 
-/// Keeps the app's own window out of every recording, so it can stay on screen while recording.
-/// `RECORTE_CAPTURABLE=1` turns this off, for screenshots and UI automation during development.
-fn exclude_from_capture(app: &tauri::App) {
+/// Keeps a window out of every recording (the floating recording bar, the overlays).
+pub(crate) fn exclude_window(window: &tauri::WebviewWindow) {
+    set_capture_hidden(window, true);
+}
+
+/// The main window is hidden from captures only while recording, so it stays visible over
+/// remote access and screen sharing the rest of the time.
+#[tauri::command]
+fn main_window_capture(app: AppHandle, hidden: bool) {
     if let Some(window) = app.get_webview_window("main") {
-        exclude_window(&window);
+        set_capture_hidden(&window, hidden);
     }
 }
 
@@ -259,7 +267,6 @@ pub fn run() {
         .manage(export::Exports::default())
         .manage(control::Pending::default())
         .setup(|app| {
-            exclude_from_capture(app);
             if let Err(error) = control::start(app.handle()) {
                 eprintln!("canal do MCP desligado: {error}");
             }
@@ -285,6 +292,7 @@ pub fn run() {
             take_rename,
             recording_pause,
             recording_mark,
+            main_window_capture,
             overlay::recbar_open,
             overlay::recbar_close,
             take_trash,

@@ -416,7 +416,10 @@ function setRecordingUi(active: boolean) {
     (control as HTMLInputElement).disabled = active;
   }
   renderPicker();
-  if (!active) void checkDevices();
+  if (!active) {
+    void checkDevices();
+    void invoke("main_window_capture", { hidden: false });
+  }
   ui.recordHint.textContent = active
     ? "Gravando… Ctrl+Shift+D desenha na tela · Ctrl+Shift+X para"
     : "Esta janela não aparece na gravação.";
@@ -468,12 +471,15 @@ async function startRecording() {
     return;
   }
 
+  // Hidden from captures only while recording, so it stays visible over remote access.
+  await invoke("main_window_capture", { hidden: true });
   let started: { warnings: string[]; dir: string };
   try {
     started = await invoke<{ warnings: string[]; dir: string }>("start_recording", { options });
   } catch (error) {
     camera?.close();
     camera = null;
+    void invoke("main_window_capture", { hidden: false });
     throw error;
   }
   if (camera) {
