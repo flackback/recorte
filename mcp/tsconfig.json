@@ -1,0 +1,8 @@
+{
+  "extends": "../tsconfig.json",
+  "compilerOptions": {
+    "lib": ["ES2023"],
+    "types": ["node"]
+  },
+  "include": [".", "../src/types.ts", "../src/editor/project.ts", "../src/editor/timemap.ts", "../src/editor/cleanup.ts"]
+}

@@ -1,0 +1,651 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="stylesheet" href="/src/styles.css" />
+    <link rel="icon" href="/icon.svg" type="image/svg+xml" />
+    <!-- Splash styles inline, so the entry animation paints before anything else loads. -->
+    <style>
+      .splash {
+        position: fixed;
+        inset: 0;
+        z-index: 100;
+        display: grid;
+        place-items: center;
+        align-content: center;
+        gap: 18px;
+        background: #f2f2f5;
+        transition: opacity 320ms ease, transform 320ms ease;
+      }
+      .splash.leaving {
+        opacity: 0;
+        transform: scale(1.03);
+        pointer-events: none;
+      }
+      .splash-logo {
+        width: 112px;
+        height: 112px;
+        overflow: visible;
+      }
+      .splash-logo .square {
+        transform-origin: 512px 512px;
+        animation: splash-square 520ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+      }
+      .splash-logo .corner {
+        stroke-dasharray: 360;
+        stroke-dashoffset: 360;
+        animation: splash-draw 460ms cubic-bezier(0.4, 0, 0.2, 1) 220ms forwards;
+      }
+      .splash-logo .dot {
+        transform-origin: 512px 512px;
+        animation: splash-dot 420ms cubic-bezier(0.2, 0.8, 0.2, 1) 420ms both;
+      }
+      .splash-name {
+        color: #1c1c1e;
+        font: 600 20px "Segoe UI Variable Display", "Segoe UI", system-ui, sans-serif;
+        letter-spacing: 0.01em;
+        animation: splash-name 420ms cubic-bezier(0.2, 0.8, 0.2, 1) 480ms both;
+      }
+      /* After the base rules, so the dark theme wins. */
+      @media (prefers-color-scheme: dark) {
+        .splash {
+          background: #121214;
+        }
+        .splash-name {
+          color: #f2f2f4;
+        }
+      }
+      @keyframes splash-square {
+        from {
+          opacity: 0;
+          transform: scale(0.82);
+        }
+      }
+      @keyframes splash-draw {
+        to {
+          stroke-dashoffset: 0;
+        }
+      }
+      @keyframes splash-dot {
+        from {
+          opacity: 0;
+          transform: scale(0.4);
+        }
+      }
+      @keyframes splash-name {
+        from {
+          opacity: 0;
+          transform: translateY(6px);
+        }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .splash-logo .square,
+        .splash-logo .dot,
+        .splash-name {
+          animation: none;
+        }
+        .splash-logo .corner {
+          animation: none;
+          stroke-dashoffset: 0;
+        }
+      }
+    </style>
+    <title>Recorte</title>
+    <script type="module" src="/src/main.ts" defer></script>
+  </head>
+
+  <body>
+    <div class="splash" id="splash" aria-hidden="true">
+      <svg class="splash-logo" viewBox="0 0 1024 1024">
+        <defs>
+          <linearGradient id="splash-bg" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0" stop-color="#2f8bff" />
+            <stop offset="1" stop-color="#5e5ce6" />
+          </linearGradient>
+        </defs>
+        <rect class="square" x="64" y="64" width="896" height="896" rx="208" fill="url(#splash-bg)" />
+        <g fill="none" stroke="#ffffff" stroke-width="64" stroke-linecap="round" stroke-linejoin="round">
+          <path class="corner" d="M272 432 V312 a40 40 0 0 1 40 -40 H432" />
+          <path class="corner" d="M752 592 V712 a40 40 0 0 1 -40 40 H592" />
+        </g>
+        <g class="dot">
+          <circle cx="512" cy="512" r="118" fill="#ffffff" />
+          <circle cx="512" cy="512" r="92" fill="#ff3b30" />
+        </g>
+      </svg>
+      <span class="splash-name">Recorte</span>
+    </div>
+    <!-- Icon sprite: stroke icons on a 24 grid, used as <svg class="i"><use href="#i-name"/></svg>. -->
+    <svg width="0" height="0" style="position: absolute" aria-hidden="true">
+      <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7" /></symbol>
+      <symbol id="i-play" viewBox="0 0 24 24"><path d="M8 5.5v13l10.5-6.5z" fill="currentColor" /></symbol>
+      <symbol id="i-pause" viewBox="0 0 24 24"><path d="M8 5v14M16 5v14" stroke-width="3.2" /></symbol>
+      <symbol id="i-undo" viewBox="0 0 24 24"><path d="M9 14 4 9l5-5M4 9h11a5 5 0 0 1 0 10h-3" /></symbol>
+      <symbol id="i-redo" viewBox="0 0 24 24"><path d="m15 14 5-5-5-5M20 9H9a5 5 0 0 0 0 10h3" /></symbol>
+      <symbol id="i-export" viewBox="0 0 24 24"><path d="M12 3v12m0 0-4.5-4.5M12 15l4.5-4.5M5 20h14" /></symbol>
+      <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z" /></symbol>
+      <symbol id="i-cut" viewBox="0 0 24 24"><circle cx="6" cy="6" r="3" /><circle cx="6" cy="18" r="3" /><path d="M8.1 8.1 20 20M8.1 15.9 20 4" /></symbol>
+      <symbol id="i-zoom" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7" /><path d="m20 20-4-4M11 8v6M8 11h6" /></symbol>
+      <symbol id="i-text" viewBox="0 0 24 24"><path d="M5 7V5h14v2M12 5v14M9 19h6" /></symbol>
+      <symbol id="i-speed" viewBox="0 0 24 24"><path d="m4 6 7 6-7 6M13 6l7 6-7 6" /></symbol>
+      <symbol id="i-blur" viewBox="0 0 24 24"><path d="M12 3s6 6.4 6 11a6 6 0 0 1-12 0c0-4.6 6-11 6-11Z" /></symbol>
+      <symbol id="i-crop" viewBox="0 0 24 24"><path d="M6 2v14a2 2 0 0 0 2 2h14M18 22V8a2 2 0 0 0-2-2H2" /></symbol>
+      <symbol id="i-image" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2" /><circle cx="9" cy="10" r="2" /><path d="m21 16-5-5-9 9" /></symbol>
+      <symbol id="i-trash" viewBox="0 0 24 24"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12M9 7V4h6v3" /></symbol>
+      <symbol id="i-close" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18" /></symbol>
+      <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12 5 5 9-10" /></symbol>
+      <symbol id="i-visual" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2" /><path d="M3 15l5-4 4 3 3-2 6 4" /></symbol>
+      <symbol id="i-cursor" viewBox="0 0 24 24"><path d="m5 3 14 7-6 2-2 6Z" /></symbol>
+      <symbol id="i-camera" viewBox="0 0 24 24"><rect x="3" y="6" width="13" height="12" rx="2" /><path d="m16 10 5-3v10l-5-3" /></symbol>
+      <symbol id="i-audio" viewBox="0 0 24 24"><path d="M4 9v6h4l5 4V5L8 9Z" /><path d="M16.5 8.5a5 5 0 0 1 0 7M19 6a8.5 8.5 0 0 1 0 12" /></symbol>
+      <symbol id="i-captions" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2" /><path d="M10 10.5a2 2 0 1 0 0 3M17 10.5a2 2 0 1 0 0 3" /></symbol>
+      <symbol id="i-mic" viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3" /><path d="M5 11a7 7 0 0 0 14 0M12 18v3" /></symbol>
+      <symbol id="i-monitor" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="12" rx="2" /><path d="M8 20h8M12 16v4" /></symbol>
+      <symbol id="i-keyboard" viewBox="0 0 24 24"><rect x="2" y="6" width="20" height="12" rx="2" /><path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M7 14h10" /></symbol>
+      <symbol id="i-wand" viewBox="0 0 24 24"><path d="m4 20 11-11M14 4v3M12.5 5.5h3M19 9v3M17.5 10.5h3M18 3l.01 0" /></symbol>
+      <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" /></symbol>
+      <symbol id="i-win-min" viewBox="0 0 24 24"><path d="M6 12h12" /></symbol>
+      <symbol id="i-win-max" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2" /></symbol>
+      <symbol id="i-win-restore" viewBox="0 0 24 24"><rect x="5.5" y="8.5" width="10" height="10" rx="2" /><path d="M9 5.5h7.5a2 2 0 0 1 2 2V15" /></symbol>
+      <symbol id="i-win-close" viewBox="0 0 24 24"><path d="M7 7l10 10M17 7 7 17" /></symbol>
+    </svg>
+
+    <!-- Our own title bar: the native one is turned off (decorations: false). -->
+    <header class="titlebar" data-tauri-drag-region>
+      <div class="titlebar-brand" data-tauri-drag-region>
+        <img class="brand-mark" src="/icon.svg" alt="" data-tauri-drag-region />
+        <strong data-tauri-drag-region>Recorte</strong>
+      </div>
+      <div class="titlebar-status" id="titlebar-status" data-tauri-drag-region hidden>
+        <span class="rec-dot" data-tauri-drag-region></span><span id="titlebar-time" data-tauri-drag-region>Gravando</span>
+      </div>
+      <button class="update-button" id="update" hidden><svg class="i"><use href="#i-export" /></svg><span>Atualizar</span></button>
+      <div class="window-controls">
+        <button id="win-min" title="Minimizar" aria-label="Minimizar"><svg class="i"><use href="#i-win-min" /></svg></button>
+        <button id="win-max" title="Maximizar" aria-label="Maximizar"><svg class="i"><use href="#i-win-max" /></svg></button>
+        <button id="win-close" class="close" title="Fechar" aria-label="Fechar"><svg class="i"><use href="#i-win-close" /></svg></button>
+      </div>
+    </header>
+
+    <div class="app">
+      <aside class="sidebar">
+
+        <section class="panel" id="record-panel">
+          <div class="source-picker">
+            <div class="picker-head">
+              <span>Fonte</span>
+              <button class="link" id="refresh" title="Atualizar telas e janelas">Atualizar</button>
+            </div>
+            <div class="segmented small with-icons" id="source-kind" role="radiogroup" aria-label="Tipo de fonte">
+              <label><input type="radio" name="source-kind" value="m" checked /><svg class="i"><use href="#i-monitor" /></svg>Tela</label>
+              <label><input type="radio" name="source-kind" value="a" /><svg class="i"><use href="#i-crop" /></svg>Área</label>
+              <label><input type="radio" name="source-kind" value="w" /><svg class="i"><use href="#i-visual" /></svg>Janela</label>
+            </div>
+            <div class="monitor-map" id="monitor-map" role="radiogroup" aria-label="Escolha a tela"></div>
+            <p class="source-caption" id="source-caption"></p>
+            <div class="window-list" id="window-list" role="listbox" aria-label="Escolha a janela" hidden></div>
+          </div>
+
+          <div class="chips" role="group" aria-label="O que gravar">
+            <label class="chip" title="O que toca no computador: vídeos, chamadas, avisos"><input type="checkbox" id="system-audio" checked /><svg class="i"><use href="#i-audio" /></svg>Som do sistema</label>
+            <label class="chip" id="chip-mic"><input type="checkbox" id="microphone" /><svg class="i"><use href="#i-mic" /></svg>Microfone</label>
+            <label class="chip" id="chip-webcam"><input type="checkbox" id="webcam" /><svg class="i"><use href="#i-camera" /></svg>Webcam</label>
+            <label class="chip" title="Grava as teclas para mostrar atalhos no vídeo. Atenção: inclui o que for digitado em senhas"><input type="checkbox" id="keystrokes" /><svg class="i"><use href="#i-keyboard" /></svg>Teclas</label>
+            <label class="chip" title="Grava o cursor dentro do vídeo. Deixe desligado para o editor redesenhar e suavizar o cursor"><input type="checkbox" id="show-cursor" /><svg class="i"><use href="#i-cursor" /></svg>Cursor no vídeo</label>
+            <label class="chip" title="Conta 3, 2, 1 antes de começar, para o clique em Gravar não sair no vídeo"><input type="checkbox" id="countdown" checked /><svg class="i"><use href="#i-play" /></svg>Contagem</label>
+          </div>
+
+          <div class="segmented" role="radiogroup" aria-label="Quadros por segundo" id="fps">
+            <label><input type="radio" name="fps" value="30" />30 fps</label>
+            <label><input type="radio" name="fps" value="60" checked />60 fps</label>
+            <label><input type="radio" name="fps" value="120" />120 fps</label>
+          </div>
+
+          <button class="record" id="record">
+            <span class="dot"></span>
+            <span id="record-label">Gravar</span>
+          </button>
+          <p class="hint" id="record-hint">Esta janela não aparece na gravação.</p>
+          <p class="hint center" id="record-keys">De qualquer programa: <kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>R</kbd> grava e para · <kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>M</kbd> marca um momento</p>
+          <ul class="warnings" id="warnings"></ul>
+        </section>
+
+        <section class="takes">
+          <div class="takes-head">
+            <h2>Gravações</h2>
+            <button class="link" id="open-folder">Abrir pasta</button>
+          </div>
+          <ul id="takes"></ul>
+        </section>
+      </aside>
+
+      <main class="stage">
+        <div class="empty" id="empty">
+          <svg class="i big"><use href="#i-camera" /></svg>
+          <h2>Nada aberto ainda</h2>
+          <p>Escolha uma tela ou janela e clique em <strong>Gravar</strong>. Quando parar, a gravação abre aqui para editar.</p>
+        </div>
+
+        <div class="editor" id="editor" hidden>
+          <header class="editor-bar">
+            <div class="editor-title">
+              <strong id="take-title"></strong>
+              <span class="save-state" id="save-state" aria-live="polite"></span>
+            </div>
+            <div class="editor-actions">
+              <button class="icon ghost" id="shortcuts" title="Atalhos de teclado (?)" aria-label="Atalhos de teclado"><svg class="i"><use href="#i-keyboard" /></svg></button>
+              <button class="icon ghost" id="undo" title="Desfazer (Ctrl+Z)" aria-label="Desfazer"><svg class="i"><use href="#i-undo" /></svg></button>
+              <button class="icon ghost" id="redo" title="Refazer (Ctrl+Y)" aria-label="Refazer"><svg class="i"><use href="#i-redo" /></svg></button>
+              <button class="secondary" id="reveal" title="Mostrar os arquivos desta gravação no Explorer"><svg class="i"><use href="#i-folder" /></svg>Mostrar na pasta</button>
+              <button class="primary" id="export" title="Exportar o vídeo editado (Ctrl+E)"><svg class="i"><use href="#i-export" /></svg>Exportar</button>
+            </div>
+          </header>
+
+          <div class="editor-body">
+            <div class="editor-main">
+              <div class="preview" id="preview">
+                <div class="canvas-wrap" id="canvas-wrap">
+                  <canvas id="preview-canvas" aria-label="Prévia do vídeo editado"></canvas>
+                  <div class="rect-editor" id="rect-editor" hidden>
+                    <div class="rect" id="rect-box"><span data-handle="nw"></span><span data-handle="ne"></span><span data-handle="sw"></span><span data-handle="se"></span></div>
+                  </div>
+                </div>
+                <div class="rect-toolbar" id="rect-toolbar" hidden>
+                  <span id="rect-title">Recortar área</span>
+                  <button class="secondary" id="rect-reset">Vídeo inteiro</button>
+                  <button class="secondary" id="rect-cancel">Cancelar</button>
+                  <button class="primary" id="rect-apply"><svg class="i"><use href="#i-check" /></svg>Aplicar</button>
+                </div>
+                <div class="preview-status" id="preview-status" hidden><div><div class="spinner"></div>Carregando gravação…</div></div>
+                <p class="preview-error" id="preview-error" hidden></p>
+              </div>
+
+              <div class="transport">
+                <button class="play" id="play" title="Reproduzir (Espaço)" aria-label="Reproduzir">
+                  <svg class="i icon-play"><use href="#i-play" /></svg>
+                  <svg class="i icon-pause" hidden><use href="#i-pause" /></svg>
+                </button>
+                <span class="time" id="time">0:00.0 <span class="total">/ 0:00.0</span></span>
+                <div class="tools" role="toolbar" aria-label="Ferramentas da timeline">
+                  <button class="tool" id="add-cut" title="Cortar um trecho no ponto atual (X)" aria-label="Cortar"><svg class="i"><use href="#i-cut" /></svg><span class="tool-label">Cortar</span></button>
+                  <button class="tool" id="add-zoom" title="Zoom no ponto atual (Z)" aria-label="Zoom"><svg class="i"><use href="#i-zoom" /></svg><span class="tool-label">Zoom</span></button>
+                  <button class="tool" id="add-lens" title="Lente de aumento no ponto atual (L)" aria-label="Lente"><svg class="i"><use href="#i-wand" /></svg><span class="tool-label">Lente</span></button>
+                  <button class="tool" id="add-note" title="Texto, seta ou destaque a partir do ponto atual (T)" aria-label="Texto"><svg class="i"><use href="#i-text" /></svg><span class="tool-label">Texto</span></button>
+                  <button class="tool" id="add-speed" title="Acelerar um trecho a partir do ponto atual (S)" aria-label="Acelerar"><svg class="i"><use href="#i-speed" /></svg><span class="tool-label">Acelerar</span></button>
+                  <button class="tool" id="add-blur" title="Desfocar uma área a partir do ponto atual (B)" aria-label="Desfocar"><svg class="i"><use href="#i-blur" /></svg><span class="tool-label">Desfocar</span></button>
+                </div>
+              </div>
+              <div class="timeline-wrap">
+                <canvas class="timeline" id="timeline"></canvas>
+              </div>
+            </div>
+
+            <aside class="inspector">
+              <nav class="tabs" role="tablist" aria-label="Ajustes">
+                <button role="tab" data-tab="visual" aria-selected="true"><svg class="i"><use href="#i-visual" /></svg><span>Visual</span></button>
+                <button role="tab" data-tab="cursor"><svg class="i"><use href="#i-cursor" /></svg><span>Cursor</span></button>
+                <button role="tab" data-tab="zoom"><svg class="i"><use href="#i-zoom" /></svg><span>Trechos</span></button>
+                <button role="tab" data-tab="camera"><svg class="i"><use href="#i-camera" /></svg><span>Webcam</span></button>
+                <button role="tab" data-tab="audio"><svg class="i"><use href="#i-audio" /></svg><span>Áudio</span></button>
+                <button role="tab" data-tab="captions"><svg class="i"><use href="#i-captions" /></svg><span>Legendas</span></button>
+              </nav>
+
+              <div class="tab-panel" data-panel="visual">
+                <section>
+                  <h3>Estilo pronto</h3>
+                  <div class="styles" id="styles" role="list"></div>
+                  <p class="hint">Muda o visual de uma vez; cortes e zooms continuam como estão. Dá para ajustar tudo depois.</p>
+                </section>
+                <section>
+                  <h3>Fundo</h3>
+                  <div class="swatches" id="bg-presets"></div>
+                  <div class="row">
+                    <button class="secondary wide" id="bg-image"><svg class="i"><use href="#i-image" /></svg>Usar imagem…</button>
+                    <input type="file" id="bg-file" accept="image/*" hidden />
+                  </div>
+                  <label class="slider" id="bg-blur-row" hidden>
+                    <span>Desfoque da imagem <output data-value-for="bg-blur"></output></span>
+                    <input type="range" id="bg-blur" min="0" max="40" step="1" />
+                  </label>
+                  <label class="slider">
+                    <span>Margem <output data-value-for="padding"></output></span>
+                    <input type="range" id="padding" min="0" max="0.2" step="0.005" />
+                  </label>
+                  <label class="slider">
+                    <span>Cantos <output data-value-for="radius"></output></span>
+                    <input type="range" id="radius" min="0" max="48" step="1" />
+                  </label>
+                  <label class="slider">
+                    <span>Sombra <output data-value-for="shadow"></output></span>
+                    <input type="range" id="shadow" min="0" max="1" step="0.05" />
+                  </label>
+                </section>
+                <section>
+                  <h3>Enquadramento</h3>
+                  <div class="field">
+                    <span>Proporção</span>
+                    <div class="segmented small" id="aspect" role="radiogroup" aria-label="Proporção"></div>
+                  </div>
+                  <div class="field">
+                    <span>Moldura</span>
+                    <div class="segmented small" id="frame" role="radiogroup" aria-label="Moldura">
+                      <label><input type="radio" name="frame" value="none" />Nenhuma</label>
+                      <label><input type="radio" name="frame" value="window" />Janela de app</label>
+                      <label><input type="radio" name="frame" value="laptop" />Notebook</label>
+                    </div>
+                  </div>
+                  <label class="slider">
+                    <span>Inclinação 3D <output data-value-for="tilt"></output></span>
+                    <input type="range" id="tilt" min="-20" max="20" step="1" />
+                  </label>
+                  <button class="secondary wide" id="crop"><svg class="i"><use href="#i-crop" /></svg><span id="crop-label">Recortar área…</span></button>
+                </section>
+                <section class="cards">
+                  <h3>Abertura e encerramento</h3>
+                  <label class="switch"><input type="checkbox" id="intro-enabled" /><span>Tela de abertura</span></label>
+                  <div class="card-fields" id="intro-fields">
+                    <label class="field"><span>Título</span><input type="text" id="intro-title" maxlength="80" placeholder="Como configurar o relatório" /></label>
+                    <label class="field"><span>Subtítulo</span><input type="text" id="intro-subtitle" maxlength="120" placeholder="Opcional" /></label>
+                  </div>
+                  <label class="switch"><input type="checkbox" id="outro-enabled" /><span>Tela de encerramento</span></label>
+                  <div class="card-fields" id="outro-fields">
+                    <label class="field"><span>Título</span><input type="text" id="outro-title" maxlength="80" /></label>
+                    <label class="field"><span>Subtítulo</span><input type="text" id="outro-subtitle" maxlength="120" placeholder="Opcional" /></label>
+                  </div>
+                  <label class="slider">
+                    <span>Duração de cada tela <output data-value-for="cards-duration"></output></span>
+                    <input type="range" id="cards-duration" min="1" max="6" step="0.5" />
+                  </label>
+                  <p class="hint">Usam o fundo do estilo. A abertura toca ao reproduzir do começo; o encerramento, no fim.</p>
+                </section>
+              </div>
+
+              <div class="tab-panel" data-panel="cursor" hidden>
+                <section>
+                  <h3>Cursor</h3>
+                  <p class="note" id="cursor-note" hidden></p>
+                  <label class="switch"><input type="checkbox" id="cursor-visible" /><span>Mostrar cursor</span></label>
+                  <label class="slider">
+                    <span>Tamanho <output data-value-for="cursor-size"></output></span>
+                    <input type="range" id="cursor-size" min="0.6" max="3" step="0.05" />
+                  </label>
+                  <label class="slider">
+                    <span>Suavização <output data-value-for="cursor-smoothing"></output></span>
+                    <input type="range" id="cursor-smoothing" min="0" max="1" step="0.05" />
+                  </label>
+                </section>
+                <section>
+                  <h3>Cliques</h3>
+                  <label class="switch"><input type="checkbox" id="click-effect" /><span>Anel no clique</span></label>
+                  <label class="switch"><input type="checkbox" id="spotlight" /><span>Destacar ao clicar</span></label>
+                  <label class="switch"><input type="checkbox" id="click-sound" /><span>Som de clique</span></label>
+                </section>
+                <section>
+                  <h3>Teclas</h3>
+                  <p class="note" id="keys-note" hidden>Grave com a opção “Teclas” ligada para mostrar atalhos no vídeo.</p>
+                  <label class="switch"><input type="checkbox" id="keys-visible" /><span>Mostrar teclas</span></label>
+                  <div class="segmented small" id="keys-mode" role="radiogroup" aria-label="Quais teclas mostrar">
+                    <label><input type="radio" name="keys-mode" value="shortcuts" />Só atalhos</label>
+                    <label><input type="radio" name="keys-mode" value="all" />Tudo</label>
+                  </div>
+                  <label class="switch"><input type="checkbox" id="key-sound" /><span>Som de teclado</span></label>
+                </section>
+              </div>
+
+              <div class="tab-panel" data-panel="zoom" hidden>
+                <section class="selection" id="selection" hidden>
+                  <h3 id="selection-title">Zoom selecionado</h3>
+                  <p class="selection-time" id="selection-time"></p>
+                  <div class="selection-zoom" id="selection-zoom">
+                    <div class="segmented small" id="zoom-mode" role="radiogroup" aria-label="Tipo">
+                      <label><input type="radio" name="zoom-mode" value="zoom" />Zoom</label>
+                      <label><input type="radio" name="zoom-mode" value="lens" />Lente</label>
+                    </div>
+                    <label class="slider">
+                      <span>Aumento <output data-value-for="zoom-scale"></output></span>
+                      <input type="range" id="zoom-scale" min="1.2" max="4" step="0.1" />
+                    </label>
+                  </div>
+                  <div class="selection-note" id="selection-note">
+                    <div class="segmented small" id="note-kind" role="radiogroup" aria-label="Tipo">
+                      <label><input type="radio" name="note-kind" value="text" />Texto</label>
+                      <label><input type="radio" name="note-kind" value="arrow" />Seta</label>
+                      <label><input type="radio" name="note-kind" value="box" />Destaque</label>
+                    </div>
+                    <label class="field" id="note-text-field">
+                      <span>Texto (Enter para nova linha)</span>
+                      <textarea id="note-text" rows="2" maxlength="200"></textarea>
+                    </label>
+                    <div class="swatches" id="note-colors" role="group" aria-label="Cor"></div>
+                    <label class="slider">
+                      <span>Tamanho <output data-value-for="note-size"></output></span>
+                      <input type="range" id="note-size" min="0.5" max="2.5" step="0.05" />
+                    </label>
+                    <div class="segmented small" id="note-direction" role="radiogroup" aria-label="Direção da seta">
+                      <label title="Para cima e para a esquerda"><input type="radio" name="note-direction" value="nw" />↖</label>
+                      <label title="Para cima e para a direita"><input type="radio" name="note-direction" value="ne" />↗</label>
+                      <label title="Para baixo e para a esquerda"><input type="radio" name="note-direction" value="sw" />↙</label>
+                      <label title="Para baixo e para a direita"><input type="radio" name="note-direction" value="se" />↘</label>
+                    </div>
+                    <button class="secondary wide" id="note-place"><svg class="i"><use href="#i-crop" /></svg>Posicionar no vídeo…</button>
+                  </div>
+                  <div class="selection-speed" id="selection-speed">
+                    <div class="segmented small" id="speed-rate" role="radiogroup" aria-label="Velocidade">
+                      <label><input type="radio" name="speed-rate" value="1.5" />1,5×</label>
+                      <label><input type="radio" name="speed-rate" value="2" />2×</label>
+                      <label><input type="radio" name="speed-rate" value="4" />4×</label>
+                      <label><input type="radio" name="speed-rate" value="8" />8×</label>
+                    </div>
+                    <p class="hint">O som do trecho acelerado fica mudo.</p>
+                  </div>
+                  <button class="secondary wide" id="blur-area"><svg class="i"><use href="#i-crop" /></svg>Ajustar área…</button>
+                  <button class="secondary wide danger" id="selection-delete"><svg class="i"><use href="#i-trash" /></svg><span id="selection-delete-label">Remover</span></button>
+                </section>
+                <section>
+                  <h3>Limpeza automática</h3>
+                  <button class="secondary wide" id="cut-silences"><svg class="i"><use href="#i-cut" /></svg>Tirar silêncios</button>
+                  <label class="slider">
+                    <span>Silêncio mínimo <output data-value-for="silence-min"></output></span>
+                    <input type="range" id="silence-min" min="0.4" max="3" step="0.1" value="0.8" />
+                  </label>
+                  <button class="secondary wide" id="cut-fillers"><svg class="i"><use href="#i-wand" /></svg>Tirar “hã”, “hum” e “é” longo</button>
+                  <p class="hint" id="cleanup-hint">Os cortes aparecem na timeline e podem ser desfeitos.</p>
+                </section>
+                <section>
+                  <h3>Zoom automático</h3>
+                  <p class="hint" id="auto-zoom-hint" hidden></p>
+                  <button class="secondary wide" id="auto-zoom"><svg class="i"><use href="#i-wand" /></svg>Gerar a partir dos cliques</button>
+                  <label class="slider">
+                    <span>Aumento padrão <output data-value-for="zoom-default"></output></span>
+                    <input type="range" id="zoom-default" min="1.2" max="4" step="0.1" />
+                  </label>
+                  <p class="hint">Vale para novos zooms e lentes.</p>
+                </section>
+                <section>
+                  <h3>Como editar</h3>
+                  <p class="hint">Use <strong>Cortar</strong>, <strong>Zoom</strong>, <strong>Lente</strong>, <strong>Texto</strong>, <strong>Acelerar</strong> e <strong>Desfocar</strong> acima da timeline, ou dê um clique duplo numa faixa. Arraste para mover, puxe as bordas para ajustar e clique com o botão direito para mais opções.</p>
+                  <button class="secondary wide" id="shortcuts-open"><svg class="i"><use href="#i-keyboard" /></svg>Ver atalhos de teclado</button>
+                </section>
+              </div>
+
+              <div class="tab-panel" data-panel="camera" hidden>
+                <section>
+                  <h3>Webcam</h3>
+                  <p class="note" id="webcam-note" hidden>Esta gravação não tem webcam. Ligue “Webcam” antes de gravar.</p>
+                  <label class="switch"><input type="checkbox" id="webcam-visible" /><span>Mostrar webcam</span></label>
+                  <label class="slider">
+                    <span>Tamanho <output data-value-for="webcam-size"></output></span>
+                    <input type="range" id="webcam-size" min="0.1" max="0.45" step="0.01" />
+                  </label>
+                  <div class="field">
+                    <span>Posição</span>
+                    <div class="corners" id="webcam-corner" role="radiogroup" aria-label="Canto da webcam">
+                      <label title="Superior esquerdo"><input type="radio" name="corner" value="tl" /></label>
+                      <label title="Superior direito"><input type="radio" name="corner" value="tr" /></label>
+                      <label title="Inferior esquerdo"><input type="radio" name="corner" value="bl" /></label>
+                      <label title="Inferior direito"><input type="radio" name="corner" value="br" /></label>
+                    </div>
+                  </div>
+                  <div class="segmented small" id="webcam-shape" role="radiogroup" aria-label="Formato">
+                    <label><input type="radio" name="webcam-shape" value="circle" />Círculo</label>
+                    <label><input type="radio" name="webcam-shape" value="rounded" />Arredondado</label>
+                  </div>
+                </section>
+              </div>
+
+              <div class="tab-panel" data-panel="audio" hidden>
+                <section>
+                  <h3>Volume</h3>
+                  <label class="slider">
+                    <span>Som do sistema <output data-value-for="volume-system"></output></span>
+                    <input type="range" id="volume-system" min="0" max="2" step="0.05" />
+                  </label>
+                  <label class="slider">
+                    <span>Microfone <output data-value-for="volume-mic"></output></span>
+                    <input type="range" id="volume-mic" min="0" max="2" step="0.05" />
+                  </label>
+                  <p class="hint" id="volume-hint" hidden></p>
+                  <label class="switch"><input type="checkbox" id="enhance" /><span>Melhorar a voz (tirar ruído)</span></label>
+                  <p class="hint" id="enhance-hint" hidden></p>
+                </section>
+                <section>
+                  <h3>Música de fundo</h3>
+                  <div class="row">
+                    <button class="secondary wide" id="music-pick"><svg class="i"><use href="#i-plus" /></svg><span id="music-label">Escolher música…</span></button>
+                    <button class="icon" id="music-remove" title="Remover música" aria-label="Remover música" hidden><svg class="i"><use href="#i-trash" /></svg></button>
+                    <input type="file" id="music-file" accept="audio/*" hidden />
+                  </div>
+                  <label class="slider">
+                    <span>Volume da música <output data-value-for="volume-music"></output></span>
+                    <input type="range" id="volume-music" min="0" max="1" step="0.05" />
+                  </label>
+                </section>
+              </div>
+
+              <div class="tab-panel" data-panel="captions" hidden>
+                <section>
+                  <h3>Transcrição</h3>
+                  <p class="hint" id="transcript-status">Transcreva a fala para gerar legendas e cortar o vídeo apagando palavras.</p>
+                  <label class="field">
+                    <span>Idioma da fala</span>
+                    <select id="transcribe-language"></select>
+                  </label>
+                  <button class="secondary wide" id="transcribe"><svg class="i"><use href="#i-wand" /></svg>Transcrever</button>
+                  <div class="progress" id="transcribe-progress" hidden><div class="progress-bar"></div></div>
+                </section>
+                <section id="captions-section" hidden>
+                  <h3>Legendas</h3>
+                  <label class="switch"><input type="checkbox" id="captions-visible" /><span>Mostrar legendas</span></label>
+                  <label class="slider">
+                    <span>Tamanho <output data-value-for="captions-size"></output></span>
+                    <input type="range" id="captions-size" min="0.6" max="1.8" step="0.05" />
+                  </label>
+                  <div class="segmented small" id="captions-position" role="radiogroup" aria-label="Posição das legendas">
+                    <label><input type="radio" name="captions-position" value="bottom" />Embaixo</label>
+                    <label><input type="radio" name="captions-position" value="top" />Em cima</label>
+                  </div>
+                </section>
+                <section id="transcript-section" hidden>
+                  <h3>Editar pelo texto</h3>
+                  <p class="hint">Clique numa palavra para ir até ela; <kbd>Shift</kbd>+clique seleciona um trecho. <kbd>Delete</kbd> corta o trecho do vídeo, ou o restaura se já estiver cortado.</p>
+                  <div class="transcript" id="transcript" tabindex="0"></div>
+                </section>
+              </div>
+            </aside>
+          </div>
+        </div>
+
+        <!-- crossorigin: files come from the asset protocol, and WebGPU refuses tainted video. -->
+        <video id="video" class="offscreen" preload="auto" playsinline crossorigin="anonymous"></video>
+        <video id="webcam-video" class="offscreen" preload="auto" playsinline muted crossorigin="anonymous"></video>
+        <audio id="mic" preload="auto"></audio>
+        <div class="toasts" id="toasts" aria-live="polite"></div>
+
+        <div class="modal" id="shortcuts-modal" hidden>
+          <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="shortcuts-title">
+            <h2 id="shortcuts-title">Atalhos de teclado</h2>
+            <dl class="shortcuts">
+              <dt><kbd>Espaço</kbd></dt><dd>Reproduzir / pausar</dd>
+              <dt><kbd>←</kbd> <kbd>→</kbd></dt><dd>Voltar / avançar 1 s (com <kbd>Shift</kbd>: 5 s)</dd>
+              <dt><kbd>X</kbd></dt><dd>Cortar um trecho no ponto atual</dd>
+              <dt><kbd>Z</kbd></dt><dd>Zoom no ponto atual</dd>
+              <dt><kbd>L</kbd></dt><dd>Lente no ponto atual</dd>
+              <dt><kbd>B</kbd></dt><dd>Desfocar uma área</dd>
+              <dt><kbd>S</kbd></dt><dd>Acelerar um trecho</dd>
+              <dt><kbd>T</kbd></dt><dd>Texto, seta ou destaque</dd>
+              <dt><kbd>Delete</kbd> / <kbd>Backspace</kbd></dt><dd>Remover o trecho selecionado</dd>
+              <dt><kbd>Esc</kbd></dt><dd>Tirar a seleção</dd>
+              <dt><kbd>Ctrl</kbd>+<kbd>Z</kbd></dt><dd>Desfazer</dd>
+              <dt><kbd>Ctrl</kbd>+<kbd>Y</kbd> / <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Z</kbd></dt><dd>Refazer</dd>
+              <dt><kbd>Ctrl</kbd>+<kbd>E</kbd></dt><dd>Exportar</dd>
+              <dt><kbd>?</kbd></dt><dd>Esta lista</dd>
+              <dt>Roda do mouse</dt><dd>Rolar a timeline</dd>
+              <dt><kbd>Ctrl</kbd> + roda</dt><dd>Aproximar / afastar a timeline</dd>
+              <dt>Clique duplo numa faixa</dt><dd>Adicionar corte, zoom ou desfoque</dd>
+              <dt>Botão direito</dt><dd>Mais opções onde você clicar</dd>
+              <dt><kbd>F2</kbd></dt><dd>Renomear a gravação selecionada na lista</dd>
+              <dt><kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>R</kbd></dt><dd>Começar ou parar a gravação, de qualquer programa</dd>
+              <dt><kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>M</kbd></dt><dd>Marcar um momento (durante a gravação)</dd>
+              <dt><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>D</kbd></dt><dd>Desenhar na tela (durante a gravação)</dd>
+              <dt><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>X</kbd></dt><dd>Parar a gravação, de qualquer programa</dd>
+            </dl>
+            <div class="actions">
+              <button class="secondary" id="tips-reset" title="Mostra de novo as dicas de primeiro uso">Rever dicas</button>
+              <button class="primary" id="shortcuts-close">Fechar</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="modal" id="export-modal" hidden>
+          <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="export-title">
+            <h2 id="export-title">Exportar</h2>
+
+            <div class="sheet-body" id="export-setup">
+              <label class="field">
+                <span>Destino</span>
+                <select id="export-preset"></select>
+              </label>
+              <div class="segmented" id="export-format" role="radiogroup" aria-label="Formato">
+                <label><input type="radio" name="export-format" value="mp4" checked />Vídeo MP4</label>
+                <label><input type="radio" name="export-format" value="gif" />GIF</label>
+              </div>
+              <label class="field">
+                <span>Resolução</span>
+                <select id="export-resolution"></select>
+              </label>
+              <label class="field">
+                <span>Quadros por segundo</span>
+                <select id="export-fps"></select>
+              </label>
+              <p class="summary" id="export-summary"></p>
+              <div class="actions">
+                <button class="secondary" id="export-close">Cancelar</button>
+                <button class="primary" id="export-start">Exportar</button>
+              </div>
+            </div>
+
+            <div class="sheet-body" id="export-running" hidden>
+              <div class="progress" role="progressbar" aria-labelledby="export-phase" aria-valuemin="0" aria-valuemax="100" id="export-progress">
+                <div class="progress-bar" id="export-bar"></div>
+              </div>
+              <p class="progress-label"><span id="export-phase">Preparando…</span><span id="export-percent">0%</span></p>
+              <p class="hint" id="export-eta">&nbsp;</p>
+              <div class="actions">
+                <button class="secondary danger" id="export-cancel">Cancelar exportação</button>
+              </div>
+            </div>
+
+            <div class="sheet-body" id="export-done" hidden>
+              <div class="result" id="export-result"></div>
+              <div class="actions">
+                <button class="secondary" id="export-dismiss">Fechar</button>
+                <button class="primary" id="export-reveal">Mostrar na pasta</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </main>
+    </div>
+  </body>
+</html>

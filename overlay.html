@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="icon" href="/icon.svg" type="image/svg+xml" />
+    <title>Recorte</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        overflow: hidden;
+        background: transparent;
+        font: 13px/1.4 "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+        user-select: none;
+      }
+
+      canvas {
+        position: fixed;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+      }
+
+      body.area {
+        cursor: crosshair;
+      }
+
+      .panel {
+        position: fixed;
+        top: 16px;
+        left: 50%;
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        padding: 6px;
+        border-radius: 999px;
+        background: rgb(28 28 30 / 0.92);
+        color: #f2f2f4;
+        box-shadow: 0 8px 30px rgb(0 0 0 / 0.35);
+        transform: translateX(-50%);
+      }
+
+      .panel .hint {
+        padding: 0 10px;
+        color: #c7c7cc;
+      }
+
+      .panel button {
+        display: grid;
+        place-items: center;
+        min-width: 30px;
+        height: 30px;
+        padding: 0 10px;
+        border: 0;
+        border-radius: 999px;
+        background: transparent;
+        color: inherit;
+        font: inherit;
+        cursor: pointer;
+      }
+
+      .panel button:hover {
+        background: rgb(255 255 255 / 0.12);
+      }
+
+      .panel button[aria-pressed="true"] {
+        background: rgb(255 255 255 / 0.22);
+      }
+
+      .panel .color {
+        width: 22px;
+        min-width: 22px;
+        height: 22px;
+        padding: 0;
+        border: 2px solid transparent;
+      }
+
+      .panel .color[aria-pressed="true"] {
+        border-color: #fff;
+      }
+
+      .panel .sep {
+        width: 1px;
+        height: 20px;
+        margin: 0 4px;
+        background: rgb(255 255 255 / 0.2);
+      }
+
+      .panel .primary {
+        background: #0a84ff;
+        font-weight: 600;
+      }
+
+      .size {
+        position: fixed;
+        padding: 3px 8px;
+        border-radius: 6px;
+        background: rgb(0 0 0 / 0.75);
+        color: #fff;
+        font-size: 12px;
+        font-variant-numeric: tabular-nums;
+        pointer-events: none;
+      }
+
+      [hidden] {
+        display: none !important;
+      }
+    </style>
+    <script type="module" src="/src/overlay-app.ts" defer></script>
+  </head>
+  <body>
+    <canvas id="canvas"></canvas>
+
+    <div class="panel" id="area-panel" hidden>
+      <span class="hint">Arraste para escolher a área · <b>Enter</b> confirma · <b>Esc</b> cancela</span>
+      <button id="area-full">Tela inteira</button>
+      <button class="primary" id="area-ok">Gravar área</button>
+    </div>
+    <span class="size" id="size" hidden></span>
+
+    <div class="panel" id="draw-panel" hidden>
+      <button data-tool="pen" aria-pressed="true" title="Caneta (P)">✎</button>
+      <button data-tool="arrow" title="Seta (A)">➚</button>
+      <button data-tool="rect" title="Retângulo (R)">▭</button>
+      <button data-tool="marker" title="Marca-texto (M)">▬</button>
+      <span class="sep"></span>
+      <button class="color" data-color="#ff3b30" aria-pressed="true" style="background: #ff3b30" title="Vermelho"></button>
+      <button class="color" data-color="#ffd60a" style="background: #ffd60a" title="Amarelo"></button>
+      <button class="color" data-color="#30d158" style="background: #30d158" title="Verde"></button>
+      <button class="color" data-color="#0a84ff" style="background: #0a84ff" title="Azul"></button>
+      <button class="color" data-color="#ffffff" style="background: #ffffff" title="Branco"></button>
+      <span class="sep"></span>
+      <button id="draw-undo" title="Desfazer (Ctrl+Z)">↶</button>
+      <button id="draw-clear" title="Apagar tudo (Delete)">Limpar</button>
+      <button id="draw-pass" title="Usar o computador sem fechar os desenhos (Ctrl+Shift+D)">Clicar através</button>
+      <button class="primary" id="draw-close" title="Fechar (Esc)">Fechar</button>
+    </div>
+  </body>
+</html>

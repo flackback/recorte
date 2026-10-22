@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="icon" href="/icon.svg" type="image/svg+xml" />
+    <title>Recorte · gravando</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        overflow: hidden;
+        background: transparent;
+        font: 13px/1 "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+        user-select: none;
+      }
+
+      .bar {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        height: 44px;
+        margin: 4px;
+        padding: 0 5px 0 14px;
+        border: 1px solid rgb(255 255 255 / 0.1);
+        border-radius: 999px;
+        background: rgb(24 24 27 / 0.94);
+        color: #f2f2f4;
+        box-shadow: 0 6px 20px rgb(0 0 0 / 0.35);
+        cursor: grab;
+      }
+
+      .status {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        min-width: 96px;
+        font-weight: 600;
+        font-variant-numeric: tabular-nums;
+      }
+
+      .dot {
+        width: 9px;
+        height: 9px;
+        border-radius: 50%;
+        background: #ff3b30;
+        animation: pulse 1.2s ease-in-out infinite;
+      }
+
+      .paused .dot {
+        background: #ffd60a;
+        animation: none;
+      }
+
+      @keyframes pulse {
+        50% {
+          opacity: 0.35;
+        }
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        .dot {
+          animation: none;
+        }
+      }
+
+      button {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        height: 34px;
+        padding: 0 12px;
+        border: 0;
+        border-radius: 999px;
+        background: transparent;
+        color: inherit;
+        font: inherit;
+        cursor: pointer;
+        transition: background 120ms;
+      }
+
+      button:hover {
+        background: rgb(255 255 255 / 0.12);
+      }
+
+      button:active {
+        transform: scale(0.96);
+      }
+
+      button.stop {
+        margin-left: auto;
+        background: #ff3b30;
+        font-weight: 600;
+      }
+
+      button.stop:hover {
+        background: #ff5a50;
+      }
+
+      svg {
+        width: 15px;
+        height: 15px;
+        fill: none;
+        stroke: currentColor;
+        stroke-width: 2;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+      }
+
+      .stop svg {
+        fill: currentColor;
+        stroke: none;
+      }
+    </style>
+    <script type="module" src="/src/recbar-app.ts" defer></script>
+  </head>
+  <body>
+    <div class="bar" data-tauri-drag-region>
+      <span class="status" id="status" data-tauri-drag-region><span class="dot" data-tauri-drag-region></span><span id="time" data-tauri-drag-region>0:00</span></span>
+      <button id="pause" title="Pausar: o trecho pausado sai cortado no editor">
+        <svg viewBox="0 0 24 24"><path d="M9 6v12M15 6v12" /></svg><span>Pausar</span>
+      </button>
+      <button id="draw" title="Desenhar na tela (Ctrl+Shift+D)">
+        <svg viewBox="0 0 24 24"><path d="m4 20 4-1 11-11-3-3L5 16Z" /></svg><span>Desenhar</span>
+      </button>
+      <button id="mark" title="Marcar este momento para achar no editor (Alt+Shift+M)">
+        <svg viewBox="0 0 24 24"><path d="M6 21V4m0 0h11l-2 4 2 4H6" /></svg><span>Marcar</span>
+      </button>
+      <button class="stop" id="stop" title="Parar e abrir no editor (Ctrl+Shift+X)">
+        <svg viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2" /></svg><span>Parar</span>
+      </button>
+    </div>
+  </body>
+</html>

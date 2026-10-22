@@ -1,0 +1,131 @@
+//! A transparent window over a monitor: to pick an area before recording, and to draw on the
+//! screen while recording.
+
+use tauri::{AppHandle, Emitter, Manager, PhysicalPosition, PhysicalSize, WebviewUrl, WebviewWindowBuilder};
+use tauri_plugin_global_shortcut::{Code, Modifiers, Shortcut, ShortcutEvent, ShortcutState};
+use windows_capture::monitor::Monitor;
+
+use crate::sources;
+
+pub const LABEL: &str = "overlay";
+
+/// Opens the overlay over monitor `monitor` (one-based) in `mode` ("area" or "draw").
+#[tauri::command]
+pub async fn overlay_open(app: AppHandle, mode: String, monitor: usize) -> Result<(), String> {
+    if !matches!(mode.as_str(), "area" | "draw" | "countdown") {
+        return Err("modo inválido".into());
+    }
+    if let Some(existing) = app.get_webview_window(LABEL) {
+        let _ = existing.close();
+    }
+    sources::use_physical_pixels();
+    let monitor = Monitor::from_index(monitor).map_err(|error| error.to_string())?;
+    let (rect, _) = sources::monitor_rect(&monitor).ok_or("monitor não encontrado")?;
+
+    let window = WebviewWindowBuilder::new(&app, LABEL, WebviewUrl::App(if mode == "countdown" { "countdown.html".into() } else { format!("overlay.html?mode={mode}").into() }))
+        .title("Recorte")
+        .transparent(true)
+        .decorations(false)
+        .always_on_top(true)
+        .skip_taskbar(true)
+        .resizable(false)
+        .shadow(false)
+        .visible(false)
+        .build()
+        .map_err(|error| error.to_string())?;
+    window.set_position(PhysicalPosition::new(rect.left, rect.top)).map_err(|error| error.to_string())?;
+    window
+        .set_size(PhysicalSize::new((rect.right - rect.left) as u32, (rect.bottom - rect.top) as u32))
+        .map_err(|error| error.to_string())?;
+    window.show().map_err(|error| error.to_string())?;
+    let _ = window.set_focus();
+    Ok(())
+}
+
+pub const RECBAR: &str = "recbar";
+const RECBAR_SIZE: (u32, u32) = (530, 52);
+
+/// The small floating bar shown while recording (time, pause, draw, stop), at the top of the
+/// recorded monitor. It is kept out of the recording.
+#[tauri::command]
+pub async fn recbar_open(app: AppHandle, monitor: usize) -> Result<(), String> {
+    if let Some(existing) = app.get_webview_window(RECBAR) {
+        let _ = existing.close();
+    }
+    sources::use_physical_pixels();
+    let monitor = Monitor::from_index(monitor).map_err(|error| error.to_string())?;
+    let (rect, _) = sources::monitor_rect(&monitor).ok_or("monitor não encontrado")?;
+    let window = WebviewWindowBuilder::new(&app, RECBAR, WebviewUrl::App("recbar.html".into()))
+        .title("Recorte · gravando")
+        .transparent(true)
+        .decorations(false)
+        .always_on_top(true)
+        .skip_taskbar(true)
+        .resizable(false)
+        .shadow(false)
+        .focused(false)
+        .visible(false)
+        .build()
+        .map_err(|error| error.to_string())?;
+    let scale = window.scale_factor().unwrap_or(1.0);
+    let width = (RECBAR_SIZE.0 as f64 * scale) as u32;
+    let height = (RECBAR_SIZE.1 as f64 * scale) as u32;
+    let left = rect.left + ((rect.right - rect.left) as u32).saturating_sub(width) as i32 / 2;
+    window.set_size(PhysicalSize::new(width, height)).map_err(|error| error.to_string())?;
+    window.set_position(PhysicalPosition::new(left, rect.top + (16.0 * scale) as i32)).map_err(|error| error.to_string())?;
+    crate::exclude_window(&window);
+    window.show().map_err(|error| error.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn recbar_close(app: AppHandle) {
+    if let Some(window) = app.get_webview_window(RECBAR) {
+        let _ = window.close();
+    }
+}
+
+#[tauri::command]
+pub fn overlay_close(app: AppHandle) {
+    if let Some(window) = app.get_webview_window(LABEL) {
+        let _ = window.close();
+    }
+}
+
+pub fn draw_shortcut() -> Shortcut {
+    Shortcut::new(Some(Modifiers::CONTROL | Modifiers::SHIFT), Code::KeyD)
+}
+
+pub fn stop_shortcut() -> Shortcut {
+    Shortcut::new(Some(Modifiers::CONTROL | Modifiers::SHIFT), Code::KeyX)
+}
+
+/// Starts or stops recording from any program. Alt+Shift, because Ctrl+Shift+R reloads pages in
+/// browsers.
+pub fn record_shortcut() -> Shortcut {
+    Shortcut::new(Some(Modifiers::ALT | Modifiers::SHIFT), Code::KeyR)
+}
+
+/// Marks a moment while recording.
+pub fn mark_shortcut() -> Shortcut {
+    Shortcut::new(Some(Modifiers::ALT | Modifiers::SHIFT), Code::KeyM)
+}
+
+/// Forwards the global shortcuts to the main window, which knows whether it is recording.
+pub fn on_shortcut(app: &AppHandle, shortcut: &Shortcut, event: ShortcutEvent) {
+    if event.state != ShortcutState::Pressed {
+        return;
+    }
+    let action = if *shortcut == draw_shortcut() {
+        "draw"
+    } else if *shortcut == stop_shortcut() {
+        "stop"
+    } else if *shortcut == record_shortcut() {
+        "record"
+    } else if *shortcut == mark_shortcut() {
+        "mark"
+    } else {
+        return;
+    };
+    let _ = app.emit_to("main", "hotkey", action);
+}

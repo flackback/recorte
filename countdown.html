@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="icon" href="/icon.svg" type="image/svg+xml" />
+    <title>Recorte</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        overflow: hidden;
+        background: rgb(0 0 0 / 0.35);
+        font-family: "Segoe UI Variable Display", "Segoe UI", system-ui, sans-serif;
+        user-select: none;
+        cursor: default;
+      }
+
+      .center {
+        display: grid;
+        place-items: center;
+        height: 100%;
+      }
+
+      .circle {
+        display: grid;
+        place-items: center;
+        width: 180px;
+        height: 180px;
+        border-radius: 50%;
+        background: rgb(24 24 27 / 0.9);
+        color: #fff;
+        font-size: 96px;
+        font-weight: 600;
+        box-shadow: 0 20px 60px rgb(0 0 0 / 0.45);
+      }
+
+      .tick {
+        animation: tick 900ms cubic-bezier(0.2, 0.8, 0.2, 1);
+      }
+
+      @keyframes tick {
+        from {
+          opacity: 0;
+          transform: scale(0.8);
+        }
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        .tick {
+          animation: none;
+        }
+      }
+
+      p {
+        position: fixed;
+        left: 0;
+        right: 0;
+        bottom: 12%;
+        margin: 0;
+        color: #fff;
+        font-size: 15px;
+        text-align: center;
+        text-shadow: 0 1px 4px rgb(0 0 0 / 0.6);
+      }
+
+      kbd {
+        padding: 1px 6px;
+        border: 1px solid rgb(255 255 255 / 0.5);
+        border-radius: 5px;
+        font: inherit;
+      }
+    </style>
+    <script type="module" src="/src/countdown-app.ts" defer></script>
+  </head>
+  <body>
+    <div class="center"><div class="circle" id="number">3</div></div>
+    <p>A gravação começa em instantes · <kbd>Esc</kbd> cancela · clique para começar agora</p>
+  </body>
+</html>
