@@ -232,9 +232,14 @@
 
       <main class="stage">
         <div class="empty" id="empty">
-          <svg class="i big"><use href="#i-camera" /></svg>
-          <h2>Nada aberto ainda</h2>
-          <p>Escolha uma tela ou janela e clique em <strong>Gravar</strong>. Quando parar, a gravação abre aqui para editar.</p>
+          <div class="source-preview" id="source-preview" hidden>
+            <canvas id="source-preview-canvas"></canvas>
+            <div class="source-preview-area" id="source-preview-area" hidden></div>
+            <span class="source-preview-label" id="source-preview-label"></span>
+          </div>
+          <svg class="i big" id="empty-icon"><use href="#i-camera" /></svg>
+          <h2 id="empty-title">Nada aberto ainda</h2>
+          <p id="empty-text">Escolha uma tela ou janela e clique em <strong>Gravar</strong>. Quando parar, a gravação abre aqui para editar.</p>
           <div class="empty-actions">
             <button class="primary" id="empty-record"><span class="rec-mark"></span>Gravar agora</button>
             <button class="secondary" id="empty-open" hidden>Abrir a última gravação</button>

@@ -869,6 +869,7 @@ input[type="range"]:focus-visible::-webkit-slider-thumb {
   gap: 10px;
   margin: auto;
   max-width: 340px;
+  padding: 24px;
   text-align: center;
   color: var(--muted);
 }
@@ -886,6 +887,64 @@ input[type="range"]:focus-visible::-webkit-slider-thumb {
 
 .empty p {
   margin: 0;
+}
+
+/* With a preview, the start screen is wider than its text. */
+.empty.has-preview {
+  width: 100%;
+  max-width: 760px;
+}
+
+.empty.has-preview > p {
+  max-width: 420px;
+}
+
+/* What is about to be recorded, live, while nothing is open. */
+.source-preview {
+  position: relative;
+  width: fit-content;
+  max-width: 100%;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--surface-2);
+  box-shadow: var(--shadow-panel);
+  animation: fade-in var(--base) var(--ease);
+}
+
+/* Never larger than the source itself, and never taller than half the window. */
+.source-preview canvas {
+  display: block;
+  width: auto;
+  height: auto;
+  max-width: min(720px, 100%);
+  max-height: 52vh;
+}
+
+.source-preview.pickable {
+  cursor: crosshair;
+}
+
+/* The area to record; everything around it is dimmed. */
+.source-preview-area {
+  position: absolute;
+  border: 2px solid var(--accent);
+  border-radius: 3px;
+  box-shadow: 0 0 0 9999px rgb(0 0 0 / 0.55);
+  pointer-events: none;
+  transition: left var(--base) var(--ease), top var(--base) var(--ease), width var(--base) var(--ease), height var(--base) var(--ease);
+}
+
+.source-preview-label {
+  position: absolute;
+  left: 10px;
+  bottom: 10px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  background: rgb(0 0 0 / 0.7);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 600;
 }
 
 .empty-actions {

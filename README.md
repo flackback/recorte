@@ -6,7 +6,7 @@ Gravador de tela e editor para Windows, feito com Tauri 2 (Rust + TypeScript, We
 
 ## Gravação
 
-- **Fontes:** tela inteira, janela ou **área**, a 30, 60 ou 120 fps. Ao escolher "Área" (ou clicar numa tela nesse modo), a seleção abre na hora para você desenhar o retângulo; a área fica desenhada no mapa das telas, com "Alterar área", e o app lembra dela para as próximas gravações. Usa Windows.Graphics.Capture com H.264 por hardware.
+- **Fontes:** tela inteira, janela ou **área**, a 30, 60 ou 120 fps. Ao escolher "Área" (ou clicar numa tela nesse modo), a seleção abre na hora para você desenhar o retângulo; a área fica desenhada no mapa das telas, com "Alterar área", e o app lembra dela para as próximas gravações. Enquanto nada está aberto, a área central mostra ao vivo o que vai ser gravado (a tela, a área marcada ou a janela); no modo Área, um clique na prévia abre a seleção. Usa Windows.Graphics.Capture com H.264 por hardware.
 - **Áudio do sistema:** loopback WASAPI, num WAV próprio (`system.wav`); preenchido com silêncio quando nada toca. Gravações antigas têm esse áudio dentro do MP4, e o app lê os dois formatos.
 - **Microfone:** faixa separada (`mic.wav`).
 - **Webcam:** gravada pelo WebView em `webcam.mp4`, alinhada à tela pelo mesmo relógio.
