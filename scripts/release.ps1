@@ -32,10 +32,13 @@ if (-not $SkipBuild) {
   $env:TAURI_SIGNING_PRIVATE_KEY = [IO.File]::ReadAllText($key)
   $env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD = ""
   Push-Location $root
+  # The build writes progress to stderr; Windows PowerShell would stop on it under "Stop".
+  $ErrorActionPreference = "Continue"
   try {
     npm run tauri build
     if ($LASTEXITCODE -ne 0) { throw "A compilação falhou." }
   } finally {
+    $ErrorActionPreference = "Stop"
     Pop-Location
   }
 }
@@ -61,6 +64,7 @@ $latestPath = Join-Path $bundle "latest.json"
 [IO.File]::WriteAllText($latestPath, ($latest | ConvertTo-Json -Depth 5), $utf8)
 
 $body = if ($Notes) { $Notes } else { "Recorte $Version" }
+$ErrorActionPreference = "Continue"
 gh release create "v$Version" $installer.FullName $latestPath --repo $Repo --title "Recorte $Version" --notes $body
 if ($LASTEXITCODE -ne 0) { throw "A publicação no GitHub falhou." }
 Write-Host "Versão $Version publicada. Os apps instalados vão encontrar a atualização."
