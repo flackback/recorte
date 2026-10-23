@@ -46,13 +46,6 @@ const ui = {
   takeSelectionTrash: $<HTMLButtonElement>("take-selection-trash"),
   takeSelectionClear: $<HTMLButtonElement>("take-selection-clear"),
   emptyRecord: $<HTMLButtonElement>("empty-record"),
-  preview: $("source-preview"),
-  previewCanvas: $<HTMLCanvasElement>("source-preview-canvas"),
-  previewArea: $("source-preview-area"),
-  previewLabel: $("source-preview-label"),
-  emptyIcon: $("empty-icon"),
-  emptyTitle: $("empty-title"),
-  emptyText: $("empty-text"),
   areaHint: $("area-hint"),
   emptyOpen: $<HTMLButtonElement>("empty-open"),
   titlebarStatus: $("titlebar-status"),
@@ -1138,77 +1131,6 @@ window.addEventListener("DOMContentLoaded", async () => {
   ]);
   await refreshTakes();
 });
-
-// ---------- live preview of the source ----------
-
-/** How often the start screen refreshes its picture of the source. */
-const PREVIEW_EVERY = 500;
-let previewBusy = false;
-
-/**
- * While nothing is open, the start screen shows what will be recorded, live: the selected screen
- * (with the chosen area marked) or window. It pauses while recording or when the app is hidden.
- */
-async function refreshPreview() {
-  const visible = !ui.empty.hidden && !recording && document.visibilityState === "visible";
-  if (!visible || previewBusy) return;
-  const monitor = picker.sources.monitors.find((candidate) => candidate.index === picker.monitor);
-  const windowInfo = picker.sources.windows.find((candidate) => candidate.hwnd === picker.window);
-  const args = picker.kind === "w" ? (windowInfo ? { hwnd: windowInfo.hwnd } : null) : monitor ? { index: monitor.index } : null;
-  if (!args) {
-    showPreview(false);
-    return;
-  }
-  previewBusy = true;
-  try {
-    const bytes = new Uint8Array(await invoke<ArrayBuffer>("source_preview", { ...args, width: 960 }));
-    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-    const width = view.getUint32(0, true);
-    const height = view.getUint32(4, true);
-    const canvas = ui.previewCanvas;
-    if (canvas.width !== width || canvas.height !== height) {
-      canvas.width = width;
-      canvas.height = height;
-    }
-    canvas.getContext("2d")!.putImageData(new ImageData(new Uint8ClampedArray(bytes.buffer, bytes.byteOffset + 8, width * height * 4), width, height), 0, 0);
-
-    // The area, in the same proportions as on the screen.
-    const area = picker.kind === "a" && picker.area?.monitor === picker.monitor && monitor ? picker.area : null;
-    ui.previewArea.hidden = !area;
-    if (area && monitor) {
-      ui.previewArea.style.left = `${(area.x / monitor.width) * 100}%`;
-      ui.previewArea.style.top = `${(area.y / monitor.height) * 100}%`;
-      ui.previewArea.style.width = `${(area.width / monitor.width) * 100}%`;
-      ui.previewArea.style.height = `${(area.height / monitor.height) * 100}%`;
-    }
-    ui.previewLabel.textContent =
-      picker.kind === "w" ? windowInfo?.title ?? "Janela" : area ? `Área de ${area.width}×${area.height}` : picker.kind === "a" ? "Clique para desenhar a área" : `Tela inteira · ${monitor?.width}×${monitor?.height}`;
-    ui.preview.classList.toggle("pickable", picker.kind === "a");
-    ui.preview.title = picker.kind === "a" ? "Clique para desenhar a área" : "";
-    showPreview(true);
-  } catch {
-    showPreview(false);
-  } finally {
-    previewBusy = false;
-  }
-}
-
-/** Swaps the start screen between the live preview and the plain "nothing open" text. */
-function showPreview(on: boolean) {
-  ui.preview.hidden = !on;
-  ui.empty.classList.toggle("has-preview", on);
-  ui.emptyIcon.toggleAttribute("hidden", on);
-  ui.emptyTitle.textContent = on ? "Pronto para gravar" : "Nada aberto ainda";
-  ui.emptyText.innerHTML = on
-    ? "Isto é o que vai ser gravado. Clique em <strong>Gravar</strong>; quando parar, a gravação abre aqui para editar."
-    : "Escolha uma tela ou janela e clique em <strong>Gravar</strong>. Quando parar, a gravação abre aqui para editar.";
-}
-
-ui.preview.addEventListener("click", () => {
-  if (picker.kind === "a") void chooseArea();
-});
-window.setInterval(() => void refreshPreview(), PREVIEW_EVERY);
-document.addEventListener("visibilitychange", () => void refreshPreview());
 
 // ---------- AI (MCP server) ----------
 

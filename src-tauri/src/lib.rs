@@ -5,7 +5,6 @@ mod control;
 mod cursor;
 mod export;
 mod overlay;
-mod preview;
 pub mod recorder;
 pub mod sources;
 mod voice;
@@ -134,18 +133,6 @@ fn takes_dir(app: AppHandle) -> Result<String, String> {
 async fn take_segments_joined(app: AppHandle, dir: String) -> Result<TakeMeta, String> {
     let dir = take_dir(&app, &dir)?;
     blocking(move || recorder::segments_joined(&dir).map_err(|error| format!("{error:#}"))).await
-}
-
-/// A small live picture of the monitor (`index`) or window (`hwnd`) about to be recorded.
-#[tauri::command]
-async fn source_preview(index: Option<usize>, hwnd: Option<String>, width: u32) -> Result<tauri::ipc::Response, String> {
-    let target = match (index, hwnd) {
-        (_, Some(hwnd)) => preview::Target::Window(hwnd.parse().map_err(|_| "hwnd inválido".to_string())?),
-        (Some(index), None) => preview::Target::Monitor(index),
-        (None, None) => return Err("nenhuma fonte".into()),
-    };
-    let bytes = blocking(move || preview::grab(target, width.clamp(64, 1920)).map_err(|error| format!("{error:#}"))).await?;
-    Ok(tauri::ipc::Response::new(bytes))
 }
 
 /// Opens the takes folder in Explorer, creating it first if nothing was recorded yet.
@@ -312,7 +299,6 @@ pub fn run() {
             list_takes,
             takes_dir,
             takes_dir_open,
-            source_preview,
             take_segments_joined,
             load_project,
             save_project,
