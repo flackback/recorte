@@ -14,6 +14,7 @@ export class TimeMap {
   constructor(project: Pick<Project, "trim" | "cuts"> & Partial<Pick<Project, "speed">>, extraCuts: Span[] = []) {
     const removed = [...project.cuts, ...extraCuts]
       .map((cut) => ({ start: Math.max(cut.start, project.trim.start), end: Math.min(cut.end, project.trim.end) }))
+      // Splits (zero-length cuts) remove nothing; they only mark a seam.
       .filter((cut) => cut.end > cut.start)
       .sort((a, b) => a.start - b.start);
     const kept: Span[] = [];

@@ -202,6 +202,22 @@
             <label class="chip" title="Os traços das ferramentas de desenho viram zoom no editor. Cliques na barra de gravação nunca viram zoom"><input type="checkbox" id="draw-zoom" checked /><svg class="i"><use href="#i-zoom" /></svg>Zoom ao desenhar</label>
           </div>
 
+          <!-- Live check before recording: sound coming in, and the camera framing. -->
+          <div class="live" id="live" hidden>
+            <div class="meters">
+              <div class="meter" id="meter-system" data-label="Som do sistema" title="Som do sistema" hidden>
+                <svg class="i"><use href="#i-audio" /></svg><span class="meter-track"><span class="meter-cover"></span></span>
+              </div>
+              <div class="meter" id="meter-mic" data-label="Microfone" title="Microfone" hidden>
+                <svg class="i"><use href="#i-mic" /></svg><span class="meter-track"><span class="meter-cover"></span></span>
+              </div>
+            </div>
+            <div class="cam-preview" id="cam-preview" title="Prévia da webcam" hidden>
+              <video id="cam-preview-video" muted playsinline aria-label="Prévia da webcam"></video>
+            </div>
+            <p class="hint cam-note" id="cam-note" hidden></p>
+          </div>
+
           <div class="segmented" role="radiogroup" aria-label="Quadros por segundo" id="fps">
             <label><input type="radio" name="fps" value="30" />30 fps</label>
             <label><input type="radio" name="fps" value="60" checked />60 fps</label>
@@ -221,6 +237,10 @@
           <div class="takes-head">
             <h2>Gravações</h2>
             <button class="secondary compact" id="open-folder" title="Abrir a pasta das gravações no Explorer"><svg class="i"><use href="#i-folder" /></svg>Abrir pasta</button>
+          </div>
+          <div class="take-search" id="take-search-box" hidden>
+            <svg class="i" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7" /><path d="m20 20-4-4" /></svg>
+            <input type="search" id="take-search" placeholder="Buscar gravações" aria-label="Buscar gravações pelo nome ou pelo que foi dito" title="Busca pelo nome e pelo que foi dito, se a gravação tiver transcrição (Ctrl+F)" autocomplete="off" spellcheck="false" />
           </div>
           <div class="take-selection" id="take-selection" hidden>
             <span id="take-selection-count"></span>
@@ -282,8 +302,10 @@
                   <svg class="i icon-pause" hidden><use href="#i-pause" /></svg>
                 </button>
                 <span class="time" id="time">0:00.0 <span class="total">/ 0:00.0</span></span>
+                <button class="secondary compact preview-speed" id="preview-speed" title="Velocidade da prévia (não muda o vídeo final)" aria-label="Velocidade da prévia">1×</button>
                 <div class="tools" role="toolbar" aria-label="Ferramentas da timeline">
                   <button class="tool" id="add-cut" title="Cortar um trecho no ponto atual (X)" aria-label="Cortar"><svg class="i"><use href="#i-cut" /></svg><span class="tool-label">Cortar</span></button>
+                  <button class="tool" id="add-split" title="Dividir no ponto atual, sem cortar; a emenda aceita transição (D)" aria-label="Dividir"><svg class="i" viewBox="0 0 24 24"><path d="M12 3v18M8 8l-4 4 4 4M16 8l4 4-4 4" /></svg><span class="tool-label">Dividir</span></button>
                   <button class="tool" id="add-zoom" title="Zoom no ponto atual (Z)" aria-label="Zoom"><svg class="i"><use href="#i-zoom" /></svg><span class="tool-label">Zoom</span></button>
                   <button class="tool" id="add-lens" title="Lente de aumento no ponto atual (L)" aria-label="Lente"><svg class="i"><use href="#i-wand" /></svg><span class="tool-label">Lente</span></button>
                   <button class="tool" id="add-note" title="Texto, seta ou destaque a partir do ponto atual (T)" aria-label="Texto"><svg class="i"><use href="#i-text" /></svg><span class="tool-label">Texto</span></button>
@@ -624,6 +646,7 @@
               <dt><kbd>Espaço</kbd></dt><dd>Reproduzir / pausar</dd>
               <dt><kbd>←</kbd> <kbd>→</kbd></dt><dd>Voltar / avançar 1 s (com <kbd>Shift</kbd>: 5 s)</dd>
               <dt><kbd>X</kbd></dt><dd>Cortar um trecho no ponto atual</dd>
+              <dt><kbd>D</kbd></dt><dd>Dividir no ponto atual, sem cortar</dd>
               <dt><kbd>Z</kbd></dt><dd>Zoom no ponto atual</dd>
               <dt><kbd>L</kbd></dt><dd>Lente no ponto atual</dd>
               <dt><kbd>B</kbd></dt><dd>Desfocar uma área</dd>

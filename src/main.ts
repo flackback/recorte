@@ -12,7 +12,7 @@ import { resetTips, showTour } from "./tips";
 import { toast } from "./toast";
 import { Settings } from "./settings";
 import { Updates } from "./updates";
-import { joinPath, takeName, type Take } from "./types";
+import { joinPath, levelFill, takeName, type Levels, type Take } from "./types";
 
 type MonitorInfo = { index: number; name: string; width: number; height: number; primary: boolean; x: number; y: number; refreshRate: number };
 type WindowInfo = { hwnd: string; title: string; process: string; width: number; height: number };
@@ -40,6 +40,14 @@ const ui = {
   recordLabel: $("record-label"),
   recordHint: $("record-hint"),
   warnings: $<HTMLUListElement>("warnings"),
+  live: $("live"),
+  meterSystem: $("meter-system"),
+  meterMic: $("meter-mic"),
+  camPreview: $("cam-preview"),
+  camVideo: $<HTMLVideoElement>("cam-preview-video"),
+  camNote: $("cam-note"),
+  takeSearchBox: $("take-search-box"),
+  takeSearch: $<HTMLInputElement>("take-search"),
   takes: $<HTMLUListElement>("takes"),
   openFolder: $<HTMLButtonElement>("open-folder"),
   empty: $("empty"),
@@ -59,6 +67,12 @@ const ui = {
 
 const SETTINGS_KEY = "recorte.settings";
 const WEBCAM_FILE = "webcam.mp4";
+/** Below this much free space a recording doesn't start (the backend checks too). */
+const DISK_STOP_BYTES = 300 * 1024 ** 2;
+/** Below this much free space the user is warned before recording. */
+const DISK_LOW_BYTES = 2 * 1024 ** 3;
+/** The capture failure set when the disk fills up while recording (`recorder::DISK_FULL`). */
+const DISK_FULL_ERROR = "O disco está quase cheio; a gravação parou para não se perder.";
 
 const editor = new Editor();
 // Handy for inspecting state from the WebView devtools during development.
@@ -78,6 +92,8 @@ let recordedKind: "monitor" | "window" = "monitor";
 /** Why the recording stopped on its own; shown with the take's warnings. */
 let stopNotice: string | null = null;
 let drawing = false;
+/** Sound sources being recorded, for the level bars in the floating bar. */
+let recordedAudio = { system: false, mic: false };
 
 // ---------- helpers ----------
 
@@ -459,6 +475,9 @@ async function checkDevices() {
     input.disabled = recording || !present;
     input.closest("label")!.title = present ? "" : missing;
   }
+  // A camera plugged in after a failed preview gets another try.
+  live.camFailed = false;
+  updateLive();
 }
 
 function selectedSource() {
@@ -530,6 +549,136 @@ class WebcamRecorder {
   }
 }
 
+// ---------- live check (level bars, camera preview) ----------
+
+/**
+ * Before recording, shows that sound is coming in and how the camera frames the user. Runs only
+ * while the window is in view, nothing is recording or starting, and the chip is on; the
+ * recording opens the devices itself, so the preview lets the camera go before it starts.
+ */
+const live = {
+  /** Sources the backend meter was last asked to read, as "system:mic"; "" when stopped. */
+  meter: "",
+  timer: undefined as number | undefined,
+  polling: false,
+  minimized: false,
+  cam: null as MediaStream | null,
+  /** Bumped to drop a camera that opens after it stopped being wanted. */
+  camToken: 0,
+  camOpening: false,
+  /** The preview failed; not retried until the chip is turned on again or a device appears. */
+  camFailed: false,
+};
+
+function liveAllowed() {
+  return !recording && !busy && !live.minimized && document.visibilityState === "visible";
+}
+
+function updateLive() {
+  const allowed = liveAllowed();
+  const system = allowed && ui.systemAudio.checked;
+  const mic = allowed && ui.microphone.checked;
+  const cam = allowed && ui.webcam.checked;
+  ui.meterSystem.hidden = !system;
+  ui.meterMic.hidden = !mic;
+  ui.live.hidden = !(system || mic || cam);
+
+  const wanted = system || mic ? `${system}:${mic}` : "";
+  if (wanted !== live.meter) {
+    live.meter = wanted;
+    const sent = wanted ? invoke("meter_start", { system, mic }) : invoke("meter_stop");
+    sent.catch((error) => console.error("meter", error));
+  }
+  if (wanted && live.timer === undefined) {
+    live.timer = window.setInterval(() => void pollLevels(), 80);
+  } else if (!wanted && live.timer !== undefined) {
+    window.clearInterval(live.timer);
+    live.timer = undefined;
+    showLevel(ui.meterSystem, 0);
+    showLevel(ui.meterMic, 0);
+  }
+
+  if (cam) void openPreview();
+  else closePreview();
+}
+
+async function pollLevels() {
+  // A slow answer skips a tick instead of piling up calls.
+  if (live.polling) return;
+  live.polling = true;
+  try {
+    const levels = await invoke<Levels>("audio_levels");
+    if (!ui.meterSystem.hidden) showLevel(ui.meterSystem, levels.system);
+    if (!ui.meterMic.hidden) showLevel(ui.meterMic, levels.mic);
+  } catch {
+    // The next tick tries again.
+  } finally {
+    live.polling = false;
+  }
+}
+
+/** Moves the bar's cover (transform only); null shows the bar as off. */
+function showLevel(meter: HTMLElement, peak: number | null) {
+  const off = peak === null;
+  if (meter.classList.contains("off") !== off) {
+    meter.classList.toggle("off", off);
+    meter.title = off ? `${meter.dataset.label}: sem sinal do dispositivo` : meter.dataset.label!;
+  }
+  const cover = meter.querySelector<HTMLElement>(".meter-cover")!;
+  const transform = `scaleX(${(1 - levelFill(peak)).toFixed(3)})`;
+  if (cover.style.transform !== transform) cover.style.transform = transform;
+}
+
+function cameraError(error: unknown) {
+  const name = error instanceof DOMException ? error.name : "";
+  if (name === "NotAllowedError" || name === "SecurityError") return "A webcam não foi liberada para o Recorte.";
+  if (name === "NotFoundError" || name === "OverconstrainedError") return "Nenhuma webcam encontrada.";
+  if (name === "NotReadableError" || name === "AbortError") return "A webcam está em uso por outro programa.";
+  return "Não foi possível abrir a webcam.";
+}
+
+async function openPreview() {
+  if (live.cam || live.camOpening || live.camFailed) return;
+  const token = ++live.camToken;
+  live.camOpening = true;
+  ui.camNote.hidden = true;
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ video: { width: { ideal: 320 }, height: { ideal: 240 }, frameRate: { ideal: 30 } }, audio: false });
+    if (token !== live.camToken) {
+      for (const track of stream.getTracks()) track.stop();
+      return;
+    }
+    live.cam = stream;
+    ui.camVideo.srcObject = stream;
+    ui.camPreview.hidden = false;
+    void ui.camVideo.play().catch(() => undefined);
+  } catch (error) {
+    if (token !== live.camToken) return;
+    live.camFailed = true;
+    ui.camNote.textContent = cameraError(error);
+    ui.camNote.hidden = false;
+  } finally {
+    if (token === live.camToken) live.camOpening = false;
+  }
+}
+
+/** Lets the camera go (its light turns off). The next time it is wanted, a failed one is tried again. */
+function closePreview() {
+  live.camToken++;
+  live.camOpening = false;
+  live.camFailed = false;
+  if (live.cam) for (const track of live.cam.getTracks()) track.stop();
+  live.cam = null;
+  ui.camVideo.srcObject = null;
+  ui.camPreview.hidden = true;
+  ui.camNote.hidden = true;
+}
+
+async function checkMinimized() {
+  live.minimized = await appWindow.isMinimized().catch(() => false);
+  updateLive();
+}
+
 // ---------- recording ----------
 
 function setRecordingUi(active: boolean) {
@@ -575,6 +724,18 @@ async function startRecording() {
   showWarnings([]);
   const warnings: string[] = [];
 
+  // A full disk would cut the take short; refuse when there is next to no room, warn when little.
+  const free = await invoke<number | null>("disk_free").catch(() => null);
+  if (free !== null && free < DISK_STOP_BYTES) {
+    const message = "Não há espaço livre suficiente no disco das gravações (menos de 300 MB). Libere espaço e grave de novo.";
+    showWarnings([message]);
+    toast(message);
+    return;
+  }
+  if (free !== null && free < DISK_LOW_BYTES) {
+    toast(`Pouco espaço no disco: ${(free / 1024 ** 3).toFixed(1).replace(".", ",")} GB livres. A gravação para sozinha se o disco encher.`);
+  }
+
   // An area: let the user drag it on the monitor first.
   let crop: { x: number; y: number; width: number; height: number } | null = null;
   if (picker.kind === "a") {
@@ -614,6 +775,7 @@ async function startRecording() {
   };
   recordedMonitor = source.kind === "monitor" ? (source as { index: number }).index : picker.monitor || 1;
   recordedKind = source.kind === "window" ? "window" : "monitor";
+  recordedAudio = { system: options.systemAudio, mic: options.microphone };
 
   // 3-2-1 on the monitor about to be recorded, so the click on Gravar isn't in the video.
   if (ui.countdown.checked && !(await countdown(recordedMonitor))) {
@@ -681,8 +843,11 @@ async function pollStatus() {
   // A tick that arrives after the stop must not start a new recording through toggleRecording.
   if (!recording) return;
   // The capture ended on its own: stop the normal way, so what was recorded is saved.
+  // The full-disk stop is already written for people; capture errors get some context.
   const ended = status.error
-    ? `A gravação parou por um erro: ${status.error}. O que já foi gravado fica salvo.`
+    ? status.error === DISK_FULL_ERROR
+      ? `${status.error} O que já foi gravado fica salvo.`
+      : `A gravação parou por um erro: ${status.error}. O que já foi gravado fica salvo.`
     : status.closed
       ? recordedKind === "window"
         ? "A janela gravada foi fechada. A gravação foi encerrada."
@@ -700,7 +865,7 @@ async function pollStatus() {
   if (!status.recording) return;
   ui.recordLabel.textContent = `Parar · ${formatClock(status.elapsedMs)}`;
   ui.titlebarTime.textContent = `${status.paused ? "Pausado" : "Gravando"} · ${formatDuration(status.elapsedMs)}`;
-  void emit("recbar-state", { elapsedMs: status.elapsedMs, paused: status.paused });
+  void emit("recbar-state", { elapsedMs: status.elapsedMs, paused: status.paused, audio: recordedAudio });
 }
 
 /** Opens the area picker over a monitor; resolves with the area, null for the whole screen, or "cancelled". */
@@ -718,17 +883,26 @@ async function pickArea(monitor: number, current: { x: number; y: number; width:
   return result;
 }
 
-async function stopRecording() {
-  window.clearInterval(statusTimer);
-  await invoke("recbar_close").catch(() => undefined);
-  // Back to the app to edit what was just recorded.
+async function showMainWindow() {
   await appWindow.unminimize().catch(() => undefined);
   await appWindow.show().catch(() => undefined);
   await appWindow.setFocus().catch(() => undefined);
+}
+
+/** Closes the floating bar and the drawing layer of the recording that is stopping. */
+async function closeRecordingWindows() {
+  window.clearInterval(statusTimer);
+  await invoke("recbar_close").catch(() => undefined);
   if (drawing) {
     drawing = false;
     await invoke("overlay_close").catch(() => undefined);
   }
+}
+
+async function stopRecording() {
+  await closeRecordingWindows();
+  // Back to the app to edit what was just recorded.
+  await showMainWindow();
   ui.recordLabel.textContent = "Finalizando…";
   let take: Take;
   try {
@@ -765,6 +939,8 @@ async function toggleRecording() {
   }
   busy = true;
   ui.record.disabled = true;
+  // Lets the camera and the sound devices go before the recording opens them.
+  updateLive();
   try {
     if (recording) await stopRecording();
     else await startRecording();
@@ -774,7 +950,49 @@ async function toggleRecording() {
   } finally {
     busy = false;
     ui.record.disabled = !recording && !selectedSource();
+    updateLive();
   }
+}
+
+/**
+ * "Descartar e regravar" from the floating bar: stops the recording, moves its take to the
+ * Recycle Bin without opening it, and records again with the same choices (countdown included).
+ * The app stays out of the way unless the new recording doesn't start.
+ */
+async function discardAndRecord() {
+  if (!recording || busy) return;
+  busy = true;
+  ui.record.disabled = true;
+  try {
+    await closeRecordingWindows();
+    ui.recordLabel.textContent = "Descartando…";
+    let dir: string;
+    try {
+      // The webcam file is finished first, so nothing holds the folder when it moves.
+      if (camera) await camera.stop();
+      camera = null;
+      dir = (await invoke<Take>("stop_recording")).dir;
+    } finally {
+      stopNotice = null;
+      setRecordingUi(false);
+    }
+    try {
+      await invoke("take_trash", { dir });
+    } catch (error) {
+      showWarnings([`Não foi possível mover a gravação descartada para a Lixeira: ${error}`]);
+    }
+    await refreshTakes();
+    await startRecording();
+  } catch (error) {
+    showWarnings([String(error)]);
+    if (recording) setRecordingUi(false);
+  } finally {
+    busy = false;
+    ui.record.disabled = !recording && !selectedSource();
+  }
+  // Cancelled countdown, source gone, start failed: back to the app, where the reason shows.
+  if (!recording) await showMainWindow();
+  updateLive();
 }
 
 // ---------- takes ----------
@@ -792,10 +1010,12 @@ function markSelected() {
 /** Ctrl adds or removes one take; Shift picks everything from the last one picked. */
 function pickTake(id: string, event: MouseEvent | KeyboardEvent) {
   if (event.shiftKey && pickAnchor) {
-    const from = takes.findIndex((take) => take.id === pickAnchor);
-    const to = takes.findIndex((take) => take.id === id);
+    // Only what the search shows: a range never reaches takes the user can't see.
+    const shown = shownTakes();
+    const from = Math.max(0, shown.findIndex((take) => take.id === pickAnchor));
+    const to = shown.findIndex((take) => take.id === id);
     if (!event.ctrlKey) picked.clear();
-    for (const take of takes.slice(Math.min(from, to), Math.max(from, to) + 1)) picked.add(take.id);
+    for (const take of shown.slice(Math.min(from, to), Math.max(from, to) + 1)) picked.add(take.id);
   } else {
     // The open take joins the first Ctrl pick, as in Explorer.
     if (!picked.size && editor.currentTakeId && editor.currentTakeId !== id) picked.add(editor.currentTakeId);
@@ -820,8 +1040,89 @@ noTakes.className = "none";
 noTakes.setAttribute("role", "option");
 noTakes.setAttribute("aria-disabled", "true");
 noTakes.textContent = "Nenhuma gravação ainda.";
+const noMatches = noTakes.cloneNode() as HTMLLIElement;
+noMatches.textContent = "Nenhuma gravação encontrada.";
 
 const takeById = (id: string) => takes.find((take) => take.id === id);
+
+// ---------- search ----------
+
+/** Lowercase without accents, so "acao" finds "Ação". */
+const fold = (text: string) => text.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
+
+/**
+ * The search over the list: by name here, and by what was said through the backend, which reads
+ * the takes' transcripts (kept in memory until they change).
+ */
+const search = {
+  query: "",
+  terms: [] as string[],
+  /** Takes whose transcript has every term, with the words around the first one. */
+  said: new Map<string, string>(),
+  /** Drops answers to an older query. */
+  sequence: 0,
+  timer: undefined as number | undefined,
+};
+
+function matchesName(take: Take) {
+  const name = fold(takeName(take));
+  return search.terms.every((term) => name.includes(term));
+}
+
+const isShown = (take: Take) => !search.terms.length || matchesName(take) || search.said.has(take.id);
+/** The takes the list shows, in order. */
+const shownTakes = () => takes.filter(isShown);
+
+/** Hides the rows that don't match; a match only by speech shows what was said instead of the date. */
+function applySearch() {
+  let shown = 0;
+  for (const take of takes) {
+    const row = takeRows.get(take.id);
+    if (!row) continue;
+    const byName = !search.terms.length || matchesName(take);
+    const said = byName ? undefined : search.said.get(take.id);
+    const visible = byName || said !== undefined;
+    row.item.hidden = !visible;
+    if (visible) shown++;
+    const meta = said !== undefined ? `“${said}”` : metaText(take);
+    if (row.meta.textContent !== meta) row.meta.textContent = meta;
+    row.meta.classList.toggle("said", said !== undefined);
+    row.meta.title = said !== undefined ? "Dito na gravação" : "";
+  }
+  // Picked takes the search hides would be trashed unseen from the selection bar.
+  for (const id of [...picked]) {
+    const take = takeById(id);
+    if (take && !isShown(take)) picked.delete(id);
+  }
+  if (takes.length && !shown) ui.takes.append(noMatches);
+  else noMatches.remove();
+  ui.takeSearchBox.hidden = !takes.length && !search.query;
+}
+
+/** Filters by name at once; asks for matches in the transcripts after a short pause in typing. */
+function runSearch() {
+  search.query = ui.takeSearch.value.trim();
+  search.terms = fold(search.query).split(/\s+/).filter(Boolean);
+  window.clearTimeout(search.timer);
+  const sequence = ++search.sequence;
+  if (!search.terms.length) search.said.clear();
+  applySearch();
+  markSelected();
+  if (!search.terms.length) return;
+  search.timer = window.setTimeout(async () => {
+    let said = new Map<string, string>();
+    try {
+      const hits = await invoke<{ id: string; snippet: string }[]>("takes_search", { query: search.query });
+      said = new Map(hits.map((hit) => [hit.id, hit.snippet]));
+    } catch (error) {
+      console.error("takes_search", error);
+    }
+    if (sequence !== search.sequence) return;
+    search.said = said;
+    applySearch();
+    markSelected();
+  }, 150);
+}
 
 function createTakeRow(id: string): TakeRow {
   const item = document.createElement("li");
@@ -858,9 +1159,11 @@ function createTakeRow(id: string): TakeRow {
   return { item, button, thumb, name, meta };
 }
 
+const metaText = (take: Take) => (take.segments?.length ? "Finalizando a gravação…" : `${formatDate(take.createdAt)} · ${formatDuration(take.durationMs)}`);
+
 function updateTakeRow(row: TakeRow, take: Take) {
   row.name.textContent = takeName(take);
-  row.meta.textContent = take.segments?.length ? "Finalizando a gravação…" : `${formatDate(take.createdAt)} · ${formatDuration(take.durationMs)}`;
+  // The second line (date, or what was said) is set by applySearch.
   const thumbnail = (take as Take & { thumbnail?: string | null }).thumbnail;
   const src = thumbnail ? convertFileSrc(joinPath(take.dir, thumbnail)) : "";
   const image = row.thumb.querySelector("img");
@@ -908,7 +1211,10 @@ async function refreshTakes() {
     if (here !== row.item) ui.takes.insertBefore(row.item, here ?? null);
   });
   if (!takes.length) ui.takes.append(noTakes);
+  applySearch();
   markSelected();
+  // A take may have been transcribed or renamed since; look again for an active search.
+  if (search.terms.length) runSearch();
 }
 
 function takeMenu(button: HTMLButtonElement, take: Take): MenuItem[] {
@@ -998,7 +1304,7 @@ function pickedMenu(): MenuItem[] {
 }
 
 function pickAll() {
-  for (const take of takes) picked.add(take.id);
+  for (const take of shownTakes()) picked.add(take.id);
   markSelected();
 }
 
@@ -1049,7 +1355,8 @@ async function trashTakes(chosen: Take[]) {
   const one = chosen.length === 1;
   // From the list (or its selection bar), focus moves on to the next take afterwards.
   const fromList = ui.takes.contains(document.activeElement) || ui.takeSelection.contains(document.activeElement);
-  const firstIndex = Math.min(...chosen.map((take) => takes.findIndex((candidate) => candidate.id === take.id)).filter((index) => index >= 0));
+  const before = shownTakes();
+  const firstIndex = Math.min(...chosen.map((take) => before.findIndex((candidate) => candidate.id === take.id)).filter((index) => index >= 0));
   const confirmed = await confirmDialog({
     title: one ? "Mover para a Lixeira?" : `Mover ${chosen.length} gravações para a Lixeira?`,
     message: one
@@ -1076,7 +1383,8 @@ async function trashTakes(chosen: Take[]) {
   if (failures.length) showWarnings(failures);
   clearPicked();
   await refreshTakes();
-  const next = takes[Math.min(firstIndex, takes.length - 1)];
+  const after = shownTakes();
+  const next = after[Math.min(firstIndex, after.length - 1)];
   if (fromList && next) focusTake(next.id);
 }
 
@@ -1190,10 +1498,15 @@ ui.takes.addEventListener("keydown", (event) => {
   else if (event.key === "Escape" && picked.size) clearPicked();
   else if (event.ctrlKey && event.key.toLowerCase() === "a") pickAll();
   else if (event.key === "ArrowDown" || event.key === "ArrowUp") {
-    const next = takes[takes.indexOf(take) + (event.key === "ArrowDown" ? 1 : -1)];
+    const shown = shownTakes();
+    const index = shown.indexOf(take);
+    // Up from the first take goes back to the search field.
+    if (index === 0 && event.key === "ArrowUp" && !ui.takeSearchBox.hidden) ui.takeSearch.focus();
+    const next = shown[index + (event.key === "ArrowDown" ? 1 : -1)];
     if (next) focusTake(next.id);
   } else if (event.key === "Home" || event.key === "End") {
-    const edge = event.key === "Home" ? takes[0] : takes[takes.length - 1];
+    const shown = shownTakes();
+    const edge = event.key === "Home" ? shown[0] : shown[shown.length - 1];
     if (edge) focusTake(edge.id);
   } else return;
   event.preventDefault();
@@ -1205,6 +1518,36 @@ void updateMaximizeButton();
 ui.record.addEventListener("click", toggleRecording);
 ui.takeSelectionTrash.addEventListener("click", () => void trashTakes(takes.filter((take) => picked.has(take.id))));
 ui.takeSelectionClear.addEventListener("click", () => clearPicked());
+ui.takeSearch.addEventListener("input", () => runSearch());
+ui.takeSearch.addEventListener("keydown", (event) => {
+  // Typing here never reaches the editor's shortcuts (Space plays, Ctrl+Z undoes an edit).
+  event.stopPropagation();
+  if (event.key === "Escape") {
+    // Esc clears the search; on an empty field it leaves it.
+    if (ui.takeSearch.value) {
+      ui.takeSearch.value = "";
+      runSearch();
+    } else {
+      ui.takeSearch.blur();
+    }
+  } else if (event.key === "ArrowDown" || event.key === "Enter") {
+    const first = shownTakes()[0];
+    if (!first) return;
+    if (event.key === "Enter") void openTake(first.id);
+    else focusTake(first.id);
+  } else if (event.ctrlKey && event.key.toLowerCase() === "f") {
+    ui.takeSearch.select();
+  } else return;
+  event.preventDefault();
+});
+// Ctrl+F finds a recording, unless the editor is open (its shortcuts come first there).
+window.addEventListener("keydown", (event) => {
+  if (!event.ctrlKey || event.shiftKey || event.altKey || event.key.toLowerCase() !== "f") return;
+  if (editor.currentTakeId || settings.isOpen || ui.takeSearchBox.hidden) return;
+  event.preventDefault();
+  ui.takeSearch.focus();
+  ui.takeSearch.select();
+});
 ui.emptyRecord.addEventListener("click", toggleRecording);
 ui.emptyOpen.addEventListener("click", () => {
   if (takes[0]) void openTake(takes[0].id);
@@ -1222,6 +1565,11 @@ ui.sourceKind.addEventListener("change", (event) => {
 for (const control of [ui.systemAudio, ui.microphone, ui.webcam, ui.keystrokes, ui.showCursor, ui.countdown, ui.drawZoom, ui.fps]) {
   control.addEventListener("change", saveSettings);
 }
+for (const control of [ui.systemAudio, ui.microphone, ui.webcam]) control.addEventListener("change", () => updateLive());
+// The live check stops while the window is minimized or hidden.
+document.addEventListener("visibilitychange", () => void checkMinimized());
+window.addEventListener("focus", () => void checkMinimized());
+void appWindow.onResized(() => void checkMinimized());
 ui.keystrokes.addEventListener("change", () => {
   if (ui.keystrokes.checked) toast("As teclas ficam salvas na gravação, inclusive o que for digitado em senhas.");
 });
@@ -1278,6 +1626,8 @@ void listen<string>("recbar-action", async (event) => {
     await markMoment();
   } else if (event.payload === "stop") {
     await toggleRecording();
+  } else if (event.payload === "redo") {
+    await discardAndRecord();
   }
 });
 

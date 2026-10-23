@@ -4,8 +4,10 @@ mod ai;
 mod control;
 mod cursor;
 mod export;
+mod meter;
 mod overlay;
 pub mod recorder;
+mod search;
 pub mod sources;
 mod voice;
 
@@ -82,6 +84,12 @@ async fn start_recording(app: AppHandle, options: StartOptions) -> Result<Starte
             return Err("já existe uma gravação em andamento".into());
         }
         let _starting = Starting(&state.starting);
+        // A take that can't fit on the disk is refused here; one that fills it is stopped by the saver.
+        if recorder::free_space(&root).is_some_and(|free| free < recorder::DISK_STOP_BYTES) {
+            return Err("Não há espaço livre suficiente no disco das gravações (menos de 300 MB). Libere espaço e grave de novo.".into());
+        }
+        // The recording reads the devices itself; the idle level meter is no longer needed.
+        meter::meter_stop();
         let recording = Recording::start(options, &root).map_err(|error| format!("{error:#}"))?;
         let warnings = recording.warnings().to_vec();
         let dir = recording.dir().to_string_lossy().into_owned();
@@ -145,6 +153,19 @@ async fn list_takes(app: AppHandle) -> Result<Vec<TakeMeta>, String> {
         Ok(recorder::list_takes(&root, active.as_deref()))
     })
     .await
+}
+
+/// Free bytes on the drive of the takes folder, or null if it can't be read.
+#[tauri::command]
+fn disk_free(app: AppHandle) -> Result<Option<u64>, String> {
+    Ok(recorder::free_space(&takes_root(&app)?))
+}
+
+/// Takes whose transcript has every word of `query`, with a bit of text around the match.
+#[tauri::command]
+async fn takes_search(app: AppHandle, query: String) -> Result<Vec<search::Hit>, String> {
+    let root = takes_root(&app)?;
+    blocking(move || Ok(search::search(&root, &query))).await
 }
 
 #[tauri::command]
@@ -338,7 +359,12 @@ pub fn run() {
             control::agent_reply,
             control::ai_set_enabled,
             ai::ai_status,
-            ai::ai_connect
+            ai::ai_connect,
+            meter::audio_levels,
+            meter::meter_start,
+            meter::meter_stop,
+            disk_free,
+            takes_search
         ])
         .build(tauri::generate_context!())
         .expect("error while running tauri application")

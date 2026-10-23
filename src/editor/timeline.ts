@@ -290,6 +290,8 @@ export class Timeline {
         const start = this.toX(item.start);
         const end = this.toX(item.end);
         if (x < start - EDGE || x > end + EDGE) continue;
+        // A split has no length to resize: its handle only moves.
+        if (item.end <= item.start) return { kind: "move", track: track.key, id: item.id, offset: this.toTime(x) - item.start, length: 0 };
         if (Math.abs(x - start) <= EDGE) return { kind: "edge", track: track.key, id: item.id, side: "start" };
         if (Math.abs(x - end) <= EDGE) return { kind: "edge", track: track.key, id: item.id, side: "end" };
         if (x >= start && x <= end) return { kind: "move", track: track.key, id: item.id, offset: this.toTime(x) - item.start, length: item.end - item.start };
@@ -522,6 +524,7 @@ export class Timeline {
     // Cuts: dim and hatch in red.
     const cutTrack = state.tracks.find((track) => track.key === "cuts");
     for (const cut of [...(cutTrack?.items ?? []), ...state.wordCuts]) {
+      if (cut.end <= cut.start) continue;
       const x0 = this.toX(cut.start);
       const x1 = this.toX(cut.end);
       context.fillStyle = "rgba(0, 0, 0, 0.6)";
@@ -536,9 +539,19 @@ export class Timeline {
       context.stroke();
       context.lineWidth = 1;
     }
+    // Splits: a white line across the clip, outlined so it shows on light frames too.
+    for (const split of cutTrack?.items ?? []) {
+      if (split.end > split.start) continue;
+      const x = Math.round(this.toX(split.start)) + 0.5;
+      const selected = state.selected?.track === "cuts" && state.selected.id === split.id;
+      context.fillStyle = "rgba(0, 0, 0, 0.55)";
+      context.fillRect(x - 2.5, CLIP.top, 5, CLIP.height);
+      context.fillStyle = selected ? accent : "#ffffff";
+      context.fillRect(x - 1, CLIP.top, 2, CLIP.height);
+    }
     context.restore();
 
-    // A transition on a cut's seam: a small diamond at the bottom of the clip.
+    // A transition on a cut's (or split's) seam: a small diamond at the bottom of the clip.
     for (const cut of cutTrack?.items ?? []) {
       if (!(cut as Range & { transition?: unknown }).transition) continue;
       const x = (this.toX(cut.start) + this.toX(cut.end)) / 2;
@@ -624,6 +637,22 @@ export class Timeline {
         const box = this.itemBox(index, item);
         const selected = state.selected?.track === track.key && state.selected.id === item.id;
         const tint = track.tint?.(item) ?? track.color;
+        if (item.end <= item.start) {
+          // A split: a small handle centered on it, with a light notch.
+          context.fillStyle = selected ? tint : withAlpha(tint, 0.75);
+          context.beginPath();
+          context.roundRect(x - 4, box.top, 8, box.height, 3);
+          context.fill();
+          if (selected) {
+            context.strokeStyle = text;
+            context.lineWidth = 1.5;
+            context.stroke();
+            context.lineWidth = 1;
+          }
+          context.fillStyle = "#ffffff";
+          context.fillRect(x - 0.75, box.top + 4, 1.5, box.height - 8);
+          continue;
+        }
         context.fillStyle = selected ? tint : withAlpha(tint, 0.6);
         context.beginPath();
         context.roundRect(x, box.top, w, box.height, 5);

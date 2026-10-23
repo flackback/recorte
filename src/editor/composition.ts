@@ -134,10 +134,9 @@ function idleOpacity(events: CursorEvent[], t: number, after: number) {
 
 const smooth = (x: number) => x * x * (3 - 2 * x);
 
-/** The transition playing at source time `t`, if a cut's seam is near. */
 /**
- * Seams of the cuts that carry a transition, in cut order. Every edit rebuilds the time map, so
- * the list is recomputed only when the map or the cuts change.
+ * Seams of the cuts (and splits) that carry a transition, in cut order. Every edit rebuilds the
+ * time map, so the list is recomputed only when the map or the cuts change.
  */
 function seams(scene: Scene): Seam[] {
   const { time, project } = scene;
@@ -145,8 +144,11 @@ function seams(scene: Scene): Seam[] {
   const list: Seam[] = [];
   for (const cut of project.cuts) {
     if (!cut.transition) continue;
+    // A split's seam is where it stands; a cut's is where the removed stretch was.
     const at = time.toOutput(cut.start);
     if (at <= 0 || at >= time.duration) continue;
+    // Two transitions on one seam (a split dragged onto a cut's edge): the first one plays.
+    if (list.some((seam) => Math.abs(seam.at - at) < 1)) continue;
     const half = Math.min(cut.transition.durationMs / 2, at, time.duration - at);
     if (half > 0) list.push({ at, half, kind: cut.transition.kind });
   }

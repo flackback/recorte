@@ -13,6 +13,7 @@ import { thumbnails, waveform } from "./media";
 import { cursorPath } from "./motion";
 import { OverlayPainter } from "./overlay";
 import {
+  absorbSplits,
   ASPECTS,
   autoZooms,
   BACKGROUNDS,
@@ -20,6 +21,8 @@ import {
   DEFAULT_TRANSITION,
   defaultProject,
   insertRange,
+  isSplit,
+  mergeCuts,
   newId,
   newNote,
   NOTE_COLORS,
@@ -60,6 +63,19 @@ const NOTE_NAMES: Record<NoteKind, string> = { text: "Texto", arrow: "Seta", box
 /** Rate of a new sped-up stretch. */
 const DEFAULT_SPEED = 2;
 const speedLabel = (rate: number) => `${String(rate).replace(".", ",")}×`;
+
+/** Preview playback speeds the transport button cycles through; export always plays at 1×. */
+const PREVIEW_SPEEDS = [1, 1.5, 2];
+const PREVIEW_SPEED_KEY = "recorte.previewSpeed";
+
+function loadPreviewSpeed() {
+  try {
+    const saved = Number(localStorage.getItem(PREVIEW_SPEED_KEY));
+    return PREVIEW_SPEEDS.includes(saved) ? saved : 1;
+  } catch {
+    return 1;
+  }
+}
 
 /** "2,5×": zoom levels written the Brazilian way. */
 const scaleLabel = (scale: number) => `${scale.toFixed(1).replace(".", ",")}×`;
@@ -109,12 +125,14 @@ export class Editor {
     system: $<HTMLAudioElement>("system-sound"),
     play: $<HTMLButtonElement>("play"),
     time: $("time"),
+    previewSpeed: $<HTMLButtonElement>("preview-speed"),
     title: $("take-title"),
     undo: $<HTMLButtonElement>("undo"),
     redo: $<HTMLButtonElement>("redo"),
     reveal: $<HTMLButtonElement>("reveal"),
     exportButton: $<HTMLButtonElement>("export"),
     addCut: $<HTMLButtonElement>("add-cut"),
+    addSplit: $<HTMLButtonElement>("add-split"),
     addZoom: $<HTMLButtonElement>("add-zoom"),
     addLens: $<HTMLButtonElement>("add-lens"),
     addBlur: $<HTMLButtonElement>("add-blur"),
@@ -274,6 +292,8 @@ export class Editor {
   private lastIdleKey = "";
   /** Left-click and key times of the open scene, for the sounds and the timeline. */
   private times: { scene: Scene; clicks: number[]; keys: number[] } | null = null;
+  /** Multiplies the preview's playback rate; per user, never saved in the project. */
+  private previewSpeed = loadPreviewSpeed();
 
   constructor() {
     this.timeline = new Timeline($<HTMLCanvasElement>("timeline"), {
@@ -283,7 +303,12 @@ export class Editor {
       select: (selection) => this.select(selection),
       range: (range) => this.setRange(range),
       add: (track, time) => this.addAt(track, time),
-      commit: () => this.save(),
+      commit: () => {
+        // A split dragged onto or into a cut joins it once the drag ends.
+        const cuts = this.scene?.project.cuts;
+        if (cuts && absorbSplits(cuts) !== cuts) this.change((p) => (p.cuts = absorbSplits(p.cuts)), false);
+        this.save();
+      },
     });
     this.buildInspector();
     this.buildMenus();
@@ -613,7 +638,9 @@ export class Editor {
     const scene = this.scene;
     if (!scene) return;
     const { project, take } = scene;
-    const items = this.trackItems(project, track);
+    const all = this.trackItems(project, track);
+    // A new cut is placed among the real cuts, then takes in the splits it covers.
+    const items = track === "cuts" ? all.filter((item) => !isSplit(item)) : all;
     const make = (range: Range): Range => {
       if (track === "zoom") return { ...range, scale: project.zoom.defaultScale, mode: "zoom" } as ZoomSegment;
       if (track === "speed") return { ...range, rate: DEFAULT_SPEED } as SpeedRange;
@@ -631,7 +658,8 @@ export class Editor {
       toast("Já existe um trecho aqui; ele foi selecionado");
       return;
     }
-    this.change((p) => this.setTrack(p, track, result.ranges));
+    const ranges = track === "cuts" ? absorbSplits([...result.ranges, ...all.filter(isSplit)].sort((a, b) => a.start - b.start)) : result.ranges;
+    this.change((p) => this.setTrack(p, track, ranges));
     this.flushSave();
     this.select({ track, id: result.id });
     if (track === "blurs") this.editBlurArea();
@@ -651,6 +679,34 @@ export class Editor {
     this.change((p) => (p.zoom.segments = result.ranges));
     this.flushSave();
     this.select({ track: "zoom", id: result.id });
+  }
+
+  /** Splits the clip at `time` without removing anything, so the seam can carry a transition. */
+  private splitAt(time: number) {
+    const scene = this.scene;
+    if (!scene) return;
+    const { project } = scene;
+    const at = Math.round(time);
+    if (at <= project.trim.start || at >= project.trim.end) {
+      toast("Divida num ponto entre o início e o fim do vídeo");
+      return;
+    }
+    if (scene.time.playable(at) !== at) {
+      toast("Esse ponto está num trecho cortado");
+      return;
+    }
+    // A seam already there (another split or a cut's edge) is selected instead of doubled.
+    const near = project.cuts.find((cut) => Math.abs(cut.start - at) < 40 || Math.abs(cut.end - at) < 40);
+    if (near) {
+      this.select({ track: "cuts", id: near.id });
+      toast(isSplit(near) ? "Já existe uma divisão aqui; ela foi selecionada" : "Já existe uma emenda de corte aqui; ela foi selecionada");
+      return;
+    }
+    const id = newId();
+    this.change((p) => (p.cuts = [...p.cuts, { id, start: at, end: at }].sort((a, b) => a.start - b.start)));
+    this.flushSave();
+    this.range = null;
+    this.select({ track: "cuts", id });
   }
 
   private setRange(range: Span | null) {
@@ -686,7 +742,8 @@ export class Editor {
       // A merged cut keeps a transition one of the old cuts had.
       const transition = (overlapping as Cut[]).find((cut) => cut.transition)?.transition;
       const cuts = [...items.filter((item) => !overlapping.includes(item)), { id, start, end, ...(transition ? { transition } : {}) }].sort((a, b) => a.start - b.start);
-      this.change((p) => (p.cuts = cuts));
+      // Splits on the new cut's edges fold into it too.
+      this.change((p) => (p.cuts = absorbSplits(cuts)));
       toast(`Trecho de ${((end - start) / 1000).toFixed(1).replace(".", ",")} s cortado`, { label: "Desfazer", run: () => this.undo() });
     } else {
       if (overlapping.length) {
@@ -737,16 +794,20 @@ export class Editor {
     const selection = this.selected;
     if (!selection) return;
     this.selected = null;
+    const removed = this.selectedKind(selection);
     this.change((project) => this.setTrack(project, selection.track, this.trackItems(project, selection.track).filter((item) => item.id !== selection.id)));
     this.flushSave();
-    const removed = this.selectedKind(selection);
-    const names = { cut: "Corte removido", zoom: "Zoom removido", lens: "Lente removida", blur: "Desfoque removido", speed: "Trecho voltou à velocidade normal", text: "Texto removido", arrow: "Seta removida", box: "Destaque removido" };
+    const names = { cut: "Corte removido", split: "Divisão removida", zoom: "Zoom removido", lens: "Lente removida", blur: "Desfoque removido", speed: "Trecho voltou à velocidade normal", text: "Texto removido", arrow: "Seta removida", box: "Destaque removido" };
     toast(names[removed], { label: "Desfazer", run: () => this.undo() });
   }
 
-  /** The kind of a selected item, for labels: cut, speed, zoom, lens or blur. */
-  private selectedKind(selection: Selection): "cut" | "speed" | "zoom" | "lens" | "blur" | NoteKind {
-    if (!selection || selection.track === "cuts") return "cut";
+  /** The kind of a selected item, for labels: cut, split, speed, zoom, lens, blur or a note kind. */
+  private selectedKind(selection: Selection): "cut" | "split" | "speed" | "zoom" | "lens" | "blur" | NoteKind {
+    if (!selection) return "cut";
+    if (selection.track === "cuts") {
+      const cut = this.scene?.project.cuts.find((candidate) => candidate.id === selection.id);
+      return cut && isSplit(cut) ? "split" : "cut";
+    }
     if (selection.track === "blurs") return "blur";
     if (selection.track === "speed") return "speed";
     if (selection.track === "notes") return this.scene?.project.notes.find((note) => note.id === selection.id)?.kind ?? "text";
@@ -849,6 +910,13 @@ export class Editor {
         { label: "Remover desfoque", icon: "trash", danger: true, shortcut: "Delete", action: () => this.deleteSelected() },
       ];
     }
+    if (isSplit(item)) {
+      return [
+        { label: "Ir para a divisão", icon: "play", action: () => this.seek(item.start) },
+        "separator",
+        { label: "Remover divisão", icon: "trash", danger: true, shortcut: "Delete", action: () => this.deleteSelected() },
+      ];
+    }
     return [...go, "separator", { label: "Remover corte (trazer o trecho de volta)", icon: "trash", danger: true, shortcut: "Delete", action: () => this.deleteSelected() }];
   }
 
@@ -861,6 +929,7 @@ export class Editor {
       blurs: { label: "Desfocar uma área aqui", icon: "blur", shortcut: "B", action: () => this.addAt("blurs", time) },
     };
     const items: MenuItem[] = [add[track]];
+    if (track === "cuts") items.push({ label: "Dividir aqui, sem cortar", icon: "cut", shortcut: "D", action: () => this.splitAt(time) });
     if (track === "zoom") items.push({ label: "Adicionar lente aqui", icon: "wand", shortcut: "L", action: () => this.addLensAt(time) });
     if (track === "zoom") items.push({ label: "Gerar zooms a partir dos cliques", icon: "wand", action: () => this.ui.autoZoom.click() });
     items.push("separator", { label: "Ir para este ponto", icon: "play", action: () => this.seek(time) });
@@ -878,6 +947,7 @@ export class Editor {
       { label: "Terminar o vídeo aqui", icon: "cut", disabled: time <= trim.start + 500 ? "Precisa ficar depois do início" : false, action: () => this.change((p) => (p.trim = { ...p.trim, end: time })) },
       { label: "Restaurar início e fim", icon: "undo", disabled: trimmed ? false : "O vídeo já está inteiro", action: () => this.change((p) => (p.trim = { start: 0, end: scene.take.durationMs })) },
       "separator",
+      { label: "Dividir aqui", icon: "cut", shortcut: "D", action: () => this.splitAt(time) },
       { label: "Cortar um trecho aqui", icon: "cut", shortcut: "X", action: () => this.addAt("cuts", time) },
       { label: "Adicionar zoom aqui", icon: "zoom", shortcut: "Z", action: () => this.addAt("zoom", time) },
     ];
@@ -896,6 +966,7 @@ export class Editor {
       { label: "Acelerar um trecho aqui", icon: "speed", shortcut: "S", action: () => this.addAt("speed", t) },
       { label: "Adicionar texto aqui", icon: "text", shortcut: "T", action: () => this.addAt("notes", t) },
       { label: "Cortar um trecho aqui", icon: "cut", shortcut: "X", action: () => this.addAt("cuts", t) },
+      { label: "Dividir aqui", icon: "cut", shortcut: "D", action: () => this.splitAt(t) },
       "separator",
       { label: scene.project.crop ? "Ajustar área recortada…" : "Recortar área…", icon: "crop", action: () => this.editCrop() },
       { label: "Mostrar o vídeo inteiro", icon: "monitor", disabled: scene.project.crop ? false : "Não há recorte", action: () => this.change((p) => (p.crop = null)) },
@@ -1280,6 +1351,19 @@ export class Editor {
     });
     ui.exportButton.addEventListener("click", () => this.openExport());
     ui.addCut.addEventListener("click", () => this.useTool("cuts"));
+    ui.addSplit.addEventListener("click", () => this.splitAt(this.ui.video.currentTime * 1000));
+    this.showPreviewSpeed();
+    ui.previewSpeed.addEventListener("click", () => {
+      this.previewSpeed = PREVIEW_SPEEDS[(PREVIEW_SPEEDS.indexOf(this.previewSpeed) + 1) % PREVIEW_SPEEDS.length];
+      try {
+        localStorage.setItem(PREVIEW_SPEED_KEY, String(this.previewSpeed));
+      } catch {
+        // Not remembered; it still applies until the app closes.
+      }
+      this.showPreviewSpeed();
+      const scene = this.scene;
+      this.setRate(scene ? scene.time.rateAt(this.ui.video.currentTime * 1000) : 1);
+    });
     ui.addZoom.addEventListener("click", () => this.useTool("zoom"));
     ui.addLens.addEventListener("click", () => this.useTool("lens"));
     ui.addBlur.addEventListener("click", () => this.useTool("blurs"));
@@ -1554,15 +1638,18 @@ export class Editor {
     ui.selection.hidden = !selected;
     if (selected) {
       const kind = this.selectedKind(this.selected);
-      const titles = { cut: "Corte selecionado", speed: "Trecho acelerado", zoom: "Zoom selecionado", lens: "Lente selecionada", blur: "Desfoque selecionado", text: "Texto selecionado", arrow: "Seta selecionada", box: "Destaque selecionado" };
-      const removes = { cut: "Remover corte", speed: "Voltar à velocidade normal", zoom: "Remover zoom", lens: "Remover lente", blur: "Remover desfoque", text: "Remover texto", arrow: "Remover seta", box: "Remover destaque" };
+      const titles = { cut: "Corte selecionado", split: "Divisão selecionada", speed: "Trecho acelerado", zoom: "Zoom selecionado", lens: "Lente selecionada", blur: "Desfoque selecionado", text: "Texto selecionado", arrow: "Seta selecionada", box: "Destaque selecionado" };
+      const removes = { cut: "Remover corte", split: "Remover divisão", speed: "Voltar à velocidade normal", zoom: "Remover zoom", lens: "Remover lente", blur: "Remover desfoque", text: "Remover texto", arrow: "Remover seta", box: "Remover destaque" };
       ui.selectionTitle.textContent = titles[kind];
       ui.selectionDeleteLabel.textContent = removes[kind];
       const seconds = (selected.end - selected.start) / 1000;
-      ui.selectionTime.textContent = `${formatTime(selected.start)} – ${formatTime(selected.end)} · ${seconds.toFixed(1).replace(".", ",")} s`;
+      ui.selectionTime.textContent =
+        kind === "split"
+          ? `Em ${formatTime(selected.start)} · nada é cortado`
+          : `${formatTime(selected.start)} – ${formatTime(selected.end)} · ${seconds.toFixed(1).replace(".", ",")} s`;
       ui.selectionZoom.hidden = kind !== "zoom" && kind !== "lens";
-      ui.selectionTransition.hidden = kind !== "cut";
-      if (kind === "cut") {
+      ui.selectionTransition.hidden = kind !== "cut" && kind !== "split";
+      if (kind === "cut" || kind === "split") {
         const transition = (selected as Cut).transition;
         for (const button of ui.transitionKind.querySelectorAll<HTMLElement>(".choice")) button.setAttribute("aria-checked", String(button.dataset.value === (transition?.kind ?? "none")));
         ui.transitionDurationField.hidden = !transition;
@@ -1730,6 +1817,7 @@ export class Editor {
       else if ((event.key === "Delete" || event.key === "Backspace") && this.range) this.useTool("cuts");
       else if ((event.key === "Delete" || event.key === "Backspace") && this.selected) this.deleteSelected();
       else if (key === "KeyX") this.useTool("cuts");
+      else if (key === "KeyD") this.splitAt(t);
       else if (key === "KeyZ") this.useTool("zoom");
       else if (key === "KeyL") this.useTool("lens");
       else if (key === "KeyB") this.useTool("blurs");
@@ -1828,7 +1916,7 @@ export class Editor {
     if (!kind || !cut?.transition) return;
     const seam = scene.time.toOutput(cut.start);
     if (seam <= 0 || seam >= scene.time.duration) {
-      toast("A transição aparece quando há vídeo dos dois lados do corte");
+      toast(`A transição aparece quando há vídeo dos dois lados ${isSplit(cut) ? "da divisão" : "do corte"}`);
       return;
     }
     this.seek(scene.time.toSource(Math.max(0, seam - cut.transition.durationMs / 2 - 500)));
@@ -1872,16 +1960,7 @@ export class Editor {
 
   /** Adds cuts, merging them with cuts they touch. */
   private addCuts(ranges: Span[]) {
-    this.change((p) => {
-      let cuts = [...p.cuts];
-      for (const range of ranges) {
-        const touching = cuts.filter((cut) => cut.start <= range.end && cut.end >= range.start);
-        const start = Math.min(range.start, ...touching.map((cut) => cut.start));
-        const end = Math.max(range.end, ...touching.map((cut) => cut.end));
-        cuts = [...cuts.filter((cut) => !touching.includes(cut)), { id: touching[0]?.id ?? newId(), start, end }];
-      }
-      p.cuts = cuts.sort((a, b) => a.start - b.start);
-    });
+    this.change((p) => (p.cuts = mergeCuts(p.cuts, ranges)));
     this.flushSave();
   }
 
@@ -1984,14 +2063,27 @@ export class Editor {
     });
   }
 
-  /** Plays sped-up stretches faster and silent, with the camera and microphone in step. */
+  /**
+   * Plays sped-up stretches faster and silent, with the camera and microphone in step. The preview
+   * speed multiplies it (sound stays on and keeps its pitch); music follows the output clock.
+   */
   private setRate(rate: number) {
     const { video, mic, webcam } = this.ui;
-    if (video.playbackRate === rate) return;
-    for (const media of [video, mic, webcam, this.ui.system]) media.playbackRate = rate;
-    video.muted = rate !== 1;
-    mic.muted = rate !== 1;
-    this.ui.system.muted = rate !== 1;
+    const target = rate * this.previewSpeed;
+    const muted = rate !== 1;
+    if (video.playbackRate === target && video.muted === muted && this.music.playbackRate === this.previewSpeed) return;
+    for (const media of [video, mic, webcam, this.ui.system]) media.playbackRate = target;
+    this.music.playbackRate = this.previewSpeed;
+    video.muted = muted;
+    mic.muted = muted;
+    this.ui.system.muted = muted;
+  }
+
+  private showPreviewSpeed() {
+    const button = this.ui.previewSpeed;
+    button.textContent = speedLabel(this.previewSpeed);
+    button.classList.toggle("active", this.previewSpeed !== 1);
+    button.setAttribute("aria-label", `Velocidade da prévia: ${speedLabel(this.previewSpeed)}`);
   }
 
   private setSpeed(id: string, rate: number) {

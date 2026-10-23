@@ -72,3 +72,12 @@ export function takeName(take: Pick<Take, "title" | "sourceKind" | "sourceName" 
 }
 
 export const joinPath = (dir: string, file: string) => `${dir}\\${file}`;
+
+/** Live sound levels from `audio_levels`, peaks 0..1; null when the device gives nothing. */
+export type Levels = { system: number | null; mic: number | null };
+
+/** How full a level bar is for a peak: on a decibel scale (-54 dB to 0), so quiet speech shows. */
+export function levelFill(peak: number | null) {
+  if (!peak || peak <= 0) return 0;
+  return Math.min(1, Math.max(0, (20 * Math.log10(peak) + 54) / 54));
+}

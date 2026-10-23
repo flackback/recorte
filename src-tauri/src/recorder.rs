@@ -721,7 +721,7 @@ impl Recording {
         let _ = fs::remove_file(dir.join(segment_name(last.index + 1)));
         meta.segments = shared.finished.lock().unwrap().clone();
         if let Some(error) = shared.failure.lock().unwrap().clone() {
-            meta.warnings.push(format!("A captura de vídeo parou antes da hora: {error}"));
+            meta.warnings.push(if error == DISK_FULL { error } else { format!("A captura de vídeo parou antes da hora: {error}") });
         }
         meta.warnings.append(&mut shared.notes.lock().unwrap());
         if t0 == 0 {
@@ -790,15 +790,42 @@ fn follow(shared: &Shared, window: &Window) {
     }
 }
 
+/// Below this much free space a recording doesn't start, and one in progress stops.
+pub const DISK_STOP_BYTES: u64 = 300 * 1024 * 1024;
+/// How often the saver looks at the free space while recording.
+const DISK_EVERY: Duration = Duration::from_secs(5);
+pub const DISK_FULL: &str = "O disco está quase cheio; a gravação parou para não se perder.";
+
+/// Free space for the user on the drive holding `path` (or its nearest existing parent).
+pub fn free_space(path: &Path) -> Option<u64> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows::Win32::Storage::FileSystem::GetDiskFreeSpaceExW;
+    use windows::core::PCWSTR;
+
+    let existing = path.ancestors().find(|candidate| candidate.exists())?;
+    let wide: Vec<u16> = existing.as_os_str().encode_wide().chain(Some(0)).collect();
+    let mut free = 0u64;
+    unsafe { GetDiskFreeSpaceExW(PCWSTR(wide.as_ptr()), Some(&mut free), None, None) }.ok()?;
+    Some(free)
+}
+
 /// Appends new mouse and key events to disk every few seconds, already on the take's timeline,
-/// so an interrupted take keeps them. Also follows a recorded window's place.
+/// so an interrupted take keeps them. Also follows a recorded window's place, and ends the
+/// capture (through `fail`, like any capture error) before the disk fills up.
 fn spawn_saver(shared: Arc<Shared>, dir: PathBuf, window: Option<Window>) -> JoinHandle<()> {
     thread::spawn(move || {
         // Window bounds in physical pixels, like the capture and the mouse events.
         sources::use_physical_pixels();
         let (mut events_done, mut keys_done) = (0, 0);
+        let mut disk_checked = std::time::Instant::now();
         loop {
             let stopping = shared.stop.load(Ordering::Acquire);
+            if disk_checked.elapsed() >= DISK_EVERY {
+                disk_checked = std::time::Instant::now();
+                if free_space(&dir).is_some_and(|free| free < DISK_STOP_BYTES) {
+                    shared.fail(DISK_FULL.into());
+                }
+            }
             let t0 = shared.t0.load(Ordering::Acquire);
             if t0 != 0 {
                 let (events, keys) = cursor::since(events_done, keys_done);

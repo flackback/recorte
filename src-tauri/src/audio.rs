@@ -12,6 +12,7 @@ use anyhow::{Context, anyhow};
 use wasapi::{AudioCaptureClient, AudioClient, DeviceEnumerator, Direction, SampleType, StreamMode, WasapiError, WaveFormat, initialize_mta};
 
 use crate::clock::{HNS_PER_SEC, now_hns};
+use crate::meter;
 use crate::recorder::Shared;
 
 pub const SAMPLE_RATE: i64 = 48_000;
@@ -121,12 +122,12 @@ const DEVICE_INVALIDATED: u32 = 0x8889_0004;
 const REOPEN_EVERY: Duration = Duration::from_millis(500);
 
 /// An open capture stream on the default device.
-struct Stream {
-    client: AudioClient,
-    capture: AudioCaptureClient,
+pub struct Stream {
+    pub client: AudioClient,
+    pub capture: AudioCaptureClient,
 }
 
-fn open(source: Source) -> anyhow::Result<Stream> {
+pub fn open(source: Source) -> anyhow::Result<Stream> {
     let enumerator = DeviceEnumerator::new()?;
     // Loopback opens the output device in capture direction.
     let device_direction = match source {
@@ -143,8 +144,8 @@ fn open(source: Source) -> anyhow::Result<Stream> {
     Ok(Stream { client, capture })
 }
 
-/// Moves every packet waiting on the device into `pending`.
-fn read_packets(capture: &AudioCaptureClient, queue: &mut VecDeque<u8>, pending: &mut Vec<(i64, Vec<u8>)>) -> Result<(), WasapiError> {
+/// Moves every packet waiting on the device into `pending`, noting its peak for the level bars.
+pub fn read_packets(source: Source, capture: &AudioCaptureClient, queue: &mut VecDeque<u8>, pending: &mut Vec<(i64, Vec<u8>)>) -> Result<(), WasapiError> {
     while let Some(frames) = capture.get_next_packet_size()? {
         if frames == 0 {
             break;
@@ -154,6 +155,8 @@ fn read_packets(capture: &AudioCaptureClient, queue: &mut VecDeque<u8>, pending:
         let mut bytes: Vec<u8> = queue.drain(..).collect();
         if info.flags.silent {
             bytes.fill(0);
+        } else {
+            meter::level(source).push(meter::peak(&bytes));
         }
         pending.push((info.timestamp as i64, bytes));
     }
@@ -181,11 +184,12 @@ fn run(source: Source, shared: &Shared, sink: &mut dyn Sink, ready: &mpsc::Sende
             stream = open(source).ok();
         }
         if let Some(current) = &stream {
-            match read_packets(&current.capture, &mut queue, &mut pending) {
-                Ok(()) => {}
+            match read_packets(source, &current.capture, &mut queue, &mut pending) {
+                Ok(()) => meter::level(source).touch(),
                 // The default device changed (headset plugged in, output switched): the same
                 // track goes on from the new default, the gap filled with silence.
                 Err(WasapiError::Windows(error)) if error.code().0 as u32 == DEVICE_INVALIDATED => {
+                    meter::level(source).lost();
                     stream = None;
                     reopen_at = Instant::now();
                 }
@@ -209,6 +213,7 @@ fn run(source: Source, shared: &Shared, sink: &mut dyn Sink, ready: &mpsc::Sende
         thread::sleep(Duration::from_millis(10));
     }
 
+    meter::level(source).lost();
     if let Some(stream) = stream {
         stream.client.stop_stream()?;
     }

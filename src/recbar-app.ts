@@ -1,8 +1,10 @@
+import { invoke } from "@tauri-apps/api/core";
 import { LogicalSize, PhysicalPosition } from "@tauri-apps/api/dpi";
 import { emit, listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
 import { DEFAULT_DRAW, DRAW_COLORS, DRAW_TOOLS, DRAW_WIDTHS, type DrawConfig, type DrawTool } from "./draw";
+import { levelFill, type Levels } from "./types";
 
 /**
  * The floating bar shown while recording. It shows state, sends the user's choices to the main
@@ -22,6 +24,11 @@ const ui = {
   drawIcon: $("draw-icon"),
   drawLabel: $("draw-label"),
   stop: $<HTMLButtonElement>("stop"),
+  redo: $<HTMLButtonElement>("redo"),
+  redoLabel: $("redo-label"),
+  levels: $("levels"),
+  levelSystem: $("level-system"),
+  levelMic: $("level-mic"),
   tray: $("tray"),
   tools: $("tools"),
   indicator: $("indicator"),
@@ -240,6 +247,85 @@ async function toggleTray() {
   else await closeTray();
 }
 
+// ---------- sound levels ----------
+
+/** Sources being recorded, as last told by the main window. */
+let audio = { system: false, mic: false };
+let levelTimer: number | undefined;
+let levelPolling = false;
+
+/** Shows a bar per recorded source, polled ~12 times a second while any is shown. */
+function setAudio(next: { system: boolean; mic: boolean }) {
+  if (next.system === audio.system && next.mic === audio.mic) return;
+  audio = { ...next };
+  ui.levelSystem.hidden = !audio.system;
+  ui.levelMic.hidden = !audio.mic;
+  ui.levels.hidden = !audio.system && !audio.mic;
+  window.clearInterval(levelTimer);
+  levelTimer = ui.levels.hidden ? undefined : window.setInterval(() => void pollLevels(), 80);
+  void fit();
+}
+
+async function pollLevels() {
+  if (levelPolling) return;
+  levelPolling = true;
+  try {
+    const levels = await invoke<Levels>("audio_levels");
+    showLevel(ui.levelSystem, levels.system);
+    showLevel(ui.levelMic, levels.mic);
+  } catch {
+    // The next tick tries again.
+  } finally {
+    levelPolling = false;
+  }
+}
+
+/** Moves the bar (transform only); null shows it as off. */
+function showLevel(level: HTMLElement, peak: number | null) {
+  if (level.hidden) return;
+  const off = peak === null;
+  if (level.classList.contains("off") !== off) {
+    level.classList.toggle("off", off);
+    level.title = off ? `${level.dataset.label}: sem sinal do dispositivo` : level.dataset.label!;
+  }
+  const fill = levelFill(peak);
+  level.classList.toggle("loud", fill > 0.92);
+  const transform = `scaleY(${fill.toFixed(3)})`;
+  const bar = level.querySelector<HTMLElement>("i")!;
+  if (bar.style.transform !== transform) bar.style.transform = transform;
+}
+
+// ---------- discard and record again ----------
+
+const REDO_TITLE = "Descartar e gravar de novo";
+let redoTimer: number | undefined;
+
+/** Back to the plain icon, if it was waiting for the confirming click. */
+function disarmRedo() {
+  window.clearTimeout(redoTimer);
+  if (!ui.redo.classList.contains("confirm")) return;
+  ui.redo.classList.remove("confirm");
+  ui.redoLabel.hidden = true;
+  ui.redo.title = REDO_TITLE;
+  ui.redo.setAttribute("aria-label", REDO_TITLE);
+  void fit();
+}
+
+/** The first click asks; a second one within 3 s throws this take away and records again. */
+function clickRedo() {
+  if (ui.redo.classList.contains("confirm")) {
+    disarmRedo();
+    void emit("recbar-action", "redo");
+    return;
+  }
+  ui.redo.classList.add("confirm");
+  ui.redoLabel.hidden = false;
+  ui.redo.title = "Clique de novo para descartar esta gravação e começar outra";
+  ui.redo.setAttribute("aria-label", "Confirmar: descartar e gravar de novo");
+  void fit();
+  redoTimer = window.setTimeout(disarmRedo, 3000);
+}
+
 // ---------- wiring ----------
 
 buildTray();
@@ -247,7 +333,8 @@ update();
 makeDraggable(document.querySelector<HTMLElement>(".grip")!);
 makeDraggable(ui.status);
 
-void listen<{ elapsedMs: number; paused: boolean }>("recbar-state", (event) => {
+void listen<{ elapsedMs: number; paused: boolean; audio?: { system: boolean; mic: boolean } }>("recbar-state", (event) => {
+  if (event.payload.audio) setAudio(event.payload.audio);
   // The state arrives every 200 ms; touch the button only when it changes.
   if (event.payload.paused !== shownPaused) {
     paused = shownPaused = event.payload.paused;
@@ -280,6 +367,7 @@ ui.pause.addEventListener("click", () => void emit("recbar-action", paused ? "re
 ui.mark.addEventListener("click", () => void emit("recbar-action", "mark"));
 ui.draw.addEventListener("click", () => void toggleTray());
 ui.stop.addEventListener("click", () => void emit("recbar-action", "stop"));
+ui.redo.addEventListener("click", clickRedo);
 ui.fade.addEventListener("click", () => {
   config.fade = !config.fade;
   update();
@@ -288,6 +376,9 @@ ui.undo.addEventListener("click", () => void emit("draw-undo", null));
 ui.clear.addEventListener("click", () => void emit("draw-clear", null));
 document.addEventListener("contextmenu", (event) => event.preventDefault());
 window.addEventListener("keydown", (event) => {
-  if (event.key === "Escape") void setTool("mouse");
+  if (event.key === "Escape") {
+    disarmRedo();
+    void setTool("mouse");
+  }
 });
 void document.fonts.ready.then(() => fit());

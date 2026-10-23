@@ -4,6 +4,7 @@
  * text overlay (keys, captions). Preview and export share this code, so both look identical.
  */
 
+import { invert3, laptopPicture, project2, squareToQuad, type LaptopPicture } from "./laptop3d";
 import { CURSOR_STYLES, TRANSITIONS, type ClickStyle, type CursorStyle, type Frame, type Rect, type TransitionKind } from "./project";
 
 export type CursorKind = "arrow" | "hand" | "text";
@@ -40,7 +41,7 @@ export type FrameState = {
   overlay: boolean;
 };
 
-export type Layout = { content: Rect; box: Rect; base: Rect | null };
+export type Layout = { content: Rect; box: Rect };
 
 const MAX_CLICKS = 8;
 const MAX_BLURS = 4;
@@ -55,7 +56,9 @@ const cursorTip = (style: CursorStyle, kind: CursorKind): [number, number] =>
   style === "classic" || style === "light" ? CURSOR_TIPS[kind] : [CURSOR_BOX / 2, CURSOR_BOX / 2];
 const SPRITE = 256;
 const LENS_RADIUS = 120;
-const UNIFORM_VECS = 19 + MAX_BLURS + MAX_CLICKS;
+/** The laptop's screen mapping (3 rows of a 3×3 matrix) comes after the click list. */
+const LAPTOP_VEC = 19 + MAX_BLURS + MAX_CLICKS;
+const UNIFORM_VECS = LAPTOP_VEC + 3;
 
 const SHADER = /* wgsl */ `
 struct Uniforms {
@@ -73,13 +76,14 @@ struct Uniforms {
   webcam2: vec4f,   // visible, corner radius, overlay visible, cursor slot
   bg_image: vec4f,  // output uv -> image uv: scale xy, offset xy
   box: vec4f,       // outer frame box (composed px)
-  extra: vec4f,     // blur count, blur strength (uv), base visible, unused
-  base: vec4f,      // laptop base rect (composed px)
+  extra: vec4f,     // blur count, blur strength (uv), unused x2
+  unused: vec4f,
   webcam_uv: vec4f, // bubble uv -> camera uv: scale xy, offset xy
   look: vec4f,      // cursor style row, click style (0 ring, 1 liquid), unused, transition kind (0 none)
   trans: vec4f,     // transition amount, unused x3
   blurs: array<vec4f, ${MAX_BLURS}>,
   clicks: array<vec4f, ${MAX_CLICKS}>,
+  lap_h: array<vec4f, 3>, // laptop: composed px -> screen uv (projective, rows of a 3x3 matrix)
 }
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
@@ -89,6 +93,7 @@ struct Uniforms {
 @group(0) @binding(4) var webcam_tex: texture_external;
 @group(0) @binding(5) var overlay_tex: texture_2d<f32>;
 @group(0) @binding(6) var bg_tex: texture_2d<f32>;
+@group(0) @binding(7) var laptop_tex: texture_2d<f32>;
 
 @vertex
 fn vs(@builtin(vertex_index) i: u32) -> @builtin(position) vec4f {
@@ -104,26 +109,6 @@ fn rounded_rect(p: vec2f, half: vec2f, r: f32) -> f32 {
 fn sd_rect(p: vec2f, rect: vec4f, r: f32) -> f32 {
   let half = rect.zw * 0.5;
   return rounded_rect(p - rect.xy - half, half, min(r, min(half.x, half.y)));
-}
-
-// Symmetric trapezoid centered on the origin: half width r1 at the top (y = -he), r2 at the bottom.
-fn sd_trapezoid(p: vec2f, r1: f32, r2: f32, he: f32) -> f32 {
-  let k1 = vec2f(r2, he);
-  let k2 = vec2f(r2 - r1, 2.0 * he);
-  let q = vec2f(abs(p.x), p.y);
-  var r = r2;
-  if (q.y < 0.0) { r = r1; }
-  let ca = vec2f(q.x - min(q.x, r), abs(q.y) - he);
-  let cb = q - k1 + k2 * clamp(dot(k1 - q, k2) / dot(k2, k2), 0.0, 1.0);
-  var s = 1.0;
-  if (cb.x < 0.0 && ca.y < 0.0) { s = -1.0; }
-  return s * sqrt(min(dot(ca, ca), dot(cb, cb)));
-}
-
-// The laptop's deck seen from slightly above: a trapezoid wider at the front.
-fn sd_deck(q: vec2f) -> f32 {
-  let b = u.base;
-  return sd_trapezoid(q - (b.xy + b.zw * 0.5), u.box.z * 0.5, b.z * 0.5, b.w * 0.5) - b.w * 0.04;
 }
 
 // Where a composed-space point lands on the tilted screen plane, in flat composed coordinates.
@@ -248,7 +233,7 @@ fn fs(@builtin(position) frag: vec4f) -> @location(0) vec4f {
   let zoom = u.frame.w;
   let out_px = frag.xy * u.frame.z;
   let p = u.camera.xy + out_px / zoom;
-  let px = u.frame.z / zoom;
+  var px = u.frame.z / zoom;
 
   // Background (not tilted).
   var color: vec3f;
@@ -260,10 +245,12 @@ fn fs(@builtin(position) frag: vec4f) -> @location(0) vec4f {
     color = mix(u.bg_from.rgb, u.bg_to.rgb, g);
   }
 
-  let q = untilt(p);
+  let flat = untilt(p);
+  var q = flat;
   let radius = u.camera.z;
   let blur = max(min(size.x, size.y) * 0.035, 1.0);
   let frame_kind = u.tilt.w;
+  let laptop = frame_kind > 1.5;
 
   // How much of the frame a transition leaves: fades, turns edge-on, burns or breaks apart.
   let tkind = u.look.w;
@@ -271,73 +258,55 @@ fn fs(@builtin(position) frag: vec4f) -> @location(0) vec4f {
   var show = 1.0;
   if (tkind > 0.5 && tkind < 1.5) { show = 1.0 - tamount; }
   if (tkind > 2.5 && tkind < 3.5) { show = 1.0 - smoothstep(0.86, 0.99, tamount); }
-  let mask = trans_mask(q);
+  let mask = trans_mask(flat);
   var shadow_show = show;
   if (tkind > 3.5 && tkind < 5.5) { shadow_show = 1.0 - tamount; }
 
-  // Shadow under the frame (and the laptop base, with a tighter contact shadow where it sits).
-  var frame_radius = radius;
-  if (frame_kind > 1.5) { frame_radius = u.box.z * 0.028; }
-  var ds = sd_rect(q - vec2f(0.0, blur * 0.4), u.box, frame_radius);
-  if (u.extra.z > 0.5) {
-    ds = min(ds, sd_deck(q - vec2f(0.0, blur * 0.4)));
-    let contact = sd_deck(q - vec2f(0.0, u.base.w * 0.35));
-    color = mix(color, vec3f(0.0), u.camera.w * 0.45 * shadow_show * (1.0 - smoothstep(-u.base.w * 0.3, u.base.w * 0.6, contact)));
-  }
-  color = mix(color, vec3f(0.0), u.camera.w * 0.55 * shadow_show * (1.0 - smoothstep(-blur, blur * 1.6, ds)));
-
-  // Frame chrome: window title bar, or the laptop's deck, hinge and lid.
-  if (frame_kind > 1.5) {
-    let w = u.box.z;
-    let visible = show * mask.x;
-    if (u.extra.z > 0.5) {
-      // Deck: brushed aluminum lit from the front, then the darker front lip with a thumb notch.
-      let b = u.base;
-      let t = clamp((q.y - b.y) / b.w, 0.0, 1.0);
-      let lip = 0.7;
-      var deck = mix(vec3f(0.6, 0.61, 0.64), vec3f(0.86, 0.87, 0.89), smoothstep(0.0, lip, t));
-      if (t > lip) { deck = mix(vec3f(0.74, 0.75, 0.78), vec3f(0.5, 0.51, 0.54), (t - lip) / (1.0 - lip)); }
-      deck += vec3f(0.07) * (1.0 - smoothstep(0.0, b.w * 0.05, abs(q.y - (b.y + b.w * lip))));
-      let notch = sd_rect(q, vec4f(b.x + b.z * 0.5 - w * 0.075, b.y + b.w * lip, w * 0.15, b.w * (1.0 - lip) * 0.5), b.w * 0.12);
-      deck = mix(deck, deck * 0.8, clamp(0.5 - notch / px, 0.0, 1.0));
-      color = mix(color, deck, clamp(0.5 - sd_deck(q) / px, 0.0, 1.0) * visible);
-      // Hinge: a dark strip where the lid meets the deck.
-      let hinge = sd_rect(q, vec4f(u.box.x + w * 0.1, u.box.y + u.box.w - b.w * 0.1, w * 0.8, b.w * 0.28), b.w * 0.1);
-      color = mix(color, vec3f(0.16, 0.16, 0.18), clamp(0.5 - hinge / px, 0.0, 1.0) * visible);
+  // Laptop: a 3D picture (box) around the screen. The screen is a quadrilateral in it; points on it
+  // map back to the flat content rect, so everything drawn on the recording follows the perspective.
+  var lap = vec4f(0.0);
+  if (laptop) {
+    let luv = (flat - u.box.xy) / u.box.zw;
+    if (all(luv >= vec2f(0.0)) && all(luv <= vec2f(1.0))) {
+      lap = textureSampleLevel(laptop_tex, smp, luv, 0.0);
     }
-    // Lid: black glass framed by a thin aluminum edge, with the camera and a faint reflection.
-    let lid_radius = w * 0.028;
-    let dlid = sd_rect(q, u.box, lid_radius);
-    let uvl = (q - u.box.xy) / u.box.zw;
-    var lid = vec3f(0.03, 0.03, 0.035) + vec3f(0.045) * smoothstep(0.35, 1.0, 1.0 - (uvl.x * 0.55 + uvl.y * 0.8));
-    let edge = w * 0.0045;
-    lid = mix(lid, mix(vec3f(0.8, 0.81, 0.84), vec3f(0.56, 0.57, 0.6), uvl.y), smoothstep(-edge - px, -edge, dlid));
-    let camera = length(q - vec2f(u.box.x + w * 0.5, (u.box.y + u.content.y) * 0.5)) - w * 0.0032;
-    lid = mix(lid, vec3f(0.13, 0.14, 0.18), clamp(0.5 - camera / px, 0.0, 1.0));
-    color = mix(color, lid, clamp(0.5 - dlid / px, 0.0, 1.0) * visible);
-  } else if (frame_kind > 0.5) {
+    let h = vec3f(flat, 1.0);
+    let w = vec3f(dot(u.lap_h[0].xyz, h), dot(u.lap_h[1].xyz, h), dot(u.lap_h[2].xyz, h));
+    q = u.content.xy + (w.xy / w.z) * u.content.zw;
+  }
+  // One output pixel, measured where the recording is drawn.
+  let content_px = max(fwidth(q.x), fwidth(q.y));
+
+  if (laptop) {
+    color = mix(color, lap.rgb, lap.a * show * mask.x);
+  } else {
+    // Shadow under the frame.
+    let ds = sd_rect(q - vec2f(0.0, blur * 0.4), u.box, radius);
+    color = mix(color, vec3f(0.0), u.camera.w * 0.55 * shadow_show * (1.0 - smoothstep(-blur, blur * 1.6, ds)));
+  }
+
+  // Frame chrome: the window title bar.
+  if (frame_kind > 0.5 && !laptop) {
     let dbox = sd_rect(q, u.box, radius);
-    var chrome = vec3f(0.11, 0.11, 0.12);
-    if (frame_kind < 1.5) {
-      chrome = vec3f(0.93, 0.93, 0.94);
-      let bar = u.content.y - u.box.y;
-      let dot_r = bar * 0.16;
-      for (var i = 0; i < 3; i++) {
-        let c = vec2f(u.box.x + bar * 0.62 + f32(i) * dot_r * 3.2, u.box.y + bar * 0.5);
-        let dd = length(q - c) - dot_r;
-        var dot_color = vec3f(1.0, 0.37, 0.34);
-        if (i == 1) { dot_color = vec3f(1.0, 0.74, 0.18); }
-        if (i == 2) { dot_color = vec3f(0.16, 0.79, 0.25); }
-        chrome = mix(chrome, dot_color, clamp(0.5 - dd / px, 0.0, 1.0));
-      }
+    var chrome = vec3f(0.93, 0.93, 0.94);
+    let bar = u.content.y - u.box.y;
+    let dot_r = bar * 0.16;
+    for (var i = 0; i < 3; i++) {
+      let c = vec2f(u.box.x + bar * 0.62 + f32(i) * dot_r * 3.2, u.box.y + bar * 0.5);
+      let dd = length(q - c) - dot_r;
+      var dot_color = vec3f(1.0, 0.37, 0.34);
+      if (i == 1) { dot_color = vec3f(1.0, 0.74, 0.18); }
+      if (i == 2) { dot_color = vec3f(0.16, 0.79, 0.25); }
+      chrome = mix(chrome, dot_color, clamp(0.5 - dd / px, 0.0, 1.0));
     }
     color = mix(color, chrome, clamp(0.5 - dbox / px, 0.0, 1.0) * show * mask.x);
   }
+  if (laptop) { px = content_px; }
 
   // The recording.
   var content_radius = radius;
   if (frame_kind > 0.5) { content_radius = radius * 0.35; }
-  if (frame_kind > 1.5) { content_radius = u.box.z * 0.004; }
+  if (laptop) { content_radius = 0.0; }
   let d = sd_rect(q, u.content, content_radius);
   let cover = clamp(0.5 - d / px, 0.0, 1.0) * show * mask.x;
   if (cover > 0.0) {
@@ -571,32 +540,35 @@ export function cursorPreview(style: CursorStyle, size = 40): HTMLCanvasElement 
   return canvas;
 }
 
-/** Where the frame, the recording inside it and the laptop base sit in the output. */
+/** Where the frame and the recording inside it sit in the output. */
 export function layout(output: { width: number; height: number }, source: { width: number; height: number }, padding: number, frame: Frame): Layout {
   const ratio = source.height / source.width;
   // Everything in units of the content width.
   const bar = frame === "window" ? 0.045 : 0;
-  // Laptop: a thin glass bezel (a little taller above, for the camera, and below), then the deck.
-  const laptop = frame === "laptop";
-  const bezel = laptop ? 0.022 : 0;
-  const bezelTop = laptop ? 0.03 : 0;
-  const bezelBottom = laptop ? 0.034 : 0;
-  const boxWidth = 1 + bezel * 2;
-  const boxHeight = ratio + bar + bezelTop + bezelBottom;
-  const baseWidth = laptop ? boxWidth * 1.2 : 0;
-  const baseHeight = laptop ? 0.055 : 0;
-  const totalWidth = Math.max(boxWidth, baseWidth);
-  const totalHeight = boxHeight + baseHeight;
-
+  const boxHeight = ratio + bar;
   const pad = padding * Math.min(output.width, output.height);
   const available = { width: Math.max(1, output.width - pad * 2), height: Math.max(1, output.height - pad * 2) };
-  const scale = Math.min(available.width / totalWidth, available.height / totalHeight);
-  const left = (output.width - totalWidth * scale) / 2;
-  const top = (output.height - totalHeight * scale) / 2;
-  const box = { x: left + ((totalWidth - boxWidth) * scale) / 2, y: top, width: boxWidth * scale, height: boxHeight * scale };
-  const content = { x: box.x + bezel * scale, y: box.y + (bar + bezelTop) * scale, width: scale, height: ratio * scale };
-  const base = laptop ? { x: left, y: box.y + box.height - scale * 0.002, width: baseWidth * scale, height: baseHeight * scale } : null;
-  return { content, box, base };
+  const scale = Math.min(available.width, available.height / boxHeight);
+  const box = { x: (output.width - scale) / 2, y: (output.height - boxHeight * scale) / 2, width: scale, height: boxHeight * scale };
+  const content = { x: box.x, y: box.y + bar * scale, width: scale, height: ratio * scale };
+  return { content, box };
+}
+
+/**
+ * The laptop picture placed in the output, the screen quad there, and a flat content rect of the
+ * same scale that everything drawn on the recording uses (mapped onto the quad by `homography`).
+ */
+function laptopLayout(output: { width: number; height: number }, source: { width: number; height: number }, padding: number, picture: LaptopPicture) {
+  const pad = padding * Math.min(output.width, output.height);
+  const scale = Math.min(Math.max(1, output.width - pad * 2) / picture.image.width, Math.max(1, output.height - pad * 2) / picture.image.height);
+  const box = { x: (output.width - picture.image.width * scale) / 2, y: (output.height - picture.image.height * scale) / 2, width: picture.image.width * scale, height: picture.image.height * scale };
+  const quad = picture.quad.map(([x, y]) => [box.x + x * box.width, box.y + y * box.height] as [number, number]);
+  const xs = quad.map(([x]) => x);
+  const ys = quad.map(([, y]) => y);
+  const bounds = { x: Math.min(...xs), y: Math.min(...ys), width: Math.max(...xs) - Math.min(...xs), height: Math.max(...ys) - Math.min(...ys) };
+  const width = Math.hypot(quad[1][0] - quad[0][0], quad[1][1] - quad[0][1]);
+  const content = { x: bounds.x, y: bounds.y, width, height: (width * source.height) / source.width };
+  return { box, content, bounds, homography: squareToQuad(quad) };
 }
 
 /**
@@ -627,6 +599,8 @@ export class Renderer {
   private cursorTexture: GPUTexture;
   private overlayTexture: GPUTexture | null = null;
   private backgroundTexture: GPUTexture | null = null;
+  private laptopTexture: GPUTexture | null = null;
+  private laptopKey = "";
   private emptyTexture: GPUTexture;
   private backgroundSize = { width: 1, height: 1 };
   private context: GPUCanvasContext;
@@ -701,12 +675,24 @@ export class Renderer {
 
     const { output, video } = state;
     const crop = state.crop ?? { x: 0, y: 0, width: video.width, height: video.height };
-    const { content, box, base } = layout(output, crop, state.background.padding, state.frame);
+    // The laptop is a 3D picture made for this angle and screen shape; the recording goes in its screen.
+    const picture = state.frame === "laptop" ? laptopPicture(state.tilt, crop.height / crop.width, Math.min(3600, Math.round(Math.max(output.width, output.height) * 1.5))) : null;
+    if (picture && picture.key !== this.laptopKey) {
+      this.laptopTexture?.destroy();
+      this.laptopTexture = this.texture(picture.image.width, picture.image.height);
+      this.device.queue.copyExternalImageToTexture({ source: picture.image }, { texture: this.laptopTexture }, [picture.image.width, picture.image.height]);
+      this.laptopKey = picture.key;
+    }
+    const placed = picture ? laptopLayout(output, crop, state.background.padding, picture) : null;
+    const { content, box } = placed ?? layout(output, crop, state.background.padding, state.frame);
     const zoom = Math.max(1, state.zoom);
     const k = content.width / crop.width;
     const toComposed = (x: number, y: number) => [content.x + (x - crop.x) * k, content.y + (y - crop.y) * k] as const;
-    const [focusX, focusY] = toComposed(...state.focus);
-    const [cameraX, cameraY] = cameraOrigin(output, content, zoom, [focusX, focusY]);
+    // The camera works on the picture itself: on the laptop, the focus is where the point lands on the screen.
+    const [focusX, focusY] = placed
+      ? project2(placed.homography, (state.focus[0] - crop.x) / crop.width, (state.focus[1] - crop.y) / crop.height)
+      : toComposed(...state.focus);
+    const [cameraX, cameraY] = cameraOrigin(output, placed?.bounds ?? content, zoom, [focusX, focusY]);
 
     const u = this.uniforms;
     u.fill(0);
@@ -732,7 +718,9 @@ export class Renderer {
     // "Girar" turns the frame edge-on around its vertical axis, then back from the other side.
     const transition = state.transition;
     const flip = transition?.kind === "flip" ? transition.phase * Math.min(transition.amount, 0.985) * (Math.PI / 2) : 0;
-    vec(8, [tilt + flip, -tilt * 0.35, Math.max(output.width, output.height) * 1.6, state.frame === "window" ? 1 : state.frame === "laptop" ? 2 : 0]);
+    // The laptop's own angle is in its picture; only a flip turns the picture as a whole.
+    const turn = picture ? [flip, 0] : [tilt + flip, -tilt * 0.35];
+    vec(8, [...turn, Math.max(output.width, output.height) * 1.6, state.frame === "window" ? 1 : picture ? 2 : 0]);
     if (state.lens && state.lens.amount > 0.001) {
       const [x, y] = toComposed(state.lens.x, state.lens.y);
       vec(9, [x, y, LENS_RADIUS * k * state.lens.amount, 1 + (state.lens.magnification - 1) * state.lens.amount]);
@@ -759,8 +747,11 @@ export class Renderer {
     }
     vec(13, [box.x, box.y, box.width, box.height]);
     const blurs = state.blurs.slice(0, MAX_BLURS);
-    vec(14, [blurs.length, 0.018, base ? 1 : 0, 0]);
-    if (base) vec(15, [base.x, base.y, base.width, base.height]);
+    vec(14, [blurs.length, 0.018, 0, 0]);
+    if (placed) {
+      const inverse = invert3(placed.homography);
+      for (let row = 0; row < 3; row++) vec(LAPTOP_VEC + row, [inverse[row * 3], inverse[row * 3 + 1], inverse[row * 3 + 2], 0]);
+    }
     blurs.forEach((rect, index) =>
       vec(19 + index, [rect.x / video.width, rect.y / video.height, (rect.x + rect.width) / video.width, (rect.y + rect.height) / video.height]),
     );
@@ -793,6 +784,7 @@ export class Renderer {
         { binding: 4, resource: webcamReady ? this.device.importExternalTexture({ source: webcam! }) : screen },
         { binding: 5, resource: (this.overlayTexture ?? this.emptyTexture).createView() },
         { binding: 6, resource: (this.backgroundTexture ?? this.emptyTexture).createView() },
+        { binding: 7, resource: (picture && this.laptopTexture ? this.laptopTexture : this.emptyTexture).createView() },
       ],
     });
 
@@ -809,7 +801,7 @@ export class Renderer {
   }
 
   destroy() {
-    for (const texture of [this.cursorTexture, this.overlayTexture, this.backgroundTexture, this.emptyTexture]) texture?.destroy();
+    for (const texture of [this.cursorTexture, this.overlayTexture, this.backgroundTexture, this.laptopTexture, this.emptyTexture]) texture?.destroy();
     this.uniformBuffer.destroy();
     this.device.destroy();
   }

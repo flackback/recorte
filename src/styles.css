@@ -672,6 +672,88 @@ input[type="range"]:focus-visible::-webkit-slider-thumb {
   box-shadow: var(--focus);
 }
 
+/* Live check under the chips: level bars and the round camera preview. */
+.live {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  margin-top: -4px;
+}
+
+.meters {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.meter {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+}
+
+.meter .i {
+  width: 14px;
+  height: 14px;
+}
+
+.meter-track {
+  position: relative;
+  flex: 1;
+  height: 6px;
+  overflow: hidden;
+  border-radius: 999px;
+  /* The colors stay in place; the cover slides off them as the sound gets louder. */
+  background: linear-gradient(to right, var(--success) 0 68%, var(--note) 84%, var(--danger));
+}
+
+.meter-cover {
+  position: absolute;
+  inset: 0;
+  background: var(--surface-3);
+  transform-origin: right;
+  transition: transform 90ms linear;
+  will-change: transform;
+}
+
+.meter.off {
+  opacity: 0.45;
+}
+
+.cam-preview {
+  width: 64px;
+  height: 64px;
+  flex: none;
+  overflow: hidden;
+  border-radius: 50%;
+  background: var(--surface-3);
+  box-shadow: 0 0 0 1px var(--border);
+  animation: fade-in var(--base) var(--ease);
+}
+
+.cam-preview video {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  /* Mirrored, as people expect to see themselves. */
+  transform: scaleX(-1);
+}
+
+.cam-note {
+  flex-basis: 100%;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .meter-cover {
+    transition: none;
+  }
+}
+
 .record {
   display: flex;
   align-items: center;
@@ -866,6 +948,50 @@ input[type="range"]:focus-visible::-webkit-slider-thumb {
   color: var(--muted);
   font-size: 12px;
   font-variant-numeric: tabular-nums;
+}
+
+/* What was said, when the take matched the search by its transcript. */
+.take span.said {
+  overflow: hidden;
+  font-style: italic;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.take-search {
+  position: relative;
+  display: flex;
+  align-items: center;
+  margin: 0 0 8px;
+}
+
+.take-search .i {
+  position: absolute;
+  left: 9px;
+  width: 14px;
+  height: 14px;
+  color: var(--muted);
+  pointer-events: none;
+}
+
+.take-search input {
+  width: 100%;
+  height: 28px;
+  padding: 0 8px 0 29px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--surface-2);
+  outline: none;
+  transition: border-color var(--fast) var(--ease), box-shadow var(--fast) var(--ease);
+}
+
+.take-search input::placeholder {
+  color: var(--faint);
+}
+
+.take-search input:focus {
+  border-color: var(--accent);
+  box-shadow: var(--focus);
 }
 
 /* ---------- stage ---------- */
@@ -1145,6 +1271,18 @@ input[type="range"]:focus-visible::-webkit-slider-thumb {
   color: var(--muted);
 }
 
+/* Preview-only playback speed; highlighted while it is not 1×. */
+.preview-speed {
+  min-width: 40px;
+  justify-content: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.preview-speed.active {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
 .tools {
   display: flex;
   gap: 4px;
@@ -1170,7 +1308,8 @@ input[type="range"]:focus-visible::-webkit-slider-thumb {
   color: var(--text);
 }
 
-#add-cut .i {
+#add-cut .i,
+#add-split .i {
   color: var(--cut);
 }
 

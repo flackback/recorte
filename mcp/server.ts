@@ -6,11 +6,14 @@ import fs from "node:fs/promises";
 import * as z from "zod";
 
 import {
+  absorbSplits,
   ASPECTS,
   autoZooms,
   BACKGROUNDS,
   cardLength,
   defaultProject,
+  isSplit,
+  mergeCuts,
   newId,
   newNote,
   NOTE_COLORS,
@@ -50,6 +53,7 @@ Regras:
 - transcribe, export_video, open_in_editor e a melhoria de voz precisam do app aberto.
 - Para tirar pausas: chame remove_silences (pelo áudio, precisa do app) ou find_pauses (pela transcrição) e depois add_cuts.
 - Para hesitações ("hã", "hum", "é" longo): chame cut_fillers.
+- Para uma transição sem tirar nada do vídeo: chame split_at e depois set_transition com o id da divisão.
 - Trechos lentos (digitação, carregamento) podem ser acelerados com add_speed, sem cortar.
 - Textos, setas e destaques: add_note. Posição em frações (0 a 1) do quadro final.
 - Abertura e encerramento: set_title_cards.
@@ -104,19 +108,6 @@ const plural = (count: number, one: string, many: string) => `${count} ${count =
 
 const overlaps = (a: { start: number; end: number }, b: { start: number; end: number }) => a.start < b.end && a.end > b.start;
 
-/** Adds cuts, merging them with cuts they touch, as the editor does. */
-function mergeCuts(cuts: Range[], added: { start: number; end: number }[]): Range[] {
-  let result = [...cuts];
-  for (const range of added) {
-    const touching = result.filter((cut) => cut.start <= range.end && cut.end >= range.start);
-    const start = Math.min(range.start, ...touching.map((cut) => cut.start));
-    const end = Math.max(range.end, ...touching.map((cut) => cut.end));
-    // The first touched cut keeps its id and transition.
-    result = [...result.filter((cut) => !touching.includes(cut)), { ...touching[0], id: touching[0]?.id ?? newId(), start, end }];
-  }
-  return result.sort((a, b) => a.start - b.start);
-}
-
 function matchedStyle(project: Project) {
   return STYLES.find((style) => style.matches(project))?.id ?? null;
 }
@@ -130,7 +121,8 @@ function overview(take: Take, project: Project, words: Word[] | null) {
     durationMs: round(take.durationMs),
     editedDurationMs: finalDuration(project, words),
     trim: { start: round(project.trim.start), end: round(project.trim.end) },
-    cuts: project.cuts.length,
+    cuts: project.cuts.filter((cut) => !isSplit(cut)).length,
+    splits: project.cuts.filter(isSplit).length,
     cutWords: project.deletedWords.length,
     zooms: project.zoom.segments.filter((segment) => segment.mode === "zoom").length,
     lenses: project.zoom.segments.filter((segment) => segment.mode === "lens").length,
@@ -194,7 +186,7 @@ tool(
 
 tool(
   "get_take",
-  "Mostra uma gravação e a edição completa dela (project.json): cortes, palavras cortadas, zooms, lentes, desfoques, fundo, cursor, áudio e legendas, com os ids dos itens. Mostra também os estilos, fundos e proporções disponíveis.",
+  "Mostra uma gravação e a edição completa dela (project.json): cortes, divisões (campo splits; em project.cuts têm start igual a end), palavras cortadas, zooms, lentes, desfoques, fundo, cursor, áudio e legendas, com os ids dos itens. Mostra também os estilos, fundos e proporções disponíveis.",
   { take: takeArg },
   async ({ take: ref }) => {
     const take = await store.findTake(ref);
@@ -209,6 +201,10 @@ tool(
       markers: (take.markers ?? []).map(round),
       project,
       keptSpans: map.spans.map((kept) => ({ start: round(kept.start), end: round(kept.end), outputStart: round(kept.output + cardLength(project.cards.intro)), rate: kept.rate })),
+      // Splits live in project.cuts with start === end; listed here on their own.
+      splits: project.cuts
+        .filter(isSplit)
+        .map((split) => ({ id: split.id, atMs: round(split.start), outputMs: round(map.toOutput(split.start) + cardLength(project.cards.intro)), transition: split.transition ?? null })),
       style: matchedStyle(project),
       available: {
         styles: STYLES.map(({ id, name, description }) => ({ id, name, description })),
@@ -340,36 +336,58 @@ tool(
 
 tool(
   "remove_cuts",
-  "Desfaz cortes do meio do vídeo: os indicados por id, ou todos.",
-  { take: takeArg, ids: idList.optional(), all: z.boolean().optional().describe("true remove todos os cortes.") },
+  "Desfaz cortes do meio do vídeo: os indicados por id, ou todos. Também remove divisões (de split_at) pelo id.",
+  { take: takeArg, ids: idList.optional(), all: z.boolean().optional().describe("true remove todos os cortes; as divisões ficam.") },
   ({ take, ids, all }) =>
     edit(take, (project) => {
       if (all) {
-        const count = project.cuts.length;
-        project.cuts = [];
+        const count = project.cuts.filter((cut) => !isSplit(cut)).length;
+        project.cuts = project.cuts.filter(isSplit);
         return plural(count, "corte removido", "cortes removidos");
       }
       if (!ids?.length) throw new Error("Informe ids ou all: true.");
       const missing = ids.filter((id) => !project.cuts.some((cut) => cut.id === id));
-      if (missing.length) throw new Error(`Cortes não encontrados: ${missing.join(", ")}.`);
+      if (missing.length) throw new Error(`Cortes ou divisões não encontrados: ${missing.join(", ")}.`);
+      const removed = project.cuts.filter((cut) => ids.includes(cut.id));
       project.cuts = project.cuts.filter((cut) => !ids.includes(cut.id));
-      return `${ids.length} ${ids.length === 1 ? "corte removido" : "cortes removidos"}`;
+      const splits = removed.filter(isSplit).length;
+      return [removed.length - splits ? plural(removed.length - splits, "corte removido", "cortes removidos") : "", splits ? plural(splits, "divisão removida", "divisões removidas") : ""].filter(Boolean).join(", ");
     }),
 );
 
 tool(
+  "split_at",
+  "Divide o vídeo num ponto sem cortar nada. A emenda da divisão aceita transição (set_transition com o id devolvido), como a de um corte.",
+  { take: takeArg, atMs: ms("Ponto da divisão") },
+  async ({ take, atMs }) => {
+    let id = "";
+    const result = await edit(take, (project, { words }) => {
+      const at = round(atMs);
+      if (at <= project.trim.start || at >= project.trim.end) throw new Error(`O ponto precisa ficar entre ${round(project.trim.start)} e ${round(project.trim.end)} ms.`);
+      if (store.timeMap(project, words).playable(at) !== at) throw new Error(`O ponto ${at} ms está num trecho cortado.`);
+      const near = project.cuts.find((cut) => Math.abs(cut.start - at) < 40 || Math.abs(cut.end - at) < 40);
+      if (near) throw new Error(`Já existe uma emenda aqui: ${isSplit(near) ? "divisão" : "corte"} ${near.id}. Use esse id em set_transition.`);
+      id = newId();
+      project.cuts = [...project.cuts, { id, start: at, end: at }].sort((a, b) => a.start - b.start);
+      return `divisão em ${seconds(at)}`;
+    });
+    return { id, ...result };
+  },
+);
+
+tool(
   "set_transition",
-  "Põe, troca ou tira a transição na emenda de um corte. A transição tira o trecho de antes e traz o de depois: esmaecer (fade), zoom com desfoque (zoomblur), girar (flip), queimar (burn), desintegrar (dissolve) ou onda (wave).",
+  "Põe, troca ou tira a transição na emenda de um corte ou de uma divisão (split_at). A transição tira o trecho de antes e traz o de depois: esmaecer (fade), zoom com desfoque (zoomblur), girar (flip), queimar (burn), desintegrar (dissolve) ou onda (wave).",
   {
     take: takeArg,
-    cut: z.string().describe("Id do corte (de get_take)."),
+    cut: z.string().describe("Id do corte ou da divisão (de get_take ou split_at)."),
     kind: z.enum(["none", "fade", "zoomblur", "flip", "burn", "dissolve", "wave"]).describe("none tira a transição."),
     durationMs: z.number().min(300).max(2000).optional().describe("Duração total, metade antes e metade depois da emenda. Padrão 700."),
   },
   ({ take, cut: id, kind, durationMs }) =>
     edit(take, (project) => {
       const cut = project.cuts.find((candidate) => candidate.id === id);
-      if (!cut) throw new Error(`Corte não encontrado: ${id}.`);
+      if (!cut) throw new Error(`Corte ou divisão não encontrado: ${id}.`);
       if (kind === "none") {
         delete cut.transition;
         return "transição removida";
@@ -548,9 +566,17 @@ tool(
       const fast = project.speed.find((item) => item.id === id);
       const item = cut ?? segment ?? blur ?? fast;
       if (!item) throw new Error(`Item não encontrado: ${id}. Veja os ids em get_take.`);
+      if (cut && isSplit(cut)) {
+        // A split only moves; landing on or in a cut folds it into that cut.
+        const at = round(Math.min(meta.durationMs, Math.max(0, start ?? end ?? cut.start)));
+        cut.start = cut.end = at;
+        project.cuts = absorbSplits([...project.cuts].sort((a, b) => a.start - b.start));
+        return project.cuts.includes(cut) ? `divisão movida para ${seconds(at)}` : `divisão em ${seconds(at)} ficou dentro de um corte e foi juntada a ele`;
+      }
       const range = span(meta, start ?? item.start, end ?? item.end);
       if (cut) {
-        project.cuts = mergeCuts(project.cuts.filter((other) => other !== cut), [range]);
+        // Listed first, the cut keeps its id and transition when it merges with others.
+        project.cuts = mergeCuts([{ ...cut, ...range }, ...project.cuts.filter((other) => other !== cut)], [range]);
         return `corte ajustado para ${seconds(range.start)}–${seconds(range.end)}`;
       }
       const siblings: Range[] = segment ? project.zoom.segments : fast ? project.speed : project.blurs;

@@ -22,8 +22,45 @@ export const TRANSITIONS: { id: TransitionKind; name: string }[] = [
   { id: "wave", name: "Onda" },
 ];
 export const DEFAULT_TRANSITION: Transition = { kind: "zoomblur", durationMs: 700 };
-/** A removed stretch; the seam it leaves can carry a transition. */
+/**
+ * A removed stretch; the seam it leaves can carry a transition. A cut with `end === start` is a
+ * split: it removes nothing and only marks a seam (the time map ignores it).
+ */
 export type Cut = Range & { transition?: Transition };
+
+export const isSplit = (cut: Range) => cut.end <= cut.start;
+
+/**
+ * Folds splits that sit inside or on the edge of a real cut into it: the cut's seam replaces
+ * theirs, and it takes over a split's transition when it has none.
+ */
+export function absorbSplits(cuts: Cut[]): Cut[] {
+  const real = cuts.filter((cut) => !isSplit(cut));
+  const splits = cuts.filter(isSplit);
+  const inside = (split: Cut, cut: Cut) => split.start >= cut.start && split.start <= cut.end;
+  const free = splits.filter((split) => !real.some((cut) => inside(split, cut)));
+  if (free.length === splits.length) return cuts;
+  const merged = real.map((cut) => {
+    if (cut.transition) return cut;
+    const transition = splits.find((split) => split.transition && inside(split, cut))?.transition;
+    return transition ? { ...cut, transition } : cut;
+  });
+  return [...merged, ...free].sort((a, b) => a.start - b.start);
+}
+
+/** Adds cuts, merging them with cuts they touch; a merged cut keeps one of their transitions. */
+export function mergeCuts(cuts: Cut[], added: { start: number; end: number }[]): Cut[] {
+  let result = cuts.filter((cut) => !isSplit(cut));
+  for (const range of added) {
+    const touching = result.filter((cut) => cut.start <= range.end && cut.end >= range.start);
+    const start = Math.min(range.start, ...touching.map((cut) => cut.start));
+    const end = Math.max(range.end, ...touching.map((cut) => cut.end));
+    const transition = touching.find((cut) => cut.transition)?.transition;
+    // The first touched cut keeps its id.
+    result = [...result.filter((cut) => !touching.includes(cut)), { id: touching[0]?.id ?? newId(), start, end, ...(transition ? { transition } : {}) }];
+  }
+  return absorbSplits([...result, ...cuts.filter(isSplit)].sort((a, b) => a.start - b.start));
+}
 
 export type CursorStyle = "classic" | "light" | "dot" | "pizza" | "melon" | "rocket";
 export const CURSOR_STYLES: { id: CursorStyle; name: string }[] = [
