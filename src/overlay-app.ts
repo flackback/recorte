@@ -26,12 +26,18 @@ function resize() {
 // ---------- area ----------
 
 type Rect = { x: number; y: number; width: number; height: number };
-let area: Rect | null = null;
+/** Starts from the area chosen before, if any (given in physical pixels). */
+let area: Rect | null = (() => {
+  const values = new URLSearchParams(location.search).get("area")?.split(",").map(Number);
+  if (!values || values.length !== 4 || values.some((value) => !Number.isFinite(value))) return null;
+  const [x, y, width, height] = values.map((value) => value / (window.devicePixelRatio || 1));
+  return { x, y, width, height };
+})();
 let dragFrom: { x: number; y: number } | null = null;
 
 function drawArea() {
   context.clearRect(0, 0, innerWidth, innerHeight);
-  context.fillStyle = "rgba(0, 0, 0, 0.45)";
+  context.fillStyle = "rgba(0, 0, 0, 0.55)";
   context.fillRect(0, 0, innerWidth, innerHeight);
   const size = document.getElementById("size")!;
   if (!area) {

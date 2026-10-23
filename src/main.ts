@@ -116,6 +116,7 @@ function loadSettings() {
       if (typeof saved[key] === "boolean") input.checked = saved[key];
     }
     if (saved.fps) for (const input of ui.fps.querySelectorAll<HTMLInputElement>("input")) input.checked = Number(input.value) === saved.fps;
+    if (saved.area && typeof saved.area.width === "number") picker.area = saved.area;
     return saved.source as string | undefined;
   } catch {
     return undefined;
@@ -128,6 +129,7 @@ function saveSettings() {
       SETTINGS_KEY,
       JSON.stringify({
         source: sourceValue(),
+        area: picker.area,
         systemAudio: ui.systemAudio.checked,
         microphone: ui.microphone.checked,
         webcam: ui.webcam.checked,
@@ -150,6 +152,8 @@ const picker = {
   monitor: 0,
   window: "",
   sources: { monitors: [], windows: [] } as Sources,
+  /** The area chosen in "Área" mode, in physical pixels of its monitor. */
+  area: null as { monitor: number; x: number; y: number; width: number; height: number } | null,
 };
 
 /** Saved form, e.g. "m:2" or "w:12345", kept compatible with older settings. */
@@ -229,7 +233,19 @@ function renderMonitors() {
         picker.monitor = monitor.index;
         renderPicker();
         saveSettings();
+        if (picker.kind === "a") void chooseArea();
       });
+      // The chosen area, drawn to scale inside its monitor.
+      const area = picker.kind === "a" && picker.area?.monitor === monitor.index ? picker.area : null;
+      if (area) {
+        const mark = document.createElement("span");
+        mark.className = "area-mark";
+        mark.style.left = `${(area.x / monitor.width) * 100}%`;
+        mark.style.top = `${(area.y / monitor.height) * 100}%`;
+        mark.style.width = `${(area.width / monitor.width) * 100}%`;
+        mark.style.height = `${(area.height / monitor.height) * 100}%`;
+        button.append(mark);
+      }
       onContextMenu(button, () => {
         const choose = (kind: "m" | "a") => {
           picker.kind = kind;
@@ -240,7 +256,7 @@ function renderMonitors() {
         const busy = recording ? "Indisponível durante a gravação" : false;
         return [
           { label: "Gravar esta tela", icon: "monitor", disabled: busy, action: () => { choose("m"); void toggleRecording(); } },
-          { label: "Escolher uma área nesta tela…", icon: "crop", disabled: busy, action: () => { choose("a"); void toggleRecording(); } },
+          { label: "Escolher uma área nesta tela…", icon: "crop", disabled: busy, action: () => { choose("a"); void chooseArea(); } },
           "separator",
           { label: "Selecionar", icon: "check", disabled: busy, action: () => choose(picker.kind === "w" ? "m" : picker.kind) },
         ];
@@ -249,9 +265,47 @@ function renderMonitors() {
     }),
   );
   const selected = monitors.find((monitor) => monitor.index === picker.monitor);
-  ui.sourceCaption.textContent = selected
-    ? `${places.get(selected.index)}${selected.primary ? " (principal)" : ""} · ${selected.width}×${selected.height}${picker.kind === "a" ? " · a área é escolhida ao gravar" : ""}`
-    : "";
+  const place = selected ? `${places.get(selected.index)}${selected.primary ? " (principal)" : ""}` : "";
+  const area = picker.area?.monitor === picker.monitor ? picker.area : null;
+  ui.sourceCaption.replaceChildren();
+  if (!selected) return;
+  if (picker.kind !== "a") {
+    ui.sourceCaption.textContent = `${place} · ${selected.width}×${selected.height}`;
+    return;
+  }
+  // Área mode: the chosen size, and a way to change it.
+  const text = document.createElement("span");
+  text.textContent = area ? `Área de ${area.width}×${area.height}` : "Nenhuma área escolhida";
+  text.title = area ? `${place} · ${area.width}×${area.height} a partir de ${area.x}, ${area.y}` : "";
+  const change = document.createElement("button");
+  change.className = "link";
+  change.textContent = area ? "Alterar área" : "Desenhar a área";
+  change.disabled = recording;
+  change.addEventListener("click", () => void chooseArea());
+  ui.sourceCaption.append(text, " · ", change);
+}
+
+/**
+ * Opens the area picker over the selected monitor, starting from the current area. Choosing
+ * "Tela inteira" there switches to recording the whole monitor.
+ */
+async function chooseArea() {
+  if (recording || busy) return;
+  const monitor = picker.monitor;
+  const current = picker.area?.monitor === monitor ? picker.area : null;
+  const picked = await pickArea(monitor, current);
+  if (picked === "cancelled") {
+    renderPicker();
+    return;
+  }
+  if (picked) picker.area = { monitor, ...picked };
+  else {
+    picker.kind = "m";
+    const radio = ui.sourceKind.querySelector<HTMLInputElement>('input[value="m"]');
+    if (radio) radio.checked = true;
+  }
+  renderPicker();
+  saveSettings();
 }
 
 function renderWindows() {
@@ -449,9 +503,18 @@ async function startRecording() {
   // An area: let the user drag it on the monitor first.
   let crop: { x: number; y: number; width: number; height: number } | null = null;
   if (picker.kind === "a") {
-    const picked = await pickArea(picker.monitor);
-    if (picked === "cancelled") return;
-    crop = picked;
+    const chosen = picker.area?.monitor === picker.monitor ? picker.area : null;
+    if (chosen) {
+      crop = { x: chosen.x, y: chosen.y, width: chosen.width, height: chosen.height };
+    } else {
+      const picked = await pickArea(picker.monitor, null);
+      if (picked === "cancelled") return;
+      crop = picked;
+      if (picked) {
+        picker.area = { monitor: picker.monitor, ...picked };
+        saveSettings();
+      }
+    }
   }
 
   // Ask for the camera first, so its permission prompt doesn't land in the recording.
@@ -541,7 +604,7 @@ async function pollStatus() {
 }
 
 /** Opens the area picker over a monitor; resolves with the area, null for the whole screen, or "cancelled". */
-async function pickArea(monitor: number): Promise<{ x: number; y: number; width: number; height: number } | null | "cancelled"> {
+async function pickArea(monitor: number, current: { x: number; y: number; width: number; height: number } | null): Promise<{ x: number; y: number; width: number; height: number } | null | "cancelled"> {
   const result = new Promise<{ x: number; y: number; width: number; height: number } | null | "cancelled">((resolve) => {
     const stops: Promise<() => void>[] = [];
     const done = (value: { x: number; y: number; width: number; height: number } | null | "cancelled") => {
@@ -551,7 +614,7 @@ async function pickArea(monitor: number): Promise<{ x: number; y: number; width:
     stops.push(listen<{ x: number; y: number; width: number; height: number } | null>("area-selected", (event) => done(event.payload)));
     stops.push(listen("area-cancelled", () => done("cancelled")));
   });
-  await invoke("overlay_open", { mode: "area", monitor });
+  await invoke("overlay_open", { mode: "area", monitor, area: current ? `${current.x},${current.y},${current.width},${current.height}` : null });
   return result;
 }
 
@@ -952,6 +1015,8 @@ ui.sourceKind.addEventListener("change", (event) => {
   picker.kind = (event.target as HTMLInputElement).value as typeof picker.kind;
   renderPicker();
   saveSettings();
+  // Área: draw it right away, unless one is already chosen on this monitor.
+  if (picker.kind === "a" && picker.area?.monitor !== picker.monitor) void chooseArea();
   // Window titles change all the time; refresh when switching to the list.
   if (picker.kind === "w") void refreshSources();
 });

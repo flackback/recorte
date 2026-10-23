@@ -1652,6 +1652,19 @@ input[type="range"]:focus-visible::-webkit-slider-thumb {
   transition: border-color var(--fast) var(--ease), background var(--fast) var(--ease), color var(--fast) var(--ease), transform var(--fast) var(--ease);
 }
 
+/* The chosen area, to scale inside its monitor. */
+.monitor .area-mark {
+  position: absolute;
+  border: 1.5px solid var(--accent);
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--accent) 30%, transparent);
+  pointer-events: none;
+}
+
+.source-caption .link {
+  font-size: inherit;
+}
+
 .monitor:hover:not(:disabled) {
   border-color: var(--faint);
   color: var(--text);

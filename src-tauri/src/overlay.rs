@@ -11,7 +11,7 @@ pub const LABEL: &str = "overlay";
 
 /// Opens the overlay over monitor `monitor` (one-based) in `mode` ("area" or "draw").
 #[tauri::command]
-pub async fn overlay_open(app: AppHandle, mode: String, monitor: usize) -> Result<(), String> {
+pub async fn overlay_open(app: AppHandle, mode: String, monitor: usize, area: Option<String>) -> Result<(), String> {
     if !matches!(mode.as_str(), "area" | "draw" | "countdown") {
         return Err("modo inválido".into());
     }
@@ -22,7 +22,10 @@ pub async fn overlay_open(app: AppHandle, mode: String, monitor: usize) -> Resul
     let monitor = Monitor::from_index(monitor).map_err(|error| error.to_string())?;
     let (rect, _) = sources::monitor_rect(&monitor).ok_or("monitor não encontrado")?;
 
-    let window = WebviewWindowBuilder::new(&app, LABEL, WebviewUrl::App(if mode == "countdown" { "countdown.html".into() } else { format!("overlay.html?mode={mode}").into() }))
+    // The area picker starts from the current area ("x,y,width,height" in physical pixels).
+    let area = area.filter(|value| value.split(',').all(|part| part.trim().parse::<i32>().is_ok())).map(|value| format!("&area={value}")).unwrap_or_default();
+    let page = if mode == "countdown" { "countdown.html".to_string() } else { format!("overlay.html?mode={mode}{area}") };
+    let window = WebviewWindowBuilder::new(&app, LABEL, WebviewUrl::App(page.into()))
         .title("Recorte")
         .transparent(true)
         .decorations(false)
@@ -37,19 +40,24 @@ pub async fn overlay_open(app: AppHandle, mode: String, monitor: usize) -> Resul
     window
         .set_size(PhysicalSize::new((rect.right - rect.left) as u32, (rect.bottom - rect.top) as u32))
         .map_err(|error| error.to_string())?;
+    let recbar = if mode == "draw" { app.get_webview_window(RECBAR) } else { None };
     if mode == "draw" {
         // Lets clicks through while the page loads; the page takes them once a tool is chosen.
         let _ = window.set_ignore_cursor_events(true);
+        // The drawing layer covers the whole monitor; the floating bar must stay above it to be
+        // clickable, even when the layer takes the focus to draw. Linked before the layer shows,
+        // so it never appears on top of the bar.
+        if let Some(recbar) = &recbar {
+            keep_above(&window, recbar);
+        }
     }
     window.show().map_err(|error| error.to_string())?;
-    if mode == "draw" {
-        // The drawing layer covers the whole monitor; the floating bar must stay above it to be
-        // clickable, even when the layer takes the focus to draw.
-        if let Some(recbar) = app.get_webview_window(RECBAR) {
-            keep_above(&window, &recbar);
+    match &recbar {
+        Some(recbar) => bring_to_top(recbar),
+        None if mode != "draw" => {
+            let _ = window.set_focus();
         }
-    } else {
-        let _ = window.set_focus();
+        None => {}
     }
     Ok(())
 }
@@ -63,6 +71,18 @@ fn keep_above(owner: &tauri::WebviewWindow, owned: &tauri::WebviewWindow) {
     if let (Ok(owner), Ok(owned)) = (owner.hwnd(), owned.hwnd()) {
         unsafe {
             SetWindowLongPtrW(HWND(owned.0 as _), GWLP_HWNDPARENT, owner.0 as isize);
+        }
+    }
+}
+
+/// Puts a window at the top of the always-on-top windows without taking the focus.
+fn bring_to_top(window: &tauri::WebviewWindow) {
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::UI::WindowsAndMessaging::{SetWindowPos, HWND_TOPMOST, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE};
+
+    if let Ok(hwnd) = window.hwnd() {
+        unsafe {
+            let _ = SetWindowPos(HWND(hwnd.0 as _), Some(HWND_TOPMOST), 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
         }
     }
 }
