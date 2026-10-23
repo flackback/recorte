@@ -392,6 +392,19 @@ select:hover:not(:disabled) {
   color: var(--danger);
 }
 
+/* Small buttons for headers, captions and inline actions. */
+.secondary.compact {
+  height: 24px;
+  gap: 4px;
+  padding: 0 8px;
+  font-size: 12px;
+}
+
+.secondary.compact .i {
+  width: 13px;
+  height: 13px;
+}
+
 button:disabled,
 select:disabled,
 input:disabled,
@@ -753,19 +766,6 @@ input[type="range"]:focus-visible::-webkit-slider-thumb {
   letter-spacing: 0.05em;
 }
 
-.link {
-  border: 0;
-  background: none;
-  color: var(--accent);
-  cursor: pointer;
-  padding: 2px 0;
-  font-size: 12px;
-}
-
-.link:hover {
-  text-decoration: underline;
-}
-
 #takes {
   display: flex;
   flex-direction: column;
@@ -828,22 +828,6 @@ input[type="range"]:focus-visible::-webkit-slider-thumb {
   flex: 1;
   font-weight: 600;
   white-space: nowrap;
-}
-
-.take-selection .link {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  white-space: nowrap;
-}
-
-.take-selection .i {
-  width: 13px;
-  height: 13px;
-}
-
-.link.danger {
-  color: var(--danger);
 }
 
 .take .thumb {
@@ -1661,9 +1645,6 @@ input[type="range"]:focus-visible::-webkit-slider-thumb {
   pointer-events: none;
 }
 
-.source-caption .link {
-  font-size: inherit;
-}
 
 .monitor:hover:not(:disabled) {
   border-color: var(--faint);
@@ -1694,12 +1675,21 @@ input[type="range"]:focus-visible::-webkit-slider-thumb {
 }
 
 .source-caption {
-  min-height: 17px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 24px;
   margin: 0;
   overflow: hidden;
   color: var(--muted);
   font-size: 12px;
   white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.source-caption span {
+  overflow: hidden;
   text-overflow: ellipsis;
 }
 

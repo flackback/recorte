@@ -278,11 +278,12 @@ function renderMonitors() {
   text.textContent = area ? `Área de ${area.width}×${area.height}` : "Nenhuma área escolhida";
   text.title = area ? `${place} · ${area.width}×${area.height} a partir de ${area.x}, ${area.y}` : "";
   const change = document.createElement("button");
-  change.className = "link";
-  change.textContent = area ? "Alterar área" : "Desenhar a área";
+  change.className = "secondary compact";
+  change.innerHTML = '<svg class="i"><use href="#i-crop" /></svg>';
+  change.append(area ? "Alterar área" : "Desenhar a área");
   change.disabled = recording;
   change.addEventListener("click", () => void chooseArea());
-  ui.sourceCaption.append(text, " · ", change);
+  ui.sourceCaption.append(text, change);
 }
 
 /**

@@ -179,7 +179,7 @@
           <div class="source-picker">
             <div class="picker-head">
               <span>Fonte</span>
-              <button class="link" id="refresh" title="Atualizar telas e janelas">Atualizar</button>
+              <button class="secondary compact" id="refresh" title="Atualizar telas e janelas"><svg class="i"><use href="#i-refresh" /></svg>Atualizar</button>
             </div>
             <div class="segmented small with-icons" id="source-kind" role="radiogroup" aria-label="Tipo de fonte">
               <label><input type="radio" name="source-kind" value="m" checked /><svg class="i"><use href="#i-monitor" /></svg>Tela</label>
@@ -218,12 +218,12 @@
         <section class="takes">
           <div class="takes-head">
             <h2>Gravações</h2>
-            <button class="link" id="open-folder">Abrir pasta</button>
+            <button class="secondary compact" id="open-folder" title="Abrir a pasta das gravações no Explorer"><svg class="i"><use href="#i-folder" /></svg>Abrir pasta</button>
           </div>
           <div class="take-selection" id="take-selection" hidden>
             <span id="take-selection-count"></span>
-            <button class="link danger" id="take-selection-trash" title="Mover para a Lixeira (Delete)"><svg class="i"><use href="#i-trash" /></svg>Lixeira</button>
-            <button class="link" id="take-selection-clear" title="Esc">Cancelar</button>
+            <button class="secondary compact danger" id="take-selection-trash" title="Mover para a Lixeira (Delete)"><svg class="i"><use href="#i-trash" /></svg>Lixeira</button>
+            <button class="secondary compact" id="take-selection-clear" title="Tirar a seleção (Esc)">Cancelar</button>
           </div>
           <ul id="takes" aria-multiselectable="true"></ul>
         </section>

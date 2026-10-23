@@ -100,7 +100,7 @@ export function showTour(tour: string, tips: Tip[]) {
     const actions = document.createElement("div");
     actions.className = "tip-actions";
     const skip = document.createElement("button");
-    skip.className = "link";
+    skip.className = "secondary";
     skip.textContent = last ? "" : "Pular dicas";
     skip.hidden = last;
     skip.addEventListener("click", finish);
