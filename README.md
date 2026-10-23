@@ -32,8 +32,8 @@ Gravador de tela e editor para Windows, feito com Tauri 2 (Rust + TypeScript, We
 
 ## Editor
 
-- **Estilos prontos:** Tutorial, Vertical (9:16), Minimalista, Apresentação, Produto 3D e Sem efeitos, num clique, sem mexer em cortes e zooms.
-- **Visual:** fundos em degradê ou imagem (com desfoque), margem, cantos, sombra, proporção (original, 16:9, 9:16, 1:1, 4:3), moldura de janela ou notebook 3D (feito com three.js: tampa, teclado, touchpad e sombra; a inclinação gira o notebook), inclinação 3D, recorte de área.
+- **Estilos prontos:** Tutorial, Vertical (9:16), Minimalista, Apresentação, Perspectiva e Sem efeitos, num clique, sem mexer em cortes e zooms.
+- **Visual:** fundos em degradê ou imagem (com desfoque), margem, cantos, sombra, proporção (original, 16:9, 9:16, 1:1, 4:3), moldura de janela, inclinação 3D, recorte de área.
 - **Cursor:**
   - redesenhado e suavizado, com tamanho ajustável e o formato real (seta, mão, texto);
   - estilos: Clássico, Claro, Ponto, Pizza, Melancia e Foguete;
@@ -291,7 +291,7 @@ Para capturas de tela ou automação da interface durante o desenvolvimento, def
 ## Limitações conhecidas
 
 - **iPhone:** não grava iPhone conectado; o Windows não tem um caminho confiável para isso.
-- **Molduras:** são desenhadas em 2D (janela e notebook), sem os modelos 3D do Slice.
+- **Molduras:** só a moldura de janela, desenhada em 2D; não há modelos 3D de aparelhos como no Slice.
 - **Borda amarela:** no Windows 10 aparece em volta da tela durante a gravação (aviso de captura do sistema); o Windows 11 permite escondê-la.
 - **Janela movida:** na gravação de janela, a área é lida só no início.
 - **Desenhos da gravação:** entram fixos no vídeo; ainda não dá para editá-los depois no editor (os textos, setas e destaques do editor dão).

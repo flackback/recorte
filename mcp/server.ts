@@ -212,7 +212,7 @@ tool(
         aspects: ASPECTS.map(({ id }) => id),
         speeds: SPEEDS,
         noteColors: NOTE_COLORS,
-        frames: ["none", "window", "laptop"],
+        frames: ["none", "window"],
       },
     };
   },
@@ -785,7 +785,7 @@ const settingsShape = {
       blur: z.number().min(0).max(40).optional().describe("Desfoque da imagem de fundo."),
     })
     .optional(),
-  frame: z.enum(["none", "window", "laptop"]).optional().describe("Moldura: nenhuma, janela ou notebook."),
+  frame: z.enum(["none", "window"]).optional().describe("Moldura: nenhuma ou janela."),
   tilt: z.number().min(-20).max(20).optional().describe("Inclinação 3D em graus. 0 é reto."),
   cursor: z
     .object({

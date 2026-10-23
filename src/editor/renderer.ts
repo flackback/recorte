@@ -4,7 +4,6 @@
  * text overlay (keys, captions). Preview and export share this code, so both look identical.
  */
 
-import { invert3, laptopPicture, project2, squareToQuad, type LaptopPicture } from "./laptop3d";
 import { CURSOR_STYLES, TRANSITIONS, type ClickStyle, type CursorStyle, type Frame, type Rect, type TransitionKind } from "./project";
 
 export type CursorKind = "arrow" | "hand" | "text";
@@ -56,9 +55,7 @@ const cursorTip = (style: CursorStyle, kind: CursorKind): [number, number] =>
   style === "classic" || style === "light" ? CURSOR_TIPS[kind] : [CURSOR_BOX / 2, CURSOR_BOX / 2];
 const SPRITE = 256;
 const LENS_RADIUS = 120;
-/** The laptop's screen mapping (3 rows of a 3×3 matrix) comes after the click list. */
-const LAPTOP_VEC = 19 + MAX_BLURS + MAX_CLICKS;
-const UNIFORM_VECS = LAPTOP_VEC + 3;
+const UNIFORM_VECS = 19 + MAX_BLURS + MAX_CLICKS;
 
 const SHADER = /* wgsl */ `
 struct Uniforms {
@@ -83,7 +80,6 @@ struct Uniforms {
   trans: vec4f,     // transition amount, unused x3
   blurs: array<vec4f, ${MAX_BLURS}>,
   clicks: array<vec4f, ${MAX_CLICKS}>,
-  lap_h: array<vec4f, 3>, // laptop: composed px -> screen uv (projective, rows of a 3x3 matrix)
 }
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
@@ -93,7 +89,6 @@ struct Uniforms {
 @group(0) @binding(4) var webcam_tex: texture_external;
 @group(0) @binding(5) var overlay_tex: texture_2d<f32>;
 @group(0) @binding(6) var bg_tex: texture_2d<f32>;
-@group(0) @binding(7) var laptop_tex: texture_2d<f32>;
 
 @vertex
 fn vs(@builtin(vertex_index) i: u32) -> @builtin(position) vec4f {
@@ -233,7 +228,7 @@ fn fs(@builtin(position) frag: vec4f) -> @location(0) vec4f {
   let zoom = u.frame.w;
   let out_px = frag.xy * u.frame.z;
   let p = u.camera.xy + out_px / zoom;
-  var px = u.frame.z / zoom;
+  let px = u.frame.z / zoom;
 
   // Background (not tilted).
   var color: vec3f;
@@ -245,12 +240,10 @@ fn fs(@builtin(position) frag: vec4f) -> @location(0) vec4f {
     color = mix(u.bg_from.rgb, u.bg_to.rgb, g);
   }
 
-  let flat = untilt(p);
-  var q = flat;
+  let q = untilt(p);
   let radius = u.camera.z;
   let blur = max(min(size.x, size.y) * 0.035, 1.0);
   let frame_kind = u.tilt.w;
-  let laptop = frame_kind > 1.5;
 
   // How much of the frame a transition leaves: fades, turns edge-on, burns or breaks apart.
   let tkind = u.look.w;
@@ -258,35 +251,16 @@ fn fs(@builtin(position) frag: vec4f) -> @location(0) vec4f {
   var show = 1.0;
   if (tkind > 0.5 && tkind < 1.5) { show = 1.0 - tamount; }
   if (tkind > 2.5 && tkind < 3.5) { show = 1.0 - smoothstep(0.86, 0.99, tamount); }
-  let mask = trans_mask(flat);
+  let mask = trans_mask(q);
   var shadow_show = show;
   if (tkind > 3.5 && tkind < 5.5) { shadow_show = 1.0 - tamount; }
 
-  // Laptop: a 3D picture (box) around the screen. The screen is a quadrilateral in it; points on it
-  // map back to the flat content rect, so everything drawn on the recording follows the perspective.
-  var lap = vec4f(0.0);
-  if (laptop) {
-    let luv = (flat - u.box.xy) / u.box.zw;
-    if (all(luv >= vec2f(0.0)) && all(luv <= vec2f(1.0))) {
-      lap = textureSampleLevel(laptop_tex, smp, luv, 0.0);
-    }
-    let h = vec3f(flat, 1.0);
-    let w = vec3f(dot(u.lap_h[0].xyz, h), dot(u.lap_h[1].xyz, h), dot(u.lap_h[2].xyz, h));
-    q = u.content.xy + (w.xy / w.z) * u.content.zw;
-  }
-  // One output pixel, measured where the recording is drawn.
-  let content_px = max(fwidth(q.x), fwidth(q.y));
-
-  if (laptop) {
-    color = mix(color, lap.rgb, lap.a * show * mask.x);
-  } else {
-    // Shadow under the frame.
-    let ds = sd_rect(q - vec2f(0.0, blur * 0.4), u.box, radius);
-    color = mix(color, vec3f(0.0), u.camera.w * 0.55 * shadow_show * (1.0 - smoothstep(-blur, blur * 1.6, ds)));
-  }
+  // Shadow under the frame.
+  let ds = sd_rect(q - vec2f(0.0, blur * 0.4), u.box, radius);
+  color = mix(color, vec3f(0.0), u.camera.w * 0.55 * shadow_show * (1.0 - smoothstep(-blur, blur * 1.6, ds)));
 
   // Frame chrome: the window title bar.
-  if (frame_kind > 0.5 && !laptop) {
+  if (frame_kind > 0.5) {
     let dbox = sd_rect(q, u.box, radius);
     var chrome = vec3f(0.93, 0.93, 0.94);
     let bar = u.content.y - u.box.y;
@@ -301,12 +275,9 @@ fn fs(@builtin(position) frag: vec4f) -> @location(0) vec4f {
     }
     color = mix(color, chrome, clamp(0.5 - dbox / px, 0.0, 1.0) * show * mask.x);
   }
-  if (laptop) { px = content_px; }
-
   // The recording.
   var content_radius = radius;
   if (frame_kind > 0.5) { content_radius = radius * 0.35; }
-  if (laptop) { content_radius = 0.0; }
   let d = sd_rect(q, u.content, content_radius);
   let cover = clamp(0.5 - d / px, 0.0, 1.0) * show * mask.x;
   if (cover > 0.0) {
@@ -555,23 +526,6 @@ export function layout(output: { width: number; height: number }, source: { widt
 }
 
 /**
- * The laptop picture placed in the output, the screen quad there, and a flat content rect of the
- * same scale that everything drawn on the recording uses (mapped onto the quad by `homography`).
- */
-function laptopLayout(output: { width: number; height: number }, source: { width: number; height: number }, padding: number, picture: LaptopPicture) {
-  const pad = padding * Math.min(output.width, output.height);
-  const scale = Math.min(Math.max(1, output.width - pad * 2) / picture.image.width, Math.max(1, output.height - pad * 2) / picture.image.height);
-  const box = { x: (output.width - picture.image.width * scale) / 2, y: (output.height - picture.image.height * scale) / 2, width: picture.image.width * scale, height: picture.image.height * scale };
-  const quad = picture.quad.map(([x, y]) => [box.x + x * box.width, box.y + y * box.height] as [number, number]);
-  const xs = quad.map(([x]) => x);
-  const ys = quad.map(([, y]) => y);
-  const bounds = { x: Math.min(...xs), y: Math.min(...ys), width: Math.max(...xs) - Math.min(...xs), height: Math.max(...ys) - Math.min(...ys) };
-  const width = Math.hypot(quad[1][0] - quad[0][0], quad[1][1] - quad[0][1]);
-  const content = { x: bounds.x, y: bounds.y, width, height: (width * source.height) / source.width };
-  return { box, content, bounds, homography: squareToQuad(quad) };
-}
-
-/**
  * Top-left of the visible window for a zoom level and focus. At zoom 1 the window is the whole
  * frame; as it zooms in, the allowed area shrinks smoothly from the frame to the screen itself,
  * so a zoom shows the recording rather than the background around it.
@@ -599,8 +553,6 @@ export class Renderer {
   private cursorTexture: GPUTexture;
   private overlayTexture: GPUTexture | null = null;
   private backgroundTexture: GPUTexture | null = null;
-  private laptopTexture: GPUTexture | null = null;
-  private laptopKey = "";
   private emptyTexture: GPUTexture;
   private backgroundSize = { width: 1, height: 1 };
   private context: GPUCanvasContext;
@@ -675,24 +627,12 @@ export class Renderer {
 
     const { output, video } = state;
     const crop = state.crop ?? { x: 0, y: 0, width: video.width, height: video.height };
-    // The laptop is a 3D picture made for this angle and screen shape; the recording goes in its screen.
-    const picture = state.frame === "laptop" ? laptopPicture(state.tilt, crop.height / crop.width, Math.min(3600, Math.round(Math.max(output.width, output.height) * 1.5))) : null;
-    if (picture && picture.key !== this.laptopKey) {
-      this.laptopTexture?.destroy();
-      this.laptopTexture = this.texture(picture.image.width, picture.image.height);
-      this.device.queue.copyExternalImageToTexture({ source: picture.image }, { texture: this.laptopTexture }, [picture.image.width, picture.image.height]);
-      this.laptopKey = picture.key;
-    }
-    const placed = picture ? laptopLayout(output, crop, state.background.padding, picture) : null;
-    const { content, box } = placed ?? layout(output, crop, state.background.padding, state.frame);
+    const { content, box } = layout(output, crop, state.background.padding, state.frame);
     const zoom = Math.max(1, state.zoom);
     const k = content.width / crop.width;
     const toComposed = (x: number, y: number) => [content.x + (x - crop.x) * k, content.y + (y - crop.y) * k] as const;
-    // The camera works on the picture itself: on the laptop, the focus is where the point lands on the screen.
-    const [focusX, focusY] = placed
-      ? project2(placed.homography, (state.focus[0] - crop.x) / crop.width, (state.focus[1] - crop.y) / crop.height)
-      : toComposed(...state.focus);
-    const [cameraX, cameraY] = cameraOrigin(output, placed?.bounds ?? content, zoom, [focusX, focusY]);
+    const [focusX, focusY] = toComposed(...state.focus);
+    const [cameraX, cameraY] = cameraOrigin(output, content, zoom, [focusX, focusY]);
 
     const u = this.uniforms;
     u.fill(0);
@@ -718,9 +658,7 @@ export class Renderer {
     // "Girar" turns the frame edge-on around its vertical axis, then back from the other side.
     const transition = state.transition;
     const flip = transition?.kind === "flip" ? transition.phase * Math.min(transition.amount, 0.985) * (Math.PI / 2) : 0;
-    // The laptop's own angle is in its picture; only a flip turns the picture as a whole.
-    const turn = picture ? [flip, 0] : [tilt + flip, -tilt * 0.35];
-    vec(8, [...turn, Math.max(output.width, output.height) * 1.6, state.frame === "window" ? 1 : picture ? 2 : 0]);
+    vec(8, [tilt + flip, -tilt * 0.35, Math.max(output.width, output.height) * 1.6, state.frame === "window" ? 1 : 0]);
     if (state.lens && state.lens.amount > 0.001) {
       const [x, y] = toComposed(state.lens.x, state.lens.y);
       vec(9, [x, y, LENS_RADIUS * k * state.lens.amount, 1 + (state.lens.magnification - 1) * state.lens.amount]);
@@ -748,10 +686,6 @@ export class Renderer {
     vec(13, [box.x, box.y, box.width, box.height]);
     const blurs = state.blurs.slice(0, MAX_BLURS);
     vec(14, [blurs.length, 0.018, 0, 0]);
-    if (placed) {
-      const inverse = invert3(placed.homography);
-      for (let row = 0; row < 3; row++) vec(LAPTOP_VEC + row, [inverse[row * 3], inverse[row * 3 + 1], inverse[row * 3 + 2], 0]);
-    }
     blurs.forEach((rect, index) =>
       vec(19 + index, [rect.x / video.width, rect.y / video.height, (rect.x + rect.width) / video.width, (rect.y + rect.height) / video.height]),
     );
@@ -784,7 +718,6 @@ export class Renderer {
         { binding: 4, resource: webcamReady ? this.device.importExternalTexture({ source: webcam! }) : screen },
         { binding: 5, resource: (this.overlayTexture ?? this.emptyTexture).createView() },
         { binding: 6, resource: (this.backgroundTexture ?? this.emptyTexture).createView() },
-        { binding: 7, resource: (picture && this.laptopTexture ? this.laptopTexture : this.emptyTexture).createView() },
       ],
     });
 
@@ -801,7 +734,7 @@ export class Renderer {
   }
 
   destroy() {
-    for (const texture of [this.cursorTexture, this.overlayTexture, this.backgroundTexture, this.laptopTexture, this.emptyTexture]) texture?.destroy();
+    for (const texture of [this.cursorTexture, this.overlayTexture, this.backgroundTexture, this.emptyTexture]) texture?.destroy();
     this.uniformBuffer.destroy();
     this.device.destroy();
   }

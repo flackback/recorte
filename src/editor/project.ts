@@ -111,7 +111,7 @@ export function newNote(range: Range, kind: NoteKind = "text"): Note {
 export type Rect = { x: number; y: number; width: number; height: number };
 
 export type Aspect = "auto" | "16:9" | "9:16" | "1:1" | "4:3";
-export type Frame = "none" | "window" | "laptop";
+export type Frame = "none" | "window";
 export type Corner = "br" | "bl" | "tr" | "tl";
 
 /** Everything the user changed about a take, saved as `project.json` next to it. */
@@ -348,7 +348,8 @@ export function normalizeProject(raw: unknown, fallback: Project): Project {
     aspect: ASPECTS.some((aspect) => aspect.id === value.aspect) ? value.aspect! : fallback.aspect,
     crop: value.crop ?? null,
     background: { ...fallback.background, ...value.background },
-    frame: value.frame ?? fallback.frame,
+    // The laptop frame was removed; such projects show the recording without a frame.
+    frame: value.frame === "window" || value.frame === "none" ? value.frame : fallback.frame,
     tilt: value.tilt ?? fallback.tilt,
     cursor: { ...fallback.cursor, ...value.cursor },
     keys: { ...fallback.keys, ...value.keys },
@@ -445,9 +446,9 @@ export const STYLES: Style[] = [
   },
   {
     id: "product",
-    name: "Produto 3D",
-    description: "Notebook inclinado em perspectiva",
-    ...look({ preset: "ocean", padding: 0.1, radius: 14, shadow: 0.8, aspect: "16:9", frame: "laptop", tilt: 10, cursor: 1.4, clickEffect: true, spotlight: false, zoom: 2 }),
+    name: "Perspectiva",
+    description: "Tela inclinada em 3D, com sombra forte",
+    ...look({ preset: "ocean", padding: 0.1, radius: 14, shadow: 0.8, aspect: "16:9", frame: "none", tilt: 10, cursor: 1.4, clickEffect: true, spotlight: false, zoom: 2 }),
   },
   {
     id: "plain",

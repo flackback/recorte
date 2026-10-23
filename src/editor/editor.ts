@@ -1106,7 +1106,7 @@ export class Editor {
         thumb.className = "style-thumb";
         thumb.style.background = `linear-gradient(${preset.angle + 90}deg, ${preset.from}, ${preset.to})`;
         const screen = document.createElement("span");
-        screen.className = `screen ${sample.frame}${sample.aspect === "9:16" ? " vertical" : ""}`;
+        screen.className = `screen ${sample.frame}${sample.aspect === "9:16" ? " vertical" : ""}${sample.tilt ? " tilted" : ""}`;
         screen.style.setProperty("--w", `${Math.round((1 - sample.background.padding * 2.6) * 100)}%`);
         screen.style.setProperty("--r", `${Math.round(sample.background.radius / 4)}px`);
         screen.style.setProperty("--s", String(sample.background.shadow * 0.6));
