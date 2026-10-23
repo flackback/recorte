@@ -1,4 +1,4 @@
-# Publishes a new version of Recorte on GitHub Releases, where installed apps look for updates.
+﻿# Publishes a new version of Recorte on GitHub Releases, where installed apps look for updates.
 #
 #   .\scripts\release.ps1 -Version 0.2.0 -Notes "O que mudou nesta versão"
 #
