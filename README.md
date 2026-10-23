@@ -78,6 +78,13 @@ Gravador de tela e editor para Windows, feito com Tauri 2 (Rust + TypeScript, We
 - Gravações sem nome aparecem como "Tela inteira", "Área da tela" ou o título da janela gravada, com data e duração.
 - Sem gravação aberta, o editor mostra "Gravar agora" e "Abrir a última gravação".
 
+## Configurações
+
+- **Edição por IA:** estado do servidor MCP, Node.js, Claude Code e Claude Desktop, com botões para conectar; liga e desliga o acesso da IA.
+- **Gravação:** pasta das gravações, atalhos globais e "Rever dicas".
+- **Atualizações:** versão instalada, procurar agora, procurar sozinho (liga e desliga) e novidades.
+- **Sobre:** versão e link do código.
+
 ## Primeiro uso
 
 - **Dicas guiadas:** na primeira vez que o app abre e na primeira edição, balões apontam o que importa (escolher a fonte, gravar, cortar arrastando, estilos, botão direito, exportar). "Rever dicas" fica na janela de atalhos.
@@ -118,7 +125,17 @@ O Recorte tem um servidor MCP. Com ele, uma IA (Claude Code, Claude Desktop ou o
 - `transcribe`, `export_video` (com destinos prontos: youtube, vertical, whatsapp, discord), `remove_silences`, `open_in_editor` e "Melhorar a voz" precisam do app aberto. A IA recebe o progresso e, no fim, o caminho do arquivo.
 - Todos os tempos são em milissegundos, na linha do tempo da gravação original.
 
-### Instalar
+### Conectar pelo app
+
+Abra **Configurações** (engrenagem na barra de título ou **Ctrl+,**) → **Edição por IA**. A tela mostra:
+
+- se a IA pode usar o app (um botão liga e desliga o canal local);
+- onde está o servidor MCP, que vem junto com o app instalado;
+- se o Node.js está instalado (o servidor precisa dele);
+- se o Claude Code e o Claude Desktop já conhecem o Recorte, com um botão **Conectar** para cada um;
+- exemplos de pedidos e o comando ou a configuração para conectar outros programas.
+
+### Instalar à mão (desenvolvimento)
 
 1. Gere o servidor: `npm run build:mcp`. O arquivo fica em `mcp/dist/recorte-mcp.mjs`.
 2. Registre no Claude Code, para todas as pastas: `claude mcp add --scope user recorte -- node E:/slice/mcp/dist/recorte-mcp.mjs`.

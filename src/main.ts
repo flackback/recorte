@@ -9,6 +9,7 @@ import { Editor } from "./editor/editor";
 import { confirmDialog, onContextMenu, type MenuItem } from "./menu";
 import { resetTips, showTour } from "./tips";
 import { toast } from "./toast";
+import { Settings } from "./settings";
 import { Updates } from "./updates";
 import { joinPath, takeName, type Take } from "./types";
 
@@ -759,6 +760,21 @@ const updates = new Updates(document.getElementById("update") as HTMLButtonEleme
   recording ? "Pare a gravação antes de atualizar." : document.querySelector("#export-running:not([hidden])") ? "Espere a exportação terminar antes de atualizar." : null,
 );
 updates.start();
+const settings = new Settings(updates, {
+  resetTips,
+  showShortcuts: () => {
+    const modal = document.getElementById("shortcuts-modal")!;
+    modal.hidden = false;
+    document.getElementById("shortcuts-close")?.focus();
+  },
+});
+document.getElementById("settings-open")!.addEventListener("click", () => void settings.open());
+window.addEventListener("keydown", (event) => {
+  if (event.ctrlKey && event.key === ",") {
+    event.preventDefault();
+    if (!settings.isOpen) void settings.open();
+  }
+});
 let appVersion = "";
 void getVersion().then((version) => (appVersion = version));
 
@@ -768,6 +784,7 @@ onContextMenu(document.querySelector<HTMLElement>(".titlebar")!, () => {
     { label: "Minimizar", icon: "win-min", action: () => void appWindow.minimize() },
     { label: maximized ? "Restaurar" : "Maximizar", icon: maximized ? "win-restore" : "win-max", action: () => void appWindow.toggleMaximize() },
     "separator",
+    { label: "Configurações", icon: "gear", shortcut: "Ctrl+,", action: () => void settings.open() },
     { label: appVersion ? `Procurar atualizações (versão ${appVersion})` : "Procurar atualizações", icon: "refresh", action: () => void updates.check(true) },
     "separator",
     { label: "Fechar", icon: "win-close", shortcut: "Alt+F4", action: () => ui.close.click() },

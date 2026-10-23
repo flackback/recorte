@@ -7,6 +7,24 @@ import { toast } from "./toast";
 
 /** How often a running app looks for a new version. */
 const CHECK_EVERY = 6 * 60 * 60 * 1000;
+const AUTO_KEY = "recorte.autoUpdate";
+
+/** Whether the app looks for new versions on its own (on unless turned off in Configurações). */
+export function autoUpdateEnabled() {
+  try {
+    return localStorage.getItem(AUTO_KEY) !== "off";
+  } catch {
+    return true;
+  }
+}
+
+export function setAutoUpdate(on: boolean) {
+  try {
+    localStorage.setItem(AUTO_KEY, on ? "on" : "off");
+  } catch {
+    // Not remembered; the default (on) applies next time.
+  }
+}
 
 /**
  * Looks for new versions on the GitHub releases and installs them on request. The title bar
@@ -26,8 +44,12 @@ export class Updates {
   /** Checks now and then periodically. Development builds only check when asked. */
   start() {
     if (import.meta.env.DEV) return;
-    window.setTimeout(() => void this.check(), 4000);
-    window.setInterval(() => void this.check(), CHECK_EVERY);
+    window.setTimeout(() => {
+      if (autoUpdateEnabled()) void this.check();
+    }, 4000);
+    window.setInterval(() => {
+      if (autoUpdateEnabled()) void this.check();
+    }, CHECK_EVERY);
   }
 
   /** `manual` also reports "already up to date" and failures, which a background check keeps quiet. */

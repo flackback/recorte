@@ -142,6 +142,9 @@
       <symbol id="i-captions" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2" /><path d="M10 10.5a2 2 0 1 0 0 3M17 10.5a2 2 0 1 0 0 3" /></symbol>
       <symbol id="i-mic" viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3" /><path d="M5 11a7 7 0 0 0 14 0M12 18v3" /></symbol>
       <symbol id="i-monitor" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="12" rx="2" /><path d="M8 20h8M12 16v4" /></symbol>
+      <symbol id="i-gear" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1Z" /></symbol>
+      <symbol id="i-copy" viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2" /><path d="M5 15V5a1 1 0 0 1 1-1h10" /></symbol>
+      <symbol id="i-sparkle" viewBox="0 0 24 24"><path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8Z" /><path d="M19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8Z" /></symbol>
       <symbol id="i-keyboard" viewBox="0 0 24 24"><rect x="2" y="6" width="20" height="12" rx="2" /><path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M7 14h10" /></symbol>
       <symbol id="i-wand" viewBox="0 0 24 24"><path d="m4 20 11-11M14 4v3M12.5 5.5h3M19 9v3M17.5 10.5h3M18 3l.01 0" /></symbol>
       <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" /></symbol>
@@ -160,6 +163,7 @@
       <div class="titlebar-status" id="titlebar-status" data-tauri-drag-region hidden>
         <span class="rec-dot" data-tauri-drag-region></span><span id="titlebar-time" data-tauri-drag-region>Gravando</span>
       </div>
+      <button class="titlebar-button" id="settings-open" title="Configurações (Ctrl+,)" aria-label="Configurações"><svg class="i"><use href="#i-gear" /></svg></button>
       <button class="update-button" id="update" hidden><svg class="i"><use href="#i-export" /></svg><span>Atualizar</span></button>
       <div class="window-controls">
         <button id="win-min" title="Minimizar" aria-label="Minimizar"><svg class="i"><use href="#i-win-min" /></svg></button>
@@ -650,6 +654,86 @@
           </div>
         </div>
       </main>
+    </div>
+    <div class="modal" id="settings-modal" hidden>
+      <div class="sheet settings" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+        <nav class="settings-nav" aria-label="Seções">
+          <h2 id="settings-title">Configurações</h2>
+          <button data-section="ai" aria-current="true"><svg class="i"><use href="#i-sparkle" /></svg>Edição por IA</button>
+          <button data-section="recording"><svg class="i"><use href="#i-camera" /></svg>Gravação</button>
+          <button data-section="updates"><svg class="i"><use href="#i-refresh" /></svg>Atualizações</button>
+          <button data-section="about"><svg class="i"><use href="#i-visual" /></svg>Sobre</button>
+        </nav>
+        <div class="settings-content">
+          <button class="icon-button settings-close" id="settings-close" title="Fechar (Esc)" aria-label="Fechar"><svg class="i"><use href="#i-close" /></svg></button>
+
+          <section data-panel="ai">
+            <h3>Edição por IA</h3>
+            <p class="hint">Um assistente de IA (Claude Code, Claude Desktop ou outro cliente MCP) lê suas gravações, corta, põe zoom, textos e legendas, transcreve e exporta. Tudo acontece neste computador.</p>
+            <label class="switch"><input type="checkbox" id="ai-enabled" /><span>Permitir que a IA use o Recorte</span></label>
+            <ul class="checks" id="ai-checks" aria-live="polite"></ul>
+            <div class="settings-group">
+              <h4>Peça assim</h4>
+              <ul class="prompts" id="ai-prompts"></ul>
+            </div>
+            <details class="settings-group">
+              <summary>Conectar outro programa de IA</summary>
+              <p class="hint">Comando para o terminal:</p>
+              <div class="code-row"><code id="ai-command"></code><button class="icon-button" data-copy="ai-command" title="Copiar comando" aria-label="Copiar comando"><svg class="i"><use href="#i-copy" /></svg></button></div>
+              <p class="hint">Ou esta entrada em <code>mcpServers</code> na configuração do programa:</p>
+              <div class="code-row"><code id="ai-config"></code><button class="icon-button" data-copy="ai-config" title="Copiar configuração" aria-label="Copiar configuração"><svg class="i"><use href="#i-copy" /></svg></button></div>
+            </details>
+          </section>
+
+          <section data-panel="recording" hidden>
+            <h3>Gravação</h3>
+            <div class="settings-group">
+              <h4>Pasta das gravações</h4>
+              <div class="code-row"><code id="takes-folder"></code><button class="secondary" id="takes-folder-open"><svg class="i"><use href="#i-folder" /></svg>Abrir</button></div>
+            </div>
+            <div class="settings-group">
+              <h4>Atalhos de qualquer programa</h4>
+              <dl class="shortcuts compact">
+                <dt><kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>R</kbd></dt><dd>Começar ou parar a gravação</dd>
+                <dt><kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>M</kbd></dt><dd>Marcar um momento</dd>
+                <dt><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>D</kbd></dt><dd>Abrir ou fechar as ferramentas de desenho</dd>
+                <dt><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>X</kbd></dt><dd>Parar a gravação</dd>
+              </dl>
+            </div>
+            <div class="settings-group">
+              <h4>Privacidade</h4>
+              <p class="hint">A janela do Recorte e a barra flutuante ficam fora do vídeo. Fora da gravação, a janela aparece normalmente no compartilhamento de tela e no acesso remoto.</p>
+            </div>
+            <button class="secondary" id="settings-tips"><svg class="i"><use href="#i-wand" /></svg>Rever as dicas da primeira vez</button>
+          </section>
+
+          <section data-panel="updates" hidden>
+            <h3>Atualizações</h3>
+            <p class="settings-version">Versão instalada: <strong id="settings-version"></strong></p>
+            <label class="switch"><input type="checkbox" id="auto-update" /><span>Procurar versões novas sozinho</span></label>
+            <p class="hint">O Recorte procura ao abrir e a cada 6 horas. Ele só instala quando você clica em "Atualizar", e só arquivos assinados pelo projeto.</p>
+            <div class="row">
+              <button class="primary" id="settings-check"><svg class="i"><use href="#i-refresh" /></svg>Procurar agora</button>
+              <button class="secondary" id="settings-changes">Ver novidades</button>
+            </div>
+          </section>
+
+          <section data-panel="about" hidden>
+            <div class="about">
+              <img src="/icon.svg" alt="" width="64" height="64" />
+              <div>
+                <h3>Recorte <span id="about-version"></span></h3>
+                <p class="hint">Gravador de tela e editor para Windows.</p>
+              </div>
+            </div>
+            <p class="hint">Feito com Tauri, WebGPU e WebCodecs. Transcrição com Whisper e melhoria de voz com RNNoise, sempre no seu computador.</p>
+            <div class="row">
+              <button class="secondary" id="about-repo">Código no GitHub</button>
+              <button class="secondary" id="about-shortcuts"><svg class="i"><use href="#i-keyboard" /></svg>Atalhos do editor</button>
+            </div>
+          </section>
+        </div>
+      </div>
     </div>
   </body>
 </html>

@@ -1,5 +1,6 @@
 mod audio;
 mod clock;
+mod ai;
 mod control;
 mod cursor;
 mod export;
@@ -267,8 +268,10 @@ pub fn run() {
         .manage(export::Exports::default())
         .manage(control::Pending::default())
         .setup(|app| {
-            if let Err(error) = control::start(app.handle()) {
-                eprintln!("canal do MCP desligado: {error}");
+            if control::enabled(app.handle()) {
+                if let Err(error) = control::start(app.handle()) {
+                    eprintln!("canal do MCP desligado: {error}");
+                }
             }
             Ok(())
         })
@@ -298,7 +301,10 @@ pub fn run() {
             take_trash,
             overlay::overlay_open,
             overlay::overlay_close,
-            control::agent_reply
+            control::agent_reply,
+            control::ai_set_enabled,
+            ai::ai_status,
+            ai::ai_connect
         ])
         .build(tauri::generate_context!())
         .expect("error while running tauri application")

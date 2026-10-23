@@ -6,7 +6,7 @@
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "npm run build",
+    "beforeBuildCommand": "npm run build && npm run build:mcp",
     "frontendDist": "../dist"
   },
   "app": {
@@ -53,6 +53,9 @@
         ],
         "displayLanguageSelector": false
       }
+    },
+    "resources": {
+      "../mcp/dist/recorte-mcp.mjs": "mcp/recorte-mcp.mjs"
     }
   },
   "plugins": {

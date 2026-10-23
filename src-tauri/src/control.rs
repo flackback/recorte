@@ -7,13 +7,14 @@ use std::hash::{BuildHasher, Hasher};
 use std::io::Read;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{mpsc, Mutex};
+use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
 
 use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter, Manager};
 
 const CONTROL_FILE: &str = "control.json";
+const SETTINGS_FILE: &str = "settings.json";
 const MAX_BODY: u64 = 1024 * 1024;
 /// How long a request waits for the window to answer. Long work (export) answers at once with a
 /// job id and is polled.
@@ -25,6 +26,46 @@ type Reply = Result<Value, String>;
 pub struct Pending {
     next: AtomicU64,
     waiting: Mutex<HashMap<u64, mpsc::Sender<Reply>>>,
+    /// The running endpoint and its port, while the AI is allowed in.
+    server: Mutex<Option<(Arc<tiny_http::Server>, u16)>>,
+}
+
+fn settings_path(app: &AppHandle) -> Option<PathBuf> {
+    app.path().app_config_dir().ok().map(|dir| dir.join(SETTINGS_FILE))
+}
+
+/// Whether the user lets AI clients reach the app (on unless turned off in Configurações).
+pub fn enabled(app: &AppHandle) -> bool {
+    settings_path(app)
+        .and_then(|path| std::fs::read_to_string(path).ok())
+        .and_then(|text| serde_json::from_str::<Value>(&text).ok())
+        .and_then(|settings| settings["aiControl"].as_bool())
+        .unwrap_or(true)
+}
+
+fn save_enabled(app: &AppHandle, on: bool) -> Result<(), String> {
+    let path = settings_path(app).ok_or("sem pasta de configurações")?;
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).map_err(|error| error.to_string())?;
+    }
+    let mut settings = std::fs::read_to_string(&path).ok().and_then(|text| serde_json::from_str::<Value>(&text).ok()).unwrap_or_else(|| json!({}));
+    settings["aiControl"] = json!(on);
+    std::fs::write(path, serde_json::to_vec_pretty(&settings).unwrap()).map_err(|error| error.to_string())
+}
+
+/// The endpoint's port while it runs.
+pub fn port(app: &AppHandle) -> Option<u16> {
+    app.state::<Pending>().server.lock().unwrap().as_ref().map(|(_, port)| *port)
+}
+
+/// Turns the AI channel on or off now, and remembers the choice.
+#[tauri::command]
+pub fn ai_set_enabled(app: AppHandle, on: bool) -> Result<(), String> {
+    save_enabled(&app, on)?;
+    if on { start(&app) } else {
+        stop(&app);
+        Ok(())
+    }
 }
 
 fn control_path(app: &AppHandle) -> Option<PathBuf> {
@@ -44,7 +85,10 @@ fn token() -> String {
 
 /// Starts the endpoint and writes where to find it. Failing here only disables the MCP features.
 pub fn start(app: &AppHandle) -> Result<(), String> {
-    let server = tiny_http::Server::http("127.0.0.1:0").map_err(|error| error.to_string())?;
+    if port(app).is_some() {
+        return Ok(());
+    }
+    let server = Arc::new(tiny_http::Server::http("127.0.0.1:0").map_err(|error| error.to_string())?);
     let port = server.server_addr().to_ip().map(|address| address.port()).ok_or("sem porta")?;
     let token = token();
     let path = control_path(app).ok_or("sem pasta de dados")?;
@@ -55,6 +99,7 @@ pub fn start(app: &AppHandle) -> Result<(), String> {
     let info = json!({ "version": 1, "port": port, "token": token, "pid": std::process::id(), "takesDir": takes });
     std::fs::write(&path, serde_json::to_vec_pretty(&info).unwrap()).map_err(|error| error.to_string())?;
 
+    app.state::<Pending>().server.lock().unwrap().replace((server.clone(), port));
     let app = app.clone();
     std::thread::spawn(move || {
         for request in server.incoming_requests() {
@@ -66,8 +111,11 @@ pub fn start(app: &AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-/// Removes `control.json` when the app closes, so clients know it is not running.
+/// Stops the endpoint and removes `control.json`, so clients know the app is not reachable.
 pub fn stop(app: &AppHandle) {
+    if let Some((server, _)) = app.state::<Pending>().server.lock().unwrap().take() {
+        server.unblock();
+    }
     if let Some(path) = control_path(app) {
         let _ = std::fs::remove_file(path);
     }
