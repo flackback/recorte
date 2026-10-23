@@ -16,6 +16,8 @@ import {
   ASPECTS,
   autoZooms,
   BACKGROUNDS,
+  CURSOR_STYLES,
+  DEFAULT_TRANSITION,
   defaultProject,
   insertRange,
   newId,
@@ -23,12 +25,17 @@ import {
   NOTE_COLORS,
   SPEEDS,
   STYLES,
+  TRANSITIONS,
   normalizeProject,
   outputSize,
   type Aspect,
   type BlurRegion,
+  type ClickStyle,
+  type ClickTone,
   type Corner,
+  type Cut,
   type Frame,
+  type TransitionKind,
   type Note,
   type NoteKind,
   type Project,
@@ -37,7 +44,7 @@ import {
   type ZoomSegment,
 } from "./project";
 import { RectEditor } from "./rect-editor";
-import { Renderer } from "./renderer";
+import { cursorPreview, Renderer } from "./renderer";
 import { SoundPreview } from "./sounds";
 import { Timeline, type Selection, type Track, type TrackKey } from "./timeline";
 import type { Span } from "./timemap";
@@ -152,9 +159,15 @@ export class Editor {
     cursorVisible: $<HTMLInputElement>("cursor-visible"),
     cursorSize: $<HTMLInputElement>("cursor-size"),
     smoothing: $<HTMLInputElement>("cursor-smoothing"),
-    clickEffect: $<HTMLInputElement>("click-effect"),
+    cursorStyles: $("cursor-styles"),
+    cursorIdle: $("cursor-idle"),
+    cursorReturn: $<HTMLInputElement>("cursor-return"),
+    cursorShapeDelay: $<HTMLInputElement>("cursor-shape-delay"),
+    clickStyle: $("click-style"),
+    clickSize: $<HTMLInputElement>("click-size"),
+    clickSizeField: $("click-size-field"),
     spotlight: $<HTMLInputElement>("spotlight"),
-    clickSound: $<HTMLInputElement>("click-sound"),
+    clickTone: $("click-tone"),
     keysNote: $("keys-note"),
     keysVisible: $<HTMLInputElement>("keys-visible"),
     keysMode: $("keys-mode"),
@@ -169,6 +182,10 @@ export class Editor {
     selectionTitle: $("selection-title"),
     selectionTime: $("selection-time"),
     selectionZoom: $("selection-zoom"),
+    selectionTransition: $("selection-transition"),
+    transitionKind: $("transition-kind"),
+    transitionDuration: $<HTMLInputElement>("transition-duration"),
+    transitionDurationField: $("transition-duration-field"),
     selectionDelete: $<HTMLButtonElement>("selection-delete"),
     selectionDeleteLabel: $("selection-delete-label"),
     autoZoomHint: $("auto-zoom-hint"),
@@ -598,7 +615,9 @@ export class Editor {
     if (track === "cuts") {
       const start = Math.min(range.start, ...overlapping.map((item) => item.start));
       const end = Math.max(range.end, ...overlapping.map((item) => item.end));
-      const cuts = [...items.filter((item) => !overlapping.includes(item)), { id, start, end }].sort((a, b) => a.start - b.start);
+      // A merged cut keeps a transition one of the old cuts had.
+      const transition = (overlapping as Cut[]).find((cut) => cut.transition)?.transition;
+      const cuts = [...items.filter((item) => !overlapping.includes(item)), { id, start, end, ...(transition ? { transition } : {}) }].sort((a, b) => a.start - b.start);
       this.change((p) => (p.cuts = cuts));
       toast(`Trecho de ${((end - start) / 1000).toFixed(1).replace(".", ",")} s cortado`, { label: "Desfazer", run: () => this.undo() });
     } else {
@@ -1019,9 +1038,54 @@ export class Editor {
     });
 
     toggle(ui.cursorVisible, (p, v) => (p.cursor.visible = v));
-    toggle(ui.clickEffect, (p, v) => (p.cursor.clickEffect = v));
+    toggle(ui.cursorReturn, (p, v) => (p.cursor.returnHome = v));
     toggle(ui.spotlight, (p, v) => (p.cursor.spotlight = v));
-    toggle(ui.clickSound, (p, v) => (p.audio.clickSound = v));
+    range(ui.cursorShapeDelay, (p, v) => (p.cursor.shapeDelay = v));
+    range(ui.clickSize, (p, v) => (p.cursor.clickSize = v));
+    this.radios(ui.cursorIdle, (value) => this.change((p) => (p.cursor.hideIdle = Number(value))));
+    this.radios(ui.clickStyle, (value) =>
+      this.change((p) => {
+        p.cursor.clickEffect = value !== "none";
+        if (value !== "none") p.cursor.clickStyle = value as ClickStyle;
+      }),
+    );
+    this.radios(ui.clickTone, (value) => {
+      this.change((p) => {
+        p.audio.clickSound = value !== "none";
+        if (value !== "none") p.audio.clickTone = value as ClickTone;
+      });
+      if (value !== "none") this.sounds.sample(value as ClickTone);
+    });
+    ui.cursorStyles.replaceChildren(
+      ...CURSOR_STYLES.map((style) => {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "choice";
+        button.setAttribute("role", "radio");
+        button.dataset.value = style.id;
+        const name = document.createElement("span");
+        name.textContent = style.name;
+        button.append(cursorPreview(style.id, 30), name);
+        button.addEventListener("click", () => this.change((p) => (p.cursor.style = style.id)));
+        return button;
+      }),
+    );
+    ui.transitionKind.replaceChildren(
+      ...[{ id: "none", name: "Nenhuma" }, ...TRANSITIONS].map((transition) => {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "choice";
+        button.setAttribute("role", "radio");
+        button.dataset.value = transition.id;
+        button.textContent = transition.name;
+        button.addEventListener("click", () => this.setTransition(transition.id === "none" ? null : (transition.id as TransitionKind)));
+        return button;
+      }),
+    );
+    range(ui.transitionDuration, (p, v) => {
+      const cut = p.cuts.find((candidate) => candidate.id === this.selected?.id);
+      if (cut?.transition) cut.transition.durationMs = Math.round(v * 1000);
+    });
     toggle(ui.keysVisible, (p, v) => (p.keys.visible = v));
     toggle(ui.keySound, (p, v) => (p.audio.keySound = v));
     toggle(ui.webcamVisible, (p, v) => (p.webcam.visible = v));
@@ -1344,9 +1408,13 @@ export class Editor {
         ? `${value}px`
         : input.id === "tilt"
           ? `${value}°`
-          : input.id === "silence-min" || input.id === "cards-duration"
+          : input.id === "silence-min" || input.id === "cards-duration" || input.id === "transition-duration"
             ? `${value.toFixed(1).replace(".", ",")} s`
-            : `${value.toFixed(input.id === "captions-size" ? 2 : 1).replace(".", ",")}×`;
+            : input.id === "cursor-shape-delay"
+              ? value
+                ? `${value} ms`
+                : "desligado"
+              : `${value.toFixed(input.id === "captions-size" ? 2 : 1).replace(".", ",")}×`;
   }
 
   private syncInspector() {
@@ -1378,18 +1446,23 @@ export class Editor {
     ui.cursorNote.textContent = take.cursorInVideo
       ? "O cursor foi gravado dentro do vídeo, então mostrar, tamanho e suavização não se aplicam. Grave com “Cursor no vídeo” desligado para usá-los."
       : "Esta gravação não tem dados do mouse.";
-    for (const control of [ui.cursorVisible, ui.cursorSize, ui.smoothing]) control.disabled = !redrawable;
+    const cursorControls = [ui.cursorVisible, ui.cursorSize, ui.smoothing, ui.cursorReturn, ui.cursorShapeDelay, ...ui.cursorIdle.querySelectorAll("input"), ...ui.cursorStyles.querySelectorAll("button")];
+    for (const control of cursorControls) (control as HTMLInputElement).disabled = !redrawable;
     const hasClicks = scene.clicks.length > 0;
-    for (const control of [ui.clickEffect, ui.spotlight, ui.clickSound]) {
-      control.disabled = !hasClicks;
-      control.closest("label")!.title = hasClicks ? "" : "Não há cliques nesta gravação";
-    }
+    for (const control of [ui.spotlight, ui.clickSize, ...ui.clickStyle.querySelectorAll("input"), ...ui.clickTone.querySelectorAll("input")]) control.disabled = !hasClicks;
+    for (const group of [ui.clickStyle, ui.clickTone, ui.spotlight.closest("label")!]) group.title = hasClicks ? "" : "Não há cliques nesta gravação";
     ui.cursorVisible.checked = project.cursor.visible;
     ui.cursorSize.value = String(project.cursor.size);
     ui.smoothing.value = String(project.cursor.smoothing);
-    ui.clickEffect.checked = project.cursor.clickEffect;
+    for (const button of ui.cursorStyles.querySelectorAll<HTMLElement>(".choice")) button.setAttribute("aria-checked", String(button.dataset.value === project.cursor.style));
+    this.setRadio(ui.cursorIdle, String(project.cursor.hideIdle));
+    ui.cursorReturn.checked = project.cursor.returnHome;
+    ui.cursorShapeDelay.value = String(project.cursor.shapeDelay);
+    this.setRadio(ui.clickStyle, project.cursor.clickEffect ? project.cursor.clickStyle : "none");
+    ui.clickSizeField.hidden = !project.cursor.clickEffect;
+    ui.clickSize.value = String(project.cursor.clickSize);
     ui.spotlight.checked = project.cursor.spotlight;
-    ui.clickSound.checked = project.audio.clickSound;
+    this.setRadio(ui.clickTone, project.audio.clickSound ? project.audio.clickTone : "none");
 
     const hasKeys = scene.keys.length > 0;
     ui.keysNote.hidden = hasKeys;
@@ -1419,6 +1492,13 @@ export class Editor {
       const seconds = (selected.end - selected.start) / 1000;
       ui.selectionTime.textContent = `${formatTime(selected.start)} – ${formatTime(selected.end)} · ${seconds.toFixed(1).replace(".", ",")} s`;
       ui.selectionZoom.hidden = kind !== "zoom" && kind !== "lens";
+      ui.selectionTransition.hidden = kind !== "cut";
+      if (kind === "cut") {
+        const transition = (selected as Cut).transition;
+        for (const button of ui.transitionKind.querySelectorAll<HTMLElement>(".choice")) button.setAttribute("aria-checked", String(button.dataset.value === (transition?.kind ?? "none")));
+        ui.transitionDurationField.hidden = !transition;
+        ui.transitionDuration.value = String((transition?.durationMs ?? DEFAULT_TRANSITION.durationMs) / 1000);
+      }
       ui.blurArea.hidden = kind !== "blur";
       ui.selectionSpeed.hidden = kind !== "speed";
       ui.selectionNote.hidden = this.selected?.track !== "notes";
@@ -1493,7 +1573,7 @@ export class Editor {
       if (document.activeElement !== input) input.value = value;
     }
     ui.cardsDuration.value = String(intro.durationMs / 1000);
-    for (const input of [ui.cardsDuration, ui.noteSize, ui.silenceMin, ui.padding, ui.radius, ui.shadow, ui.tilt, ui.bgBlur, ui.cursorSize, ui.smoothing, ui.zoomDefault, ui.zoomScale, ui.webcamSize, ui.volumeSystem, ui.volumeMic, ui.volumeMusic, ui.captionsSize]) {
+    for (const input of [ui.cardsDuration, ui.noteSize, ui.silenceMin, ui.padding, ui.radius, ui.shadow, ui.tilt, ui.bgBlur, ui.cursorSize, ui.smoothing, ui.cursorShapeDelay, ui.clickSize, ui.transitionDuration, ui.zoomDefault, ui.zoomScale, ui.webcamSize, ui.volumeSystem, ui.volumeMic, ui.volumeMusic, ui.captionsSize]) {
       this.showValue(input);
     }
     this.video.volume = Math.min(1, project.audio.system);
@@ -1652,6 +1732,29 @@ export class Editor {
     const length = cardLength(card);
     const opacity = this.card.kind === "intro" ? Math.min(1, (length - elapsed) / CARD_FADE) : Math.min(1, elapsed / CARD_FADE);
     return { card, opacity: Math.max(0, opacity) };
+  }
+
+  /**
+   * Sets or clears the transition on the selected cut, then plays the seam so the user sees it.
+   */
+  private setTransition(kind: TransitionKind | null) {
+    const scene = this.scene;
+    const id = this.selected?.track === "cuts" ? this.selected.id : null;
+    if (!scene || !id) return;
+    this.change((p) => {
+      const cut = p.cuts.find((candidate) => candidate.id === id);
+      if (cut) cut.transition = kind ? { kind, durationMs: cut.transition?.durationMs ?? DEFAULT_TRANSITION.durationMs } : undefined;
+    });
+    this.flushSave();
+    const cut = scene.project.cuts.find((candidate) => candidate.id === id);
+    if (!kind || !cut?.transition) return;
+    const seam = scene.time.toOutput(cut.start);
+    if (seam <= 0 || seam >= scene.time.duration) {
+      toast("A transição aparece quando há vídeo dos dois lados do corte");
+      return;
+    }
+    this.seek(scene.time.toSource(Math.max(0, seam - cut.transition.durationMs / 2 - 500)));
+    void this.ui.video.play();
   }
 
   private seek(time: number) {
@@ -1895,6 +1998,7 @@ export class Editor {
           overlay: false,
           cursor: null,
           clicks: [],
+          transition: null,
           blurs: this.selected?.track === "blurs" ? [] : state.blurs,
           background: { ...state.background, padding: 0, radius: 0, shadow: 0 },
         });
@@ -1946,7 +2050,7 @@ export class Editor {
           t,
           scene.clicks.filter((click) => click.b === "l").map((click) => click.t),
           scene.keys.map((key) => key.t),
-          { click: project.audio.clickSound, key: project.audio.keySound },
+          { click: project.audio.clickSound, tone: project.audio.clickTone, key: project.audio.keySound },
         );
       }
     }
@@ -1968,7 +2072,16 @@ export class Editor {
       this.lastTimelineKey = key;
       const zoomColor = "#ff9f0a";
       const tracks: Track[] = [
-        { key: "cuts", label: "Cortes", color: "#ff453a", items: project.cuts, text: () => "Cortado" },
+        {
+          key: "cuts",
+          label: "Cortes",
+          color: "#ff453a",
+          items: project.cuts,
+          text: (item) => {
+            const transition = (item as Cut).transition;
+            return transition ? `Cortado · ${TRANSITIONS.find((candidate) => candidate.id === transition.kind)?.name ?? ""}` : "Cortado";
+          },
+        },
         { key: "speed", label: "Velocidade", color: "#30d158", items: project.speed, text: (item) => speedLabel((item as SpeedRange).rate) },
         {
           key: "zoom",

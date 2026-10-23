@@ -10,6 +10,11 @@ const CLICK_EFFECT = 450;
 const SPOTLIGHT_HOLD = 1400;
 const SPOTLIGHT_FADE = 300;
 const KEY_HOLD = 1300;
+/** A resting cursor fades out over this long, and wakes up this long before it moves again. */
+const IDLE_FADE = 250;
+const IDLE_WAKE = 120;
+/** At most this long at the end is spent gliding the cursor back to where it started. */
+const RETURN_HOME = 900;
 const CAPTION_WORDS = 7;
 const CAPTION_GAP = 700;
 
@@ -26,6 +31,8 @@ export type Scene = {
   cursor: { at(t: number): [number, number] };
   camera: SpringPath;
   time: TimeMap;
+  /** Shape changes left after skipping quick ones, for the delay they were computed with. */
+  stable?: { delay: number; shapes: CursorEvent[] };
 };
 
 export function createScene(take: Take, project: Project, events: CursorEvent[], keys: KeyEvent[] = [], words: Word[] = []): Scene {
@@ -56,6 +63,53 @@ export function wordCuts(scene: Pick<Scene, "words" | "project">): Span[] {
 /** Rebuilds the time map after cuts, trim or deleted words change. */
 export function refreshTime(scene: Scene) {
   scene.time = new TimeMap(scene.project, wordCuts(scene));
+}
+
+/** Shape changes that lasted at least the project's delay; shorter ones are skipped. */
+function stableShapes(scene: Scene): CursorEvent[] {
+  const delay = scene.project.cursor.shapeDelay;
+  if (scene.stable?.delay === delay) return scene.stable.shapes;
+  const shapes = delay > 0 ? scene.shapes.filter((shape, index) => !scene.shapes[index + 1] || scene.shapes[index + 1].t - shape.t >= delay) : scene.shapes;
+  scene.stable = { delay, shapes };
+  return shapes;
+}
+
+/** 1 while the mouse moves; fades to 0 once it has rested `after` ms, and back just before it moves. */
+function idleOpacity(events: CursorEvent[], t: number, after: number) {
+  if (after <= 0 || !events.length) return 1;
+  let low = 0;
+  let high = events.length - 1;
+  let last = -1;
+  while (low <= high) {
+    const middle = (low + high) >> 1;
+    if (events[middle].t <= t) {
+      last = middle;
+      low = middle + 1;
+    } else high = middle - 1;
+  }
+  const resting = last < 0 ? t : t - events[last].t;
+  let opacity = resting <= after ? 1 : Math.max(0, 1 - (resting - after) / IDLE_FADE);
+  const next = events[last + 1];
+  if (opacity < 1 && next && next.t - t < IDLE_WAKE) opacity = Math.max(opacity, 1 - (next.t - t) / IDLE_WAKE);
+  return opacity;
+}
+
+const smooth = (x: number) => x * x * (3 - 2 * x);
+
+/** The transition playing at source time `t`, if a cut's seam is near. */
+function transitionAt(scene: Scene, t: number): FrameState["transition"] {
+  const { time, project } = scene;
+  const output = time.toOutput(t);
+  for (const cut of project.cuts) {
+    if (!cut.transition) continue;
+    const seam = time.toOutput(cut.start);
+    if (seam <= 0 || seam >= time.duration) continue;
+    const half = Math.min(cut.transition.durationMs / 2, seam, time.duration - seam);
+    const offset = output - seam;
+    if (half <= 0 || Math.abs(offset) >= half) continue;
+    return { kind: cut.transition.kind, amount: smooth(1 - Math.abs(offset) / half), phase: offset < 0 ? -1 : 1 };
+  }
+  return null;
 }
 
 function cursorKindAt(shapes: CursorEvent[], t: number): CursorKind {
@@ -104,14 +158,35 @@ export function frameState(scene: Scene, t: number, output: FrameState["output"]
   let cursorState: FrameState["cursor"] = null;
   let tip: [number, number] | null = null;
   if (!raw.empty) tip = cursor.at(t);
+  // For videos that loop: glide back to where the cursor was at the start.
+  let returning = false;
+  if (tip && project.cursor.returnHome) {
+    const total = scene.time.duration;
+    const span = Math.min(RETURN_HOME, total / 3);
+    const progress = (scene.time.toOutput(t) - (total - span)) / span;
+    if (progress > 0) {
+      const home = cursor.at(scene.time.toSource(0));
+      const k = smooth(Math.min(1, progress));
+      tip = [tip[0] + (home[0] - tip[0]) * k, tip[1] + (home[1] - tip[1]) * k];
+      returning = true;
+    }
+  }
   if (project.cursor.visible && !take.cursorInVideo && tip) {
-    const [rawX, rawY] = raw.at(t);
+    const [rawX, rawY] = returning ? tip : raw.at(t);
     // Off the captured area (outside a recorded window or the crop): hide instead of pinning to the edge.
     const inside = rawX >= bounds.x - 4 && rawY >= bounds.y - 4 && rawX <= bounds.x + bounds.width + 4 && rawY <= bounds.y + bounds.height + 4;
-    if (inside) {
+    const opacity = returning ? 1 : idleOpacity(scene.events, t, project.cursor.hideIdle);
+    if (inside && opacity > 0) {
       const press = clicks.find((click) => t - click.t >= 0 && t - click.t < PRESS);
       const squeeze = press ? 1 - 0.18 * Math.sin((Math.PI * (t - press.t)) / PRESS) : 1;
-      cursorState = { x: tip[0], y: tip[1], scale: project.cursor.size * squeeze, kind: cursorKindAt(scene.shapes, t) };
+      cursorState = {
+        x: tip[0],
+        y: tip[1],
+        scale: project.cursor.size * squeeze,
+        kind: returning ? "arrow" : cursorKindAt(stableShapes(scene), t),
+        style: project.cursor.style,
+        opacity,
+      };
     }
   }
 
@@ -154,6 +229,9 @@ export function frameState(scene: Scene, t: number, output: FrameState["output"]
     clicks: project.cursor.clickEffect
       ? clicks.map((click) => ({ x: click.x, y: click.y, age: t - click.t })).filter((click) => click.age >= 0 && click.age < CLICK_EFFECT)
       : [],
+    clickStyle: project.cursor.clickStyle,
+    clickSize: project.cursor.clickSize,
+    transition: transitionAt(scene, t),
     spotlight: project.cursor.spotlight && !raw.empty ? spotlightAt(clicks, t) * 0.85 : 0,
     lens:
       lensSegment && tip

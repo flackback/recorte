@@ -1925,6 +1925,72 @@ input[type="range"]:focus-visible::-webkit-slider-thumb {
   font-size: 12.5px;
 }
 
+/* ---------- choice grids (cursor styles, transitions) ---------- */
+
+.field-label {
+  margin-bottom: -4px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.choices {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+}
+
+.choice {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  min-height: 32px;
+  padding: 6px 4px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--surface);
+  color: var(--muted);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  transition: border-color var(--fast) var(--ease), background var(--fast) var(--ease), color var(--fast) var(--ease), transform var(--fast) var(--ease);
+}
+
+.choice:hover:not(:disabled) {
+  border-color: var(--faint);
+  color: var(--text);
+}
+
+.choice:active:not(:disabled) {
+  transform: scale(0.96);
+}
+
+.choice[aria-checked="true"] {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, var(--surface));
+  color: var(--text);
+  font-weight: 600;
+}
+
+.choice:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.choice:focus-visible {
+  outline: none;
+  box-shadow: var(--focus);
+}
+
+.cursor-styles .choice {
+  padding: 8px 4px 6px;
+}
+
+.transitions {
+  grid-template-columns: repeat(2, 1fr);
+}
+
 /* ---------- ready-made styles ---------- */
 
 .styles {

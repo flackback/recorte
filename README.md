@@ -35,7 +35,10 @@ Gravador de tela e editor para Windows, feito com Tauri 2 (Rust + TypeScript, We
 - **Visual:** fundos em degradê ou imagem (com desfoque), margem, cantos, sombra, proporção (original, 16:9, 9:16, 1:1, 4:3), moldura de janela ou notebook, inclinação 3D, recorte de área.
 - **Cursor:**
   - redesenhado e suavizado, com tamanho ajustável e o formato real (seta, mão, texto);
-  - "aperto" e anel ao clicar, destaque (spotlight) ao clicar e som de clique;
+  - estilos: Clássico, Claro, Ponto, Pizza, Melancia e Foguete;
+  - esconder quando parado (0,5 s a 5 s), voltar ao início no fim (para vídeos em loop) e ignorar trocas rápidas de formato, para o cursor não piscar sobre links;
+  - "aperto" ao clicar, efeito de clique (Anel ou Líquido, com tamanho), destaque (spotlight) e som de clique (Clique, Suave ou Mecânico);
+  - cliques na barra de gravação e nas outras janelas do Recorte não entram no vídeo e não geram zoom;
   - teclas na tela: só atalhos ou tudo o que foi digitado, com som de teclado.
 - **Zoom:**
   - automático a partir dos cliques, com a câmera seguindo o cursor;
@@ -47,6 +50,7 @@ Gravador de tela e editor para Windows, feito com Tauri 2 (Rust + TypeScript, We
   - corte do início e do fim, e faixas de cortes, velocidade, zoom e lente, textos e desfoque;
   - itens que acontecem ao mesmo tempo (um texto com uma seta) ficam em linhas separadas na faixa;
   - Ctrl + roda aproxima.
+- **Transições:** selecione um corte e escolha a transição na emenda: Esmaecer, Zoom com desfoque, Girar, Queimar, Desintegrar ou Onda, com duração de 0,3 a 2 s. A prévia toca a emenda ao escolher, e um losango marca o corte na timeline.
 - **Desfoque de áreas:** para esconder informações sensíveis, por intervalo de tempo.
 - **Acelerar trechos:** 1,5×, 2×, 4× ou 8× (botão Acelerar ou tecla S), para digitação e telas de carregamento. O som do trecho acelerado fica mudo.
 - **Textos, setas e destaques:** por trecho (botão Texto ou tecla T), com cor, tamanho e posição arrastada na prévia. Ficam fixos no quadro final, mesmo com zoom.
@@ -117,7 +121,7 @@ O Recorte tem um servidor MCP. Com ele, uma IA (Claude Code, Claude Desktop ou o
 | Grupo | Ferramentas |
 |---|---|
 | Ler | `list_takes`, `get_take`, `get_transcript`, `get_activity` (cliques, rolagem, teclas), `find_pauses` |
-| Cortar | `set_trim`, `add_cuts`, `remove_cuts`, `cut_words`, `restore_words`, `remove_silences`, `cut_fillers` |
+| Cortar | `set_trim`, `add_cuts`, `remove_cuts`, `cut_words`, `restore_words`, `remove_silences`, `cut_fillers`, `set_transition` |
 | Velocidade | `add_speed`, `remove_speeds` |
 | Zoom e desfoque | `add_zoom` (zoom ou lente), `auto_zoom`, `remove_zooms`, `add_blur`, `remove_blurs`, `update_item` |
 | Textos e telas | `add_note`, `update_note`, `remove_notes`, `set_title_cards` |

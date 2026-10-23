@@ -10,6 +10,38 @@ export type BlurRegion = Range & { x: number; y: number; width: number; height: 
 export type SpeedRange = Range & { rate: number };
 export const SPEEDS = [1.5, 2, 4, 8];
 
+/** Effects played across the seam a cut leaves: the clip before goes out, the clip after comes in. */
+export type TransitionKind = "fade" | "zoomblur" | "flip" | "burn" | "dissolve" | "wave";
+export type Transition = { kind: TransitionKind; durationMs: number };
+export const TRANSITIONS: { id: TransitionKind; name: string }[] = [
+  { id: "fade", name: "Esmaecer" },
+  { id: "zoomblur", name: "Zoom com desfoque" },
+  { id: "flip", name: "Girar" },
+  { id: "burn", name: "Queimar" },
+  { id: "dissolve", name: "Desintegrar" },
+  { id: "wave", name: "Onda" },
+];
+export const DEFAULT_TRANSITION: Transition = { kind: "zoomblur", durationMs: 700 };
+/** A removed stretch; the seam it leaves can carry a transition. */
+export type Cut = Range & { transition?: Transition };
+
+export type CursorStyle = "classic" | "light" | "dot" | "pizza" | "melon" | "rocket";
+export const CURSOR_STYLES: { id: CursorStyle; name: string }[] = [
+  { id: "classic", name: "Clássico" },
+  { id: "light", name: "Claro" },
+  { id: "dot", name: "Ponto" },
+  { id: "pizza", name: "Pizza" },
+  { id: "melon", name: "Melancia" },
+  { id: "rocket", name: "Foguete" },
+];
+export type ClickStyle = "ring" | "liquid";
+export type ClickTone = "tick" | "soft" | "mech";
+export const CLICK_TONES: { id: ClickTone; name: string }[] = [
+  { id: "tick", name: "Clique" },
+  { id: "soft", name: "Suave" },
+  { id: "mech", name: "Mecânico" },
+];
+
 export type NoteKind = "text" | "arrow" | "box";
 /**
  * Text, arrow or highlight box drawn over the finished frame, so it stays put while the camera
@@ -50,7 +82,7 @@ export type Project = {
   version: 2;
   trim: { start: number; end: number };
   /** Ranges removed from the middle of the take. */
-  cuts: Range[];
+  cuts: Cut[];
   /** Words removed in the transcript; their time ranges are cut too. */
   deletedWords: number[];
   aspect: Aspect;
@@ -69,7 +101,22 @@ export type Project = {
   frame: Frame;
   /** 3D tilt of the screen in degrees; 0 is flat. */
   tilt: number;
-  cursor: { visible: boolean; size: number; smoothing: number; clickEffect: boolean; spotlight: boolean };
+  cursor: {
+    visible: boolean;
+    size: number;
+    smoothing: number;
+    style: CursorStyle;
+    /** Fades the cursor out after it rests this long (ms); 0 never hides it. */
+    hideIdle: number;
+    /** Glides back to where it started at the end, for videos that loop. */
+    returnHome: boolean;
+    /** Hand and text-beam changes shorter than this (ms) are skipped, so passing over links doesn't flicker. */
+    shapeDelay: number;
+    clickEffect: boolean;
+    clickStyle: ClickStyle;
+    clickSize: number;
+    spotlight: boolean;
+  };
   keys: { visible: boolean; mode: "shortcuts" | "all" };
   webcam: { visible: boolean; size: number; corner: Corner; shape: "circle" | "rounded" };
   audio: {
@@ -79,6 +126,7 @@ export type Project = {
     music: string | null;
     musicVolume: number;
     clickSound: boolean;
+    clickTone: ClickTone;
     keySound: boolean;
     enhance: boolean;
   };
@@ -217,10 +265,22 @@ export function defaultProject(take: Take, events: CursorEvent[]): Project {
     background: { kind: "gradient", preset: "aurora", image: null, blur: 0, padding: 0.07, radius: 14, shadow: 0.6 },
     frame: "none",
     tilt: 0,
-    cursor: { visible: !take.cursorInVideo, size: 1.4, smoothing: 0.6, clickEffect: true, spotlight: false },
+    cursor: {
+      visible: !take.cursorInVideo,
+      size: 1.4,
+      smoothing: 0.6,
+      style: "classic",
+      hideIdle: 0,
+      returnHome: false,
+      shapeDelay: 300,
+      clickEffect: true,
+      clickStyle: "ring",
+      clickSize: 1,
+      spotlight: false,
+    },
     keys: { visible: Boolean(take.keys), mode: "shortcuts" },
     webcam: { visible: Boolean(take.webcam), size: 0.22, corner: "br", shape: "circle" },
-    audio: { system: 1, mic: 1, music: null, musicVolume: 0.25, clickSound: false, keySound: false, enhance: false },
+    audio: { system: 1, mic: 1, music: null, musicVolume: 0.25, clickSound: false, clickTone: "tick", keySound: false, enhance: false },
     captions: { visible: false, size: 1, position: "bottom" },
     zoom: { defaultScale, segments: autoZooms(events, take.durationMs, defaultScale) },
     blurs: [],

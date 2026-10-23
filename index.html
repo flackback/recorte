@@ -380,6 +380,7 @@
                   <h3>Cursor</h3>
                   <p class="note" id="cursor-note" hidden></p>
                   <label class="switch"><input type="checkbox" id="cursor-visible" /><span>Mostrar cursor</span></label>
+                  <div class="choices cursor-styles" id="cursor-styles" role="radiogroup" aria-label="Estilo do cursor"></div>
                   <label class="slider">
                     <span>Tamanho <output data-value-for="cursor-size"></output></span>
                     <input type="range" id="cursor-size" min="0.6" max="3" step="0.05" />
@@ -388,12 +389,42 @@
                     <span>Suavização <output data-value-for="cursor-smoothing"></output></span>
                     <input type="range" id="cursor-smoothing" min="0" max="1" step="0.05" />
                   </label>
+                  <span class="field-label">Esconder quando parado</span>
+                  <div class="segmented small" id="cursor-idle" role="radiogroup" aria-label="Esconder quando parado">
+                    <label><input type="radio" name="cursor-idle" value="0" />Nunca</label>
+                    <label><input type="radio" name="cursor-idle" value="500" />0,5 s</label>
+                    <label><input type="radio" name="cursor-idle" value="1000" />1 s</label>
+                    <label><input type="radio" name="cursor-idle" value="2000" />2 s</label>
+                    <label><input type="radio" name="cursor-idle" value="5000" />5 s</label>
+                  </div>
+                  <label class="switch"><input type="checkbox" id="cursor-return" /><span>Voltar ao início no fim</span></label>
+                  <p class="hint">O cursor desliza de volta ao ponto onde começou, para vídeos em loop.</p>
+                  <label class="slider">
+                    <span>Ignorar trocas rápidas <output data-value-for="cursor-shape-delay"></output></span>
+                    <input type="range" id="cursor-shape-delay" min="0" max="1000" step="25" />
+                  </label>
+                  <p class="hint">O cursor vira mão sobre links e barra sobre texto. Trocas mais curtas que isso são ignoradas, para o cursor não piscar.</p>
                 </section>
                 <section>
                   <h3>Cliques</h3>
-                  <label class="switch"><input type="checkbox" id="click-effect" /><span>Anel no clique</span></label>
+                  <span class="field-label">Efeito</span>
+                  <div class="segmented small" id="click-style" role="radiogroup" aria-label="Efeito do clique">
+                    <label><input type="radio" name="click-style" value="none" />Nenhum</label>
+                    <label><input type="radio" name="click-style" value="ring" />Anel</label>
+                    <label><input type="radio" name="click-style" value="liquid" />Líquido</label>
+                  </div>
+                  <label class="slider" id="click-size-field">
+                    <span>Tamanho do efeito <output data-value-for="click-size"></output></span>
+                    <input type="range" id="click-size" min="0.5" max="3" step="0.1" />
+                  </label>
                   <label class="switch"><input type="checkbox" id="spotlight" /><span>Destacar ao clicar</span></label>
-                  <label class="switch"><input type="checkbox" id="click-sound" /><span>Som de clique</span></label>
+                  <span class="field-label">Som</span>
+                  <div class="segmented small" id="click-tone" role="radiogroup" aria-label="Som do clique">
+                    <label><input type="radio" name="click-tone" value="none" />Nenhum</label>
+                    <label><input type="radio" name="click-tone" value="tick" />Clique</label>
+                    <label><input type="radio" name="click-tone" value="soft" />Suave</label>
+                    <label><input type="radio" name="click-tone" value="mech" />Mecânico</label>
+                  </div>
                 </section>
                 <section>
                   <h3>Teclas</h3>
@@ -443,6 +474,14 @@
                       <label title="Para baixo e para a direita"><input type="radio" name="note-direction" value="se" />↘</label>
                     </div>
                     <button class="secondary wide" id="note-place"><svg class="i"><use href="#i-crop" /></svg>Posicionar no vídeo…</button>
+                  </div>
+                  <div class="selection-transition" id="selection-transition">
+                    <span class="field-label">Transição na emenda</span>
+                    <div class="choices transitions" id="transition-kind" role="radiogroup" aria-label="Transição"></div>
+                    <label class="slider" id="transition-duration-field">
+                      <span>Duração <output data-value-for="transition-duration"></output></span>
+                      <input type="range" id="transition-duration" min="0.3" max="2" step="0.1" />
+                    </label>
                   </div>
                   <div class="selection-speed" id="selection-speed">
                     <div class="segmented small" id="speed-rate" role="radiogroup" aria-label="Velocidade">

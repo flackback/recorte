@@ -111,7 +111,8 @@ function mergeCuts(cuts: Range[], added: { start: number; end: number }[]): Rang
     const touching = result.filter((cut) => cut.start <= range.end && cut.end >= range.start);
     const start = Math.min(range.start, ...touching.map((cut) => cut.start));
     const end = Math.max(range.end, ...touching.map((cut) => cut.end));
-    result = [...result.filter((cut) => !touching.includes(cut)), { id: touching[0]?.id ?? newId(), start, end }];
+    // The first touched cut keeps its id and transition.
+    result = [...result.filter((cut) => !touching.includes(cut)), { ...touching[0], id: touching[0]?.id ?? newId(), start, end }];
   }
   return result.sort((a, b) => a.start - b.start);
 }
@@ -353,6 +354,28 @@ tool(
       if (missing.length) throw new Error(`Cortes não encontrados: ${missing.join(", ")}.`);
       project.cuts = project.cuts.filter((cut) => !ids.includes(cut.id));
       return `${ids.length} ${ids.length === 1 ? "corte removido" : "cortes removidos"}`;
+    }),
+);
+
+tool(
+  "set_transition",
+  "Põe, troca ou tira a transição na emenda de um corte. A transição tira o trecho de antes e traz o de depois: esmaecer (fade), zoom com desfoque (zoomblur), girar (flip), queimar (burn), desintegrar (dissolve) ou onda (wave).",
+  {
+    take: takeArg,
+    cut: z.string().describe("Id do corte (de get_take)."),
+    kind: z.enum(["none", "fade", "zoomblur", "flip", "burn", "dissolve", "wave"]).describe("none tira a transição."),
+    durationMs: z.number().min(300).max(2000).optional().describe("Duração total, metade antes e metade depois da emenda. Padrão 700."),
+  },
+  ({ take, cut: id, kind, durationMs }) =>
+    edit(take, (project) => {
+      const cut = project.cuts.find((candidate) => candidate.id === id);
+      if (!cut) throw new Error(`Corte não encontrado: ${id}.`);
+      if (kind === "none") {
+        delete cut.transition;
+        return "transição removida";
+      }
+      cut.transition = { kind, durationMs: durationMs ?? cut.transition?.durationMs ?? 700 };
+      return `transição ${kind} de ${seconds(cut.transition.durationMs)}`;
     }),
 );
 
@@ -743,7 +766,13 @@ const settingsShape = {
       visible: z.boolean().optional(),
       size: z.number().min(0.6).max(3).optional(),
       smoothing: z.number().min(0).max(1).optional(),
-      clickEffect: z.boolean().optional().describe("Aperto e anel ao clicar."),
+      style: z.enum(["classic", "light", "dot", "pizza", "melon", "rocket"]).optional().describe("Estilo: clássico (escuro), claro, ponto, pizza, melancia ou foguete."),
+      hideIdle: z.number().min(0).max(10000).optional().describe("Esconde o cursor parado depois de tantos ms. 0 nunca esconde."),
+      returnHome: z.boolean().optional().describe("No fim, o cursor volta ao ponto de início (para vídeos em loop)."),
+      shapeDelay: z.number().min(0).max(1000).optional().describe("Ignora trocas de forma (mão, barra de texto) mais curtas que tantos ms."),
+      clickEffect: z.boolean().optional().describe("Efeito ao clicar."),
+      clickStyle: z.enum(["ring", "liquid"]).optional().describe("Efeito do clique: anel ou líquido."),
+      clickSize: z.number().min(0.5).max(3).optional().describe("Tamanho do efeito do clique."),
       spotlight: z.boolean().optional().describe("Destaque em volta do cursor ao clicar."),
     })
     .optional(),
@@ -762,6 +791,7 @@ const settingsShape = {
       mic: z.number().min(0).max(2).optional().describe("Volume do microfone."),
       musicVolume: z.number().min(0).max(1).optional(),
       clickSound: z.boolean().optional(),
+      clickTone: z.enum(["tick", "soft", "mech"]).optional().describe("Som do clique: clique, suave ou mecânico."),
       keySound: z.boolean().optional(),
       enhance: z.boolean().optional().describe("Melhorar a voz: remove ruído e nivela o microfone. Ligar precisa do app aberto na primeira vez."),
     })

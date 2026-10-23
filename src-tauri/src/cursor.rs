@@ -1,13 +1,13 @@
 use std::collections::HashSet;
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicI64, AtomicIsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicIsize, Ordering};
 use std::sync::mpsc;
 use std::thread::{self, JoinHandle};
 
 use anyhow::anyhow;
 use serde::Serialize;
 use windows::Win32::Foundation::{LPARAM, LRESULT, POINT, WPARAM};
-use windows::Win32::System::Threading::GetCurrentThreadId;
+use windows::Win32::System::Threading::{GetCurrentProcessId, GetCurrentThreadId};
 use windows::Win32::UI::HiDpi::{DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, SetThreadDpiAwarenessContext};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetAsyncKeyState, MAPVK_VK_TO_CHAR, MapVirtualKeyW, VK_BACK, VK_CONTROL, VK_DELETE, VK_DOWN, VK_END, VK_ESCAPE, VK_F1,
@@ -15,10 +15,10 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
     VK_RETURN, VK_RIGHT, VK_RMENU, VK_RSHIFT, VK_RWIN, VK_SHIFT, VK_SPACE, VK_TAB, VK_UP,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    CURSORINFO, CallNextHookEx, GetCursorInfo, GetCursorPos, GetMessageW, HCURSOR, IDC_ARROW, IDC_HAND, IDC_IBEAM, KBDLLHOOKSTRUCT,
+    CURSORINFO, CallNextHookEx, GA_ROOT, GetAncestor, GetCursorInfo, GetWindowThreadProcessId, GetCursorPos, GetMessageW, HCURSOR, IDC_ARROW, IDC_HAND, IDC_IBEAM, KBDLLHOOKSTRUCT,
     KillTimer, LoadCursorW, MSG, MSLLHOOKSTRUCT, PostThreadMessageW, SetTimer, SetWindowsHookExW, UnhookWindowsHookEx, WH_KEYBOARD_LL,
     WH_MOUSE_LL, WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL,
-    WM_QUIT, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SYSKEYDOWN, WM_SYSKEYUP, WM_TIMER,
+    WM_QUIT, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SYSKEYDOWN, WM_SYSKEYUP, WM_TIMER, WindowFromPoint,
 };
 
 use crate::clock::now_hns;
@@ -86,6 +86,24 @@ static EVENTS: Mutex<Vec<RawEvent>> = Mutex::new(Vec::new());
 static KEYS: Mutex<Vec<KeyPress>> = Mutex::new(Vec::new());
 static HELD: Mutex<Option<HashSet<u32>>> = Mutex::new(None);
 static LAST_MOVE: AtomicI64 = AtomicI64::new(0);
+/// A button went down on one of Recorte's own windows; its release is dropped too.
+static OWN_PRESS: AtomicBool = AtomicBool::new(false);
+
+/// Whether a screen point is over a window of this app (the recording bar, the drawing layer, the
+/// main window). Those windows are not in the video, so clicks on them must not make zooms or effects.
+fn over_own_window(point: POINT) -> bool {
+    unsafe {
+        let hit = WindowFromPoint(point);
+        if hit.is_invalid() {
+            return false;
+        }
+        // The deepest window belongs to the WebView2 process; its top-level window is ours.
+        let root = GetAncestor(hit, GA_ROOT);
+        let mut process = 0u32;
+        GetWindowThreadProcessId(if root.is_invalid() { hit } else { root }, Some(&mut process));
+        process == GetCurrentProcessId()
+    }
+}
 static LAST_SHAPE: AtomicIsize = AtomicIsize::new(-1);
 
 /// Logs the mouse (and optionally the keyboard) through low-level hooks, plus the cursor shape,
@@ -212,7 +230,14 @@ unsafe extern "system" fn mouse_proc(code: i32, wparam: WPARAM, lparam: LPARAM) 
                 }
                 due
             }
-            Some(_) => true,
+            Some(Kind::Down) => {
+                let own = over_own_window(info.pt);
+                OWN_PRESS.store(own, Ordering::Relaxed);
+                !own
+            }
+            Some(Kind::Up) => !OWN_PRESS.swap(false, Ordering::Relaxed),
+            Some(Kind::Wheel) => !over_own_window(info.pt),
+            Some(Kind::Shape) => true,
             None => false,
         };
         if let (true, Some(kind)) = (keep, kind) {

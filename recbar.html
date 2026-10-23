@@ -38,13 +38,14 @@
         user-select: none;
       }
 
-      /* The window is sized to this, so nothing transparent catches clicks around it. */
+      /* The window is sized to this. The padding is room for the shadow, kept small because the
+         transparent edge still catches clicks. */
       .shell {
         display: inline-flex;
         flex-direction: column;
         align-items: center;
         gap: 6px;
-        padding: 4px;
+        padding: 8px 12px 16px;
       }
 
       .bar,
@@ -57,7 +58,8 @@
         border: 1px solid var(--line);
         border-radius: 999px;
         background: var(--surface);
-        box-shadow: 0 8px 24px rgb(0 0 0 / 0.35), 0 1px 0 rgb(255 255 255 / 0.06) inset;
+        /* Fits inside the shell padding: 8px above, 12px on the sides, 16px below. */
+        box-shadow: 0 4px 12px rgb(0 0 0 / 0.4), 0 1px 2px rgb(0 0 0 / 0.3), 0 1px 0 rgb(255 255 255 / 0.06) inset;
       }
 
       .grip {

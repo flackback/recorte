@@ -89,7 +89,7 @@ fn bring_to_top(window: &tauri::WebviewWindow) {
 
 pub const RECBAR: &str = "recbar";
 /// Starting size; the bar then fits itself to its content (and to the drawing tray).
-const RECBAR_SIZE: (u32, u32) = (560, 52);
+const RECBAR_SIZE: (u32, u32) = (576, 68);
 
 /// The small floating bar shown while recording (time, pause, mark, drawing tools, stop), at the top of the
 /// recorded monitor. It is kept out of the recording.
@@ -118,7 +118,7 @@ pub async fn recbar_open(app: AppHandle, monitor: usize) -> Result<(), String> {
     let height = (RECBAR_SIZE.1 as f64 * scale) as u32;
     let left = rect.left + ((rect.right - rect.left) as u32).saturating_sub(width) as i32 / 2;
     window.set_size(PhysicalSize::new(width, height)).map_err(|error| error.to_string())?;
-    window.set_position(PhysicalPosition::new(left, rect.top + (16.0 * scale) as i32)).map_err(|error| error.to_string())?;
+    window.set_position(PhysicalPosition::new(left, rect.top + (8.0 * scale) as i32)).map_err(|error| error.to_string())?;
     crate::exclude_window(&window);
     window.show().map_err(|error| error.to_string())?;
     Ok(())

@@ -238,7 +238,7 @@ async function createMixer(scene: Scene): Promise<Mixer | null> {
           node.start(at - start);
         });
       };
-      if (clicks.length) schedule([clickSound(mixer)], clicks, 0.6);
+      if (clicks.length) schedule([clickSound(mixer, project.audio.clickTone)], clicks, 0.6);
       if (keys.length) schedule(keySounds(mixer), keys, 0.5);
 
       return mixer.startRendering();

@@ -449,6 +449,24 @@ export class Timeline {
     }
     context.restore();
 
+    // A transition on a cut's seam: a small diamond at the bottom of the clip.
+    for (const cut of cutTrack?.items ?? []) {
+      if (!(cut as Range & { transition?: unknown }).transition) continue;
+      const x = (this.toX(cut.start) + this.toX(cut.end)) / 2;
+      const y = CLIP.top + CLIP.height - 8;
+      context.save();
+      context.translate(x, y);
+      context.rotate(Math.PI / 4);
+      context.fillStyle = accent;
+      context.strokeStyle = "#ffffff";
+      context.lineWidth = 1.5;
+      context.beginPath();
+      context.roundRect(-5, -5, 10, 10, 2);
+      context.fill();
+      context.stroke();
+      context.restore();
+    }
+
     context.strokeStyle = accent;
     context.lineWidth = 1.5;
     context.beginPath();

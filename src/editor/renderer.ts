@@ -4,7 +4,7 @@
  * text overlay (keys, captions). Preview and export share this code, so both look identical.
  */
 
-import type { Frame, Rect } from "./project";
+import { CURSOR_STYLES, TRANSITIONS, type ClickStyle, type CursorStyle, type Frame, type Rect, type TransitionKind } from "./project";
 
 export type CursorKind = "arrow" | "hand" | "text";
 
@@ -22,8 +22,12 @@ export type FrameState = {
   zoom: number;
   focus: [number, number];
   /** Cursor tip in video pixels; `scale` is relative to a normal-size cursor. */
-  cursor: { x: number; y: number; scale: number; kind: CursorKind } | null;
+  cursor: { x: number; y: number; scale: number; kind: CursorKind; style: CursorStyle; opacity: number } | null;
   clicks: { x: number; y: number; age: number }[];
+  clickStyle: ClickStyle;
+  clickSize: number;
+  /** Effect across a cut: `amount` rises to 1 at the seam and falls back; `phase` is -1 before it, 1 after. */
+  transition: { kind: TransitionKind; amount: number; phase: number } | null;
   /** 0–1 dimming of everything but the area around the cursor. */
   spotlight: number;
   /** Magnifier at a point (video pixels); `amount` 0–1 animates it in and out. */
@@ -45,6 +49,10 @@ const CLICK_DURATION = 450;
 const CURSOR_BOX = 40;
 const CURSOR_TIPS: Record<CursorKind, [number, number]> = { arrow: [8, 6], hand: [15, 7], text: [20, 20] };
 const CURSOR_SLOTS: CursorKind[] = ["arrow", "hand", "text"];
+/** Styles drawn as one picture for every kind, with the hotspot in the middle. */
+const CURSOR_PICTURES: Partial<Record<CursorStyle, string>> = { pizza: "\u{1F355}", melon: "\u{1F349}", rocket: "\u{1F680}" };
+const cursorTip = (style: CursorStyle, kind: CursorKind): [number, number] =>
+  style === "classic" || style === "light" ? CURSOR_TIPS[kind] : [CURSOR_BOX / 2, CURSOR_BOX / 2];
 const SPRITE = 256;
 const LENS_RADIUS = 120;
 const UNIFORM_VECS = 19 + MAX_BLURS + MAX_CLICKS;
@@ -68,8 +76,8 @@ struct Uniforms {
   extra: vec4f,     // blur count, blur strength (uv), base visible, unused
   base: vec4f,      // laptop base rect (composed px)
   webcam_uv: vec4f, // bubble uv -> camera uv: scale xy, offset xy
-  pad1: vec4f,
-  pad2: vec4f,
+  look: vec4f,      // cursor style row, click style (0 ring, 1 liquid), unused, transition kind (0 none)
+  trans: vec4f,     // transition amount, unused x3
   blurs: array<vec4f, ${MAX_BLURS}>,
   clicks: array<vec4f, ${MAX_CLICKS}>,
 }
@@ -119,6 +127,52 @@ fn untilt(p: vec2f) -> vec2f {
   return center + vec2f(dot(hit, right), dot(hit, up));
 }
 
+fn hash(p: vec2f) -> f32 {
+  return fract(sin(dot(p, vec2f(127.1, 311.7))) * 43758.5453);
+}
+
+fn vnoise(p: vec2f) -> f32 {
+  let i = floor(p);
+  let f = fract(p);
+  let s = f * f * (3.0 - 2.0 * f);
+  return mix(mix(hash(i), hash(i + vec2f(1.0, 0.0)), s.x), mix(hash(i + vec2f(0.0, 1.0)), hash(i + vec2f(1.0, 1.0)), s.x), s.y);
+}
+
+fn fbm(p: vec2f) -> f32 {
+  var v = 0.0;
+  var a = 0.5;
+  var x = p;
+  for (var i = 0; i < 4; i++) {
+    v += a * vnoise(x);
+    x *= 2.0;
+    a *= 0.5;
+  }
+  return v;
+}
+
+// Transition mask at a composed point: x is how much of the frame is left, y a glowing edge, z a scorch.
+fn trans_mask(q: vec2f) -> vec3f {
+  let kind = u.look.w;
+  let amount = u.trans.x;
+  let uv = (q - u.box.xy) / max(u.box.z, 1.0);
+  if (kind > 3.5 && kind < 4.5) {
+    // Burn: a noisy edge sweeps across, glowing as it eats the frame.
+    let n = fbm(uv * 4.0) * 0.7 + 0.3 * clamp(uv.x, 0.0, 1.0);
+    let edge = amount * 1.02 - 0.02;
+    let left = smoothstep(edge - 0.006, edge + 0.006, n);
+    let on = left * step(0.001, amount);
+    return vec3f(left, (1.0 - smoothstep(0.0, 0.022, n - edge)) * on, (1.0 - smoothstep(0.02, 0.08, n - edge)) * on);
+  }
+  if (kind > 4.5 && kind < 5.5) {
+    // Dissolve: the frame breaks into specks that vanish from left to right.
+    let cell = floor(q / max(min(u.frame.x, u.frame.y) * 0.007, 1.0));
+    let v = hash(cell) * 0.6 + 0.4 * clamp(uv.x, 0.0, 1.0);
+    let left = step(amount * 1.02, v);
+    return vec3f(left, (1.0 - smoothstep(0.0, 0.1, v - amount)) * left * step(0.001, amount), 0.0);
+  }
+  return vec3f(1.0, 0.0, 0.0);
+}
+
 fn sample_screen(uv: vec2f) -> vec3f {
   let src = mix(u.crop.xy, u.crop.zw, uv);
   var color = textureSampleBaseClampToEdge(video, smp, src).rgb;
@@ -139,6 +193,33 @@ fn sample_screen(uv: vec2f) -> vec3f {
     }
   }
   return color;
+}
+
+// The recording at a point, through a zoom-blur or wave transition when one is playing.
+fn sample_content(uv0: vec2f) -> vec3f {
+  let kind = u.look.w;
+  let amount = u.trans.x;
+  var uv = uv0;
+  if (kind > 5.5) {
+    uv.x += sin(uv.y * 28.0 + amount * 9.0) * 0.035 * amount;
+    uv.y += sin(uv.x * 19.0 + amount * 7.0) * 0.02 * amount;
+    let split = vec2f(0.012 * amount, 0.0);
+    let r = sample_screen(clamp(uv + split, vec2f(0.0), vec2f(1.0))).r;
+    let g = sample_screen(clamp(uv, vec2f(0.0), vec2f(1.0))).g;
+    let b = sample_screen(clamp(uv - split, vec2f(0.0), vec2f(1.0))).b;
+    return vec3f(r, g, b);
+  }
+  if (kind > 1.5 && kind < 2.5 && amount > 0.001) {
+    let center = vec2f(0.5);
+    let grow = 1.0 + amount * 0.35;
+    var sum = vec3f(0.0);
+    for (var k = 0; k < 12; k++) {
+      let s = 1.0 - amount * 0.25 * f32(k) / 11.0;
+      sum += sample_screen(clamp(center + (uv - center) / grow * s, vec2f(0.0), vec2f(1.0)));
+    }
+    return mix(sum / 12.0, vec3f(1.0), amount * amount * 0.55);
+  }
+  return sample_screen(clamp(uv, vec2f(0.0), vec2f(1.0)));
 }
 
 @fragment
@@ -164,17 +245,27 @@ fn fs(@builtin(position) frag: vec4f) -> @location(0) vec4f {
   let blur = max(min(size.x, size.y) * 0.035, 1.0);
   let frame_kind = u.tilt.w;
 
+  // How much of the frame a transition leaves: fades, turns edge-on, burns or breaks apart.
+  let tkind = u.look.w;
+  let tamount = u.trans.x;
+  var show = 1.0;
+  if (tkind > 0.5 && tkind < 1.5) { show = 1.0 - tamount; }
+  if (tkind > 2.5 && tkind < 3.5) { show = 1.0 - smoothstep(0.86, 0.99, tamount); }
+  let mask = trans_mask(q);
+  var shadow_show = show;
+  if (tkind > 3.5 && tkind < 5.5) { shadow_show = 1.0 - tamount; }
+
   // Shadow under the frame (and the laptop base).
   var ds = sd_rect(q - vec2f(0.0, blur * 0.4), u.box, radius);
   if (u.extra.z > 0.5) { ds = min(ds, sd_rect(q - vec2f(0.0, blur * 0.4), u.base, u.base.w * 0.5)); }
-  color = mix(color, vec3f(0.0), u.camera.w * 0.55 * (1.0 - smoothstep(-blur, blur * 1.6, ds)));
+  color = mix(color, vec3f(0.0), u.camera.w * 0.55 * shadow_show * (1.0 - smoothstep(-blur, blur * 1.6, ds)));
 
   // Frame chrome: window title bar or laptop bezel and base.
   if (frame_kind > 0.5) {
     if (u.extra.z > 0.5) {
       let db = sd_rect(q, u.base, u.base.w * 0.5);
       let base_color = mix(vec3f(0.78, 0.79, 0.82), vec3f(0.62, 0.63, 0.66), clamp((q.y - u.base.y) / u.base.w, 0.0, 1.0));
-      color = mix(color, base_color, clamp(0.5 - db / px, 0.0, 1.0));
+      color = mix(color, base_color, clamp(0.5 - db / px, 0.0, 1.0) * show * mask.x);
     }
     let dbox = sd_rect(q, u.box, radius);
     var chrome = vec3f(0.11, 0.11, 0.12);
@@ -191,14 +282,14 @@ fn fs(@builtin(position) frag: vec4f) -> @location(0) vec4f {
         chrome = mix(chrome, dot_color, clamp(0.5 - dd / px, 0.0, 1.0));
       }
     }
-    color = mix(color, chrome, clamp(0.5 - dbox / px, 0.0, 1.0));
+    color = mix(color, chrome, clamp(0.5 - dbox / px, 0.0, 1.0) * show * mask.x);
   }
 
   // The recording.
   var content_radius = radius;
   if (frame_kind > 0.5) { content_radius = radius * 0.35; }
   let d = sd_rect(q, u.content, content_radius);
-  let cover = clamp(0.5 - d / px, 0.0, 1.0);
+  let cover = clamp(0.5 - d / px, 0.0, 1.0) * show * mask.x;
   if (cover > 0.0) {
     var sp = q;
     // Lens: magnify around its center, bending more toward the rim like thick glass.
@@ -214,8 +305,23 @@ fn fs(@builtin(position) frag: vec4f) -> @location(0) vec4f {
         rim = smoothstep(0.82, 1.0, f);
       }
     }
+    // Liquid clicks: a ripple that bends the picture as it spreads.
+    let clicks = i32(u.misc.z);
+    let liquid = u.look.y > 0.5;
+    if (liquid) {
+      for (var i = 0; i < clicks; i++) {
+        let c = u.clicks[i];
+        let off = q - c.xy;
+        let dist = length(off);
+        if (dist > 0.001) {
+          let band = c.z * 0.35 + px;
+          let wave = exp(-pow((dist - c.z) / band, 2.0));
+          sp -= off / dist * wave * c.z * 0.24 * c.w;
+        }
+      }
+    }
     let uv = (sp - u.content.xy) / u.content.zw;
-    var screen = sample_screen(clamp(uv, vec2f(0.0), vec2f(1.0)));
+    var screen = sample_content(uv);
     if (lens_radius > 0.5) {
       let dist = length(q - u.lens.xy);
       // Glassy rim highlight and a soft edge shadow.
@@ -233,23 +339,42 @@ fn fs(@builtin(position) frag: vec4f) -> @location(0) vec4f {
       screen = mix(screen, screen * 0.35, u.misc.w * smoothstep(r * 0.85, r * 1.15, dc));
     }
 
-    // Click ripples.
-    let clicks = i32(u.misc.z);
+    // Click rings (or the light catching a liquid ripple).
     for (var i = 0; i < clicks; i++) {
       let c = u.clicks[i];
       let ring = abs(length(q - c.xy) - c.z);
-      let width = max(px * 1.5, c.z * 0.18 + px);
-      screen = mix(screen, vec3f(1.0), (1.0 - smoothstep(0.0, width, ring)) * c.w * 0.85);
+      if (liquid) {
+        // Lit on the inside of the swell, shaded on the outside, so it reads on light and dark screens.
+        let band = c.z * 0.35 + px;
+        let side = (length(q - c.xy) - c.z) / band;
+        let wave = exp(-side * side) * c.w;
+        screen = mix(screen, vec3f(1.0), wave * 0.22 * step(side, 0.0));
+        screen = mix(screen, vec3f(0.0), wave * 0.14 * step(0.0, side));
+      } else {
+        // A white ring with a soft dark halo, visible on white screens too.
+        let width = max(px * 1.5, c.z * 0.18 + px);
+        screen = mix(screen, vec3f(0.0), (1.0 - smoothstep(0.0, width * 2.4, ring)) * c.w * 0.22);
+        screen = mix(screen, vec3f(1.0), (1.0 - smoothstep(0.0, width, ring)) * c.w * 0.85);
+      }
     }
 
-    // Cursor.
-    if (u.misc.x > 0.5) {
+    // Cursor, from the sprite sheet: one row per style, one column per kind.
+    if (u.misc.x > 0.001) {
       let cuv = (q - u.cursor.xy) / u.misc.y;
       if (all(cuv >= vec2f(0.0)) && all(cuv <= vec2f(1.0))) {
         let slot = u.webcam2.w;
-        let c = textureSampleLevel(cursor_tex, smp, vec2f((slot + cuv.x) / ${CURSOR_SLOTS.length}.0, cuv.y), 0.0);
-        screen = mix(screen, c.rgb, c.a);
+        let row = u.look.x;
+        let c = textureSampleLevel(cursor_tex, smp, vec2f((slot + cuv.x) / ${CURSOR_SLOTS.length}.0, (row + cuv.y) / ${CURSOR_STYLES.length}.0), 0.0);
+        screen = mix(screen, c.rgb, c.a * u.misc.x);
       }
+    }
+
+    // A burning edge glows over a scorched band; dissolving specks catch the light.
+    if (mask.z > 0.0) { screen = mix(screen, vec3f(0.16, 0.08, 0.03), mask.z * 0.75); }
+    if (mask.y > 0.0) {
+      var glow = vec3f(1.0, 0.62, 0.2);
+      if (tkind > 4.5) { glow = vec3f(0.85); }
+      screen = mix(screen, glow, mask.y);
     }
     color = mix(color, screen, cover);
   }
@@ -284,46 +409,60 @@ function hexColor(hex: string): [number, number, number] {
   return [((value >> 16) & 255) / 255, ((value >> 8) & 255) / 255, (value & 255) / 255];
 }
 
-/** Arrow, pointing hand and text beam, side by side, each with a soft shadow. */
-function drawCursors(): HTMLCanvasElement {
-  const canvas = document.createElement("canvas");
-  canvas.width = SPRITE * CURSOR_SLOTS.length;
-  canvas.height = SPRITE;
-  const context = canvas.getContext("2d")!;
-  const unit = SPRITE / CURSOR_BOX;
-
-  const shape = (slot: number, draw: (c: CanvasRenderingContext2D) => void) => {
-    context.save();
-    context.translate(slot * SPRITE, 0);
-    context.scale(unit, unit);
-    draw(context);
-    context.restore();
-  };
-  const outlined = (c: CanvasRenderingContext2D, path: Path2D, inner: Path2D | null) => {
+/**
+ * Draws one cursor (`style` and `kind`) into a CURSOR_BOX-unit square at `unit` pixels per unit:
+ * the arrow, pointing hand and text beam in dark or light, a dot, or a picture.
+ */
+function drawCursor(c: CanvasRenderingContext2D, style: CursorStyle, kind: CursorKind, unit: number) {
+  const picture = CURSOR_PICTURES[style];
+  if (picture) {
     c.shadowColor = "rgba(0, 0, 0, 0.35)";
     c.shadowBlur = 3 * unit;
     c.shadowOffsetY = 1.2 * unit;
-    c.fillStyle = "#ffffff";
+    c.font = `30px "Segoe UI Emoji", "Apple Color Emoji", sans-serif`;
+    c.textAlign = "center";
+    c.textBaseline = "middle";
+    c.fillText(picture, CURSOR_BOX / 2, CURSOR_BOX / 2 + 1);
+    return;
+  }
+  if (style === "dot") {
+    c.shadowColor = "rgba(0, 0, 0, 0.35)";
+    c.shadowBlur = 3 * unit;
+    c.shadowOffsetY = 1 * unit;
+    c.beginPath();
+    c.arc(CURSOR_BOX / 2, CURSOR_BOX / 2, kind === "hand" ? 8 : 7, 0, Math.PI * 2);
+    c.fillStyle = "rgba(28, 28, 32, 0.82)";
+    c.fill();
+    c.shadowColor = "transparent";
+    c.lineWidth = 2;
+    c.strokeStyle = "#ffffff";
+    c.stroke();
+    return;
+  }
+  // Classic: dark shape with a white rim. Light: the other way around.
+  const rim = style === "light" ? "#111114" : "#ffffff";
+  const body = style === "light" ? "#ffffff" : "#111114";
+  const outlined = (path: Path2D, inner: Path2D) => {
+    c.shadowColor = "rgba(0, 0, 0, 0.35)";
+    c.shadowBlur = 3 * unit;
+    c.shadowOffsetY = 1.2 * unit;
+    c.fillStyle = rim;
     c.fill(path);
     c.shadowColor = "transparent";
     c.lineJoin = "round";
     c.lineWidth = 1.4;
-    c.strokeStyle = "#ffffff";
+    c.strokeStyle = rim;
     c.stroke(path);
-    if (inner) {
-      c.fillStyle = "#111114";
-      c.fill(inner);
-    }
+    c.fillStyle = body;
+    c.fill(inner);
   };
 
-  shape(0, (c) => {
+  if (kind === "arrow") {
     c.translate(...CURSOR_TIPS.arrow);
     const outer = new Path2D("M0 0 L0 17.5 L4.4 13.4 L7.4 20.2 L10.6 18.8 L7.7 12.2 L13.4 12.2 Z");
     const inner = new Path2D("M1.3 3.1 L1.3 14.4 L4.8 11.2 L7.9 18.2 L9.2 17.6 L6.2 10.9 L10.6 10.9 Z");
-    outlined(c, outer, inner);
-  });
-
-  shape(1, (c) => {
+    outlined(outer, inner);
+  } else if (kind === "hand") {
     c.translate(CURSOR_TIPS.hand[0] - 3.2, CURSOR_TIPS.hand[1]);
     // Pointing hand: index finger up, folded fingers, palm.
     const outer = new Path2D(
@@ -332,22 +471,53 @@ function drawCursors(): HTMLCanvasElement {
     const inner = new Path2D(
       "M2.6 2.2 Q3.2 1.4 3.8 2.2 L3.8 11.2 L5 11.2 L5 9.6 Q6.6 9 7 9.9 L7 11.2 L8.2 11.2 L8.2 10.2 Q9.8 9.6 10.2 10.6 L10.2 11.6 L11.4 11.6 L11.4 11.2 Q12.8 10.8 12.8 11.8 L12.8 16 Q12.8 20 9.4 21.4 L5.8 21.4 Q4.2 21 3.2 19 L-0.4 13.2 Q-0.6 12.4 0.2 12.4 L2.6 15.2 Z",
     );
-    outlined(c, outer, inner);
-  });
-
-  shape(2, (c) => {
+    outlined(outer, inner);
+  } else {
     c.translate(...CURSOR_TIPS.text);
     const beam = new Path2D("M-3.5 -9.5 L-1 -9.5 L0 -8.5 L1 -9.5 L3.5 -9.5 L3.5 -8 L1 -8 L1 8 L3.5 8 L3.5 9.5 L1 9.5 L0 8.5 L-1 9.5 L-3.5 9.5 L-3.5 8 L-1 8 L-1 -8 L-3.5 -8 Z");
     c.shadowColor = "rgba(0, 0, 0, 0.35)";
     c.shadowBlur = 2 * unit;
     c.lineWidth = 1.6;
-    c.strokeStyle = "#ffffff";
+    c.strokeStyle = rim;
     c.lineJoin = "round";
     c.stroke(beam);
     c.shadowColor = "transparent";
-    c.fillStyle = "#111114";
+    c.fillStyle = body;
     c.fill(beam);
-  });
+  }
+}
+
+/** Every cursor on one sheet: a row per style, with the arrow, hand and text beam side by side. */
+function drawCursors(): HTMLCanvasElement {
+  const canvas = document.createElement("canvas");
+  canvas.width = SPRITE * CURSOR_SLOTS.length;
+  canvas.height = SPRITE * CURSOR_STYLES.length;
+  const context = canvas.getContext("2d")!;
+  const unit = SPRITE / CURSOR_BOX;
+  CURSOR_STYLES.forEach(({ id }, row) =>
+    CURSOR_SLOTS.forEach((kind, column) => {
+      context.save();
+      context.translate(column * SPRITE, row * SPRITE);
+      context.scale(unit, unit);
+      drawCursor(context, id, kind, unit);
+      context.restore();
+    }),
+  );
+  return canvas;
+}
+
+/** A small picture of a cursor style's arrow, for the style picker. */
+export function cursorPreview(style: CursorStyle, size = 40): HTMLCanvasElement {
+  const canvas = document.createElement("canvas");
+  const ratio = window.devicePixelRatio || 1;
+  canvas.width = canvas.height = Math.round(size * ratio);
+  canvas.style.width = canvas.style.height = `${size}px`;
+  const context = canvas.getContext("2d")!;
+  const unit = (size * ratio) / CURSOR_BOX;
+  context.scale(unit, unit);
+  // The arrow sits at the top-left of its box; nudge it toward the middle.
+  if (style === "classic" || style === "light") context.translate(8, 6);
+  drawCursor(context, style, "arrow", unit);
   return canvas;
 }
 
@@ -491,15 +661,18 @@ export class Renderer {
 
     const cursor = state.cursor;
     const cursorBox = cursor ? CURSOR_BOX * cursor.scale * k : 0;
-    vec(5, [cursor ? 1 : 0, cursorBox, 0, state.spotlight]);
+    vec(5, [cursor ? cursor.opacity : 0, cursorBox, 0, state.spotlight]);
     if (cursor) {
       const [x, y] = toComposed(cursor.x, cursor.y);
-      const tip = CURSOR_TIPS[cursor.kind];
+      const tip = cursorTip(cursor.style, cursor.kind);
       vec(6, [x - (tip[0] / CURSOR_BOX) * cursorBox, y - (tip[1] / CURSOR_BOX) * cursorBox, x, y]);
     }
     vec(7, [crop.x / video.width, crop.y / video.height, (crop.x + crop.width) / video.width, (crop.y + crop.height) / video.height]);
     const tilt = (state.tilt * Math.PI) / 180;
-    vec(8, [tilt, -tilt * 0.35, Math.max(output.width, output.height) * 1.6, state.frame === "window" ? 1 : state.frame === "laptop" ? 2 : 0]);
+    // "Girar" turns the frame edge-on around its vertical axis, then back from the other side.
+    const transition = state.transition;
+    const flip = transition?.kind === "flip" ? transition.phase * Math.min(transition.amount, 0.985) * (Math.PI / 2) : 0;
+    vec(8, [tilt + flip, -tilt * 0.35, Math.max(output.width, output.height) * 1.6, state.frame === "window" ? 1 : state.frame === "laptop" ? 2 : 0]);
     if (state.lens && state.lens.amount > 0.001) {
       const [x, y] = toComposed(state.lens.x, state.lens.y);
       vec(9, [x, y, LENS_RADIUS * k * state.lens.amount, 1 + (state.lens.magnification - 1) * state.lens.amount]);
@@ -532,14 +705,20 @@ export class Renderer {
       vec(19 + index, [rect.x / video.width, rect.y / video.height, (rect.x + rect.width) / video.width, (rect.y + rect.height) / video.height]),
     );
 
+    const liquid = state.clickStyle === "liquid";
     const clicks = state.clicks.filter((click) => click.age >= 0 && click.age < CLICK_DURATION).slice(-MAX_CLICKS);
     clicks.forEach((click, index) => {
       const progress = click.age / CLICK_DURATION;
       const [x, y] = toComposed(click.x, click.y);
       const eased = 1 - Math.pow(1 - progress, 3);
-      vec(19 + MAX_BLURS + index, [x, y, (6 + 26 * eased) * k * (cursor?.scale ?? 1), 1 - progress]);
+      const reach = liquid ? 8 + 46 * eased : 6 + 26 * eased;
+      vec(19 + MAX_BLURS + index, [x, y, reach * k * (cursor?.scale ?? 1) * state.clickSize, 1 - progress]);
     });
     u[22] = clicks.length;
+    const styleRow = cursor ? Math.max(0, CURSOR_STYLES.findIndex((candidate) => candidate.id === cursor.style)) : 0;
+    const transitionKind = transition ? TRANSITIONS.findIndex((candidate) => candidate.id === transition.kind) + 1 : 0;
+    vec(17, [styleRow, liquid ? 1 : 0, 0, transitionKind]);
+    vec(18, [transition?.amount ?? 0, 0, 0, 0]);
 
     this.device.queue.writeBuffer(this.uniformBuffer, 0, u);
     const screen = this.device.importExternalTexture({ source });
