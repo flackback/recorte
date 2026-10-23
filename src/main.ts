@@ -2,7 +2,7 @@ import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { emit, listen } from "@tauri-apps/api/event";
 import { getVersion } from "@tauri-apps/api/app";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { openPath, revealItemInDir } from "@tauri-apps/plugin-opener";
+import { revealItemInDir } from "@tauri-apps/plugin-opener";
 
 import { startAgent } from "./agent";
 import { Editor } from "./editor/editor";
@@ -40,6 +40,10 @@ const ui = {
   takes: $<HTMLUListElement>("takes"),
   openFolder: $<HTMLButtonElement>("open-folder"),
   empty: $("empty"),
+  takeSelection: $("take-selection"),
+  takeSelectionCount: $("take-selection-count"),
+  takeSelectionTrash: $<HTMLButtonElement>("take-selection-trash"),
+  takeSelectionClear: $<HTMLButtonElement>("take-selection-clear"),
   emptyRecord: $<HTMLButtonElement>("empty-record"),
   emptyOpen: $<HTMLButtonElement>("empty-open"),
   titlebarStatus: $("titlebar-status"),
@@ -59,6 +63,9 @@ let recording = false;
 let busy = false;
 let statusTimer: number | undefined;
 let takes: Take[] = [];
+/** Takes picked with Ctrl or Shift for actions on several at once, and where a Shift range starts. */
+const picked = new Set<string>();
+let pickAnchor: string | null = null;
 let camera: WebcamRecorder | null = null;
 /** Monitor being recorded (one-based), for the drawing overlay. */
 let recordedMonitor = 1;
@@ -595,12 +602,40 @@ async function toggleRecording() {
 function markSelected() {
   for (const button of ui.takes.querySelectorAll<HTMLButtonElement>(".take")) {
     button.classList.toggle("selected", button.dataset.id === editor.currentTakeId);
+    button.classList.toggle("picked", picked.has(button.dataset.id!));
+    button.setAttribute("aria-selected", String(picked.has(button.dataset.id!)));
   }
+  ui.takeSelection.hidden = picked.size === 0;
+  ui.takeSelectionCount.textContent = picked.size === 1 ? "1 selecionada" : `${picked.size} selecionadas`;
+}
+
+/** Ctrl adds or removes one take; Shift picks everything from the last one picked. */
+function pickTake(id: string, event: MouseEvent | KeyboardEvent) {
+  if (event.shiftKey && pickAnchor) {
+    const from = takes.findIndex((take) => take.id === pickAnchor);
+    const to = takes.findIndex((take) => take.id === id);
+    if (!event.ctrlKey) picked.clear();
+    for (const take of takes.slice(Math.min(from, to), Math.max(from, to) + 1)) picked.add(take.id);
+  } else {
+    // The open take joins the first Ctrl pick, as in Explorer.
+    if (!picked.size && editor.currentTakeId && editor.currentTakeId !== id) picked.add(editor.currentTakeId);
+    if (picked.has(id)) picked.delete(id);
+    else picked.add(id);
+    pickAnchor = id;
+  }
+  markSelected();
+}
+
+function clearPicked() {
+  picked.clear();
+  pickAnchor = null;
+  markSelected();
 }
 
 async function refreshTakes() {
   takes = await invoke<Take[]>("list_takes");
   ui.emptyOpen.hidden = takes.length === 0;
+  for (const id of [...picked]) if (!takes.some((take) => take.id === id)) picked.delete(id);
   ui.takes.replaceChildren(
     ...takes.map((take) => {
       const item = document.createElement("li");
@@ -617,9 +652,17 @@ async function refreshTakes() {
       const meta = document.createElement("span");
       meta.textContent = `${formatDate(take.createdAt)} · ${formatDuration(take.durationMs)}`;
       button.append(thumb, name, meta);
-      button.addEventListener("click", () => openTake(take.id));
+      button.addEventListener("click", (event) => {
+        if (event.ctrlKey || event.shiftKey) {
+          pickTake(take.id, event);
+          return;
+        }
+        clearPicked();
+        pickAnchor = take.id;
+        void openTake(take.id);
+      });
       button.addEventListener("dblclick", () => startRename(button, take));
-      onContextMenu(button, () => takeMenu(button, take));
+      onContextMenu(button, () => (picked.size > 1 && picked.has(take.id) ? pickedMenu() : takeMenu(button, take)));
       item.append(button);
       return item;
     }),
@@ -659,6 +702,31 @@ function takeMenu(button: HTMLButtonElement, take: Take): MenuItem[] {
   ];
 }
 
+/** Menu for several picked takes. */
+function pickedMenu(): MenuItem[] {
+  const chosen = takes.filter((take) => picked.has(take.id));
+  return [
+    { label: `${chosen.length} gravações selecionadas`, icon: "check", disabled: "Use Ctrl ou Shift para mudar a seleção", action: () => undefined },
+    "separator",
+    { label: "Selecionar todas", icon: "check", shortcut: "Ctrl+A", action: () => pickAll() },
+    { label: "Tirar a seleção", icon: "close", shortcut: "Esc", action: () => clearPicked() },
+    "separator",
+    {
+      label: `Mover ${chosen.length} para a Lixeira`,
+      icon: "trash",
+      danger: true,
+      shortcut: "Delete",
+      disabled: recording ? "Indisponível durante a gravação" : false,
+      action: () => void trashTakes(chosen),
+    },
+  ];
+}
+
+function pickAll() {
+  for (const take of takes) picked.add(take.id);
+  markSelected();
+}
+
 /** Edits the take's name in place: Enter saves, Escape cancels, empty restores the source name. */
 function startRename(button: HTMLButtonElement, take: Take) {
   const name = button.querySelector("strong");
@@ -694,23 +762,38 @@ function startRename(button: HTMLButtonElement, take: Take) {
 }
 
 async function trashTake(take: Take) {
+  await trashTakes([take]);
+}
+
+/** Moves takes to the Recycle Bin after one confirmation. */
+async function trashTakes(chosen: Take[]) {
+  if (!chosen.length || recording) return;
+  const one = chosen.length === 1;
   const confirmed = await confirmDialog({
-    title: "Mover para a Lixeira?",
-    message: `"${takeName(take)}" e todos os arquivos dela (vídeo, áudio, edição) vão para a Lixeira do Windows. Dá para restaurar de lá.`,
+    title: one ? "Mover para a Lixeira?" : `Mover ${chosen.length} gravações para a Lixeira?`,
+    message: one
+      ? `"${takeName(chosen[0])}" e todos os arquivos dela (vídeo, áudio, edição) vão para a Lixeira do Windows. Dá para restaurar de lá.`
+      : `As ${chosen.length} gravações e todos os arquivos delas (vídeo, áudio, edição) vão para a Lixeira do Windows. Dá para restaurar de lá.`,
     confirm: "Mover para a Lixeira",
     danger: true,
   });
   if (!confirmed) return;
-  if (editor.currentTakeId === take.id) {
+  if (chosen.some((take) => take.id === editor.currentTakeId)) {
     editor.close();
     ui.empty.hidden = false;
   }
-  try {
-    await invoke("take_trash", { dir: take.dir });
-    toast("Gravação movida para a Lixeira");
-  } catch (error) {
-    toast(String(error));
+  const failures: string[] = [];
+  for (const take of chosen) {
+    try {
+      await invoke("take_trash", { dir: take.dir });
+    } catch (error) {
+      failures.push(`${takeName(take)}: ${error}`);
+    }
   }
+  const moved = chosen.length - failures.length;
+  if (moved) toast(moved === 1 ? "Gravação movida para a Lixeira" : `${moved} gravações movidas para a Lixeira`);
+  if (failures.length) showWarnings(failures);
+  clearPicked();
   await refreshTakes();
 }
 
@@ -803,13 +886,19 @@ ui.takes.addEventListener("keydown", (event) => {
   const take = takes.find((candidate) => candidate.id === button?.dataset.id);
   if (!button || !take) return;
   if (event.key === "F2") startRename(button, take);
-  else if (event.key === "Delete") void trashTake(take);
+  else if (event.key === "Delete") void (picked.size ? trashTakes(takes.filter((candidate) => picked.has(candidate.id))) : trashTake(take));
+  else if (event.key === "Escape" && picked.size) clearPicked();
+  else if (event.ctrlKey && event.key.toLowerCase() === "a") pickAll();
   else return;
   event.preventDefault();
+  // Keeps the editor's own Delete and Ctrl+A from acting on the timeline too.
+  event.stopPropagation();
 });
 void updateMaximizeButton();
 
 ui.record.addEventListener("click", toggleRecording);
+ui.takeSelectionTrash.addEventListener("click", () => void trashTakes(takes.filter((take) => picked.has(take.id))));
+ui.takeSelectionClear.addEventListener("click", () => clearPicked());
 ui.emptyRecord.addEventListener("click", toggleRecording);
 ui.emptyOpen.addEventListener("click", () => {
   if (takes[0]) void openTake(takes[0].id);
@@ -828,13 +917,8 @@ for (const control of [ui.systemAudio, ui.microphone, ui.webcam, ui.keystrokes, 
 ui.keystrokes.addEventListener("change", () => {
   if (ui.keystrokes.checked) toast("As teclas ficam salvas na gravação, inclusive o que for digitado em senhas.");
 });
-ui.openFolder.addEventListener("click", async () => {
-  const dir = await invoke<string>("takes_dir");
-  try {
-    await openPath(dir);
-  } catch {
-    showWarnings(["A pasta de gravações ainda não existe. Grave algo primeiro."]);
-  }
+ui.openFolder.addEventListener("click", () => {
+  invoke("takes_dir_open").catch((error) => showWarnings([`Não foi possível abrir a pasta de gravações: ${error}`]));
 });
 
 // Global shortcuts (work while other apps have focus): Ctrl+Shift+D draws, Ctrl+Shift+X stops.

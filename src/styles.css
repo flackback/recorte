@@ -806,6 +806,46 @@ input[type="range"]:focus-visible::-webkit-slider-thumb {
   background: color-mix(in srgb, var(--accent) 16%, transparent);
 }
 
+/* Picked with Ctrl or Shift, for actions on several takes at once. */
+.take.picked {
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  box-shadow: inset 0 0 0 1.5px var(--accent);
+}
+
+.take-selection {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0 0 6px;
+  padding: 6px 10px;
+  border-radius: var(--r-sm);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  font-size: 12px;
+  animation: fade-in var(--base) var(--ease);
+}
+
+.take-selection span {
+  flex: 1;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.take-selection .link {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+}
+
+.take-selection .i {
+  width: 13px;
+  height: 13px;
+}
+
+.link.danger {
+  color: var(--danger);
+}
+
 .take .thumb {
   grid-row: span 2;
   width: 64px;

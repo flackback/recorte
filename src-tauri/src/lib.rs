@@ -128,6 +128,15 @@ fn takes_dir(app: AppHandle) -> Result<String, String> {
     Ok(takes_root(&app)?.to_string_lossy().into_owned())
 }
 
+/// Opens the takes folder in Explorer, creating it first if nothing was recorded yet.
+#[tauri::command]
+fn takes_dir_open(app: AppHandle) -> Result<(), String> {
+    use tauri_plugin_opener::OpenerExt;
+    let dir = takes_root(&app)?;
+    std::fs::create_dir_all(&dir).map_err(|error| error.to_string())?;
+    app.opener().open_path(dir.to_string_lossy(), None::<&str>).map_err(|error| error.to_string())
+}
+
 /// The take folder for `dir`, refusing anything outside the takes root so the frontend can't
 /// write elsewhere on disk.
 pub(crate) fn take_dir(app: &AppHandle, dir: &str) -> Result<PathBuf, String> {
@@ -282,6 +291,7 @@ pub fn run() {
             recording_status,
             list_takes,
             takes_dir,
+            takes_dir_open,
             load_project,
             save_project,
             export::export_create,

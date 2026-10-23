@@ -62,6 +62,7 @@ Gravador de tela e editor para Windows, feito com Tauri 2 (Rust + TypeScript, We
 ## Menus de contexto (botão direito)
 
 - **Gravação na lista:** Abrir, Renomear (F2 ou clique duplo), Mostrar na pasta, Exportar…, Mover para a Lixeira (com confirmação; dá para restaurar pela Lixeira do Windows).
+- **Várias gravações:** Ctrl+clique seleciona uma a uma, Shift+clique seleciona uma sequência e Ctrl+A seleciona todas. A faixa acima da lista e o botão direito movem as selecionadas para a Lixeira de uma vez; Esc tira a seleção.
 - **Monitor no seletor:** gravar esta tela, escolher uma área nela.
 - **Janela no seletor:** gravar esta janela.
 - **Trecho na timeline:** ir para o início/fim, trocar zoom ↔ lente, aumentar/diminuir, ajustar a área do desfoque, remover.

@@ -1,6 +1,6 @@
 import { getVersion } from "@tauri-apps/api/app";
 import { invoke } from "@tauri-apps/api/core";
-import { openPath, openUrl } from "@tauri-apps/plugin-opener";
+import { openUrl } from "@tauri-apps/plugin-opener";
 
 import { toast } from "./toast";
 import { autoUpdateEnabled, setAutoUpdate, type Updates } from "./updates";
@@ -87,7 +87,7 @@ export class Settings {
       button.addEventListener("click", () => void this.copy($(button.dataset.copy!).textContent ?? ""));
     }
 
-    ui.takesFolderOpen.addEventListener("click", () => void openPath(ui.takesFolder.textContent ?? "").catch((error) => toast(String(error))));
+    ui.takesFolderOpen.addEventListener("click", () => void invoke("takes_dir_open").catch((error) => toast(`Não foi possível abrir a pasta: ${error}`)));
     ui.tips.addEventListener("click", () => {
       actions.resetTips();
       toast("As dicas aparecem de novo ao abrir o app e a próxima gravação.");
