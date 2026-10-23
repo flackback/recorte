@@ -128,6 +128,13 @@ fn takes_dir(app: AppHandle) -> Result<String, String> {
     Ok(takes_root(&app)?.to_string_lossy().into_owned())
 }
 
+/// Called after the frontend joined a take's segments into its video: removes the segments.
+#[tauri::command]
+async fn take_segments_joined(app: AppHandle, dir: String) -> Result<TakeMeta, String> {
+    let dir = take_dir(&app, &dir)?;
+    blocking(move || recorder::segments_joined(&dir).map_err(|error| format!("{error:#}"))).await
+}
+
 /// Opens the takes folder in Explorer, creating it first if nothing was recorded yet.
 #[tauri::command]
 fn takes_dir_open(app: AppHandle) -> Result<(), String> {
@@ -292,6 +299,7 @@ pub fn run() {
             list_takes,
             takes_dir,
             takes_dir_open,
+            take_segments_joined,
             load_project,
             save_project,
             export::export_create,

@@ -5,6 +5,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 
 import { startAgent } from "./agent";
+import { joinSegments } from "./join";
 import { Editor } from "./editor/editor";
 import { confirmDialog, onContextMenu, type MenuItem } from "./menu";
 import { resetTips, showTour } from "./tips";
@@ -572,6 +573,14 @@ async function stopRecording() {
     if (camera && webcamSaved) {
       take = await invoke<Take>("take_set_webcam", { dir: take.dir, file: WEBCAM_FILE, startedHns: camera.startedHns });
     }
+    // The video was recorded in pieces; join them into one file before editing.
+    if (take.segments?.length) {
+      try {
+        take = await joinSegments(take, (fraction) => (ui.recordLabel.textContent = `Finalizando… ${Math.floor(fraction * 100)}%`));
+      } catch (error) {
+        showWarnings([`Não foi possível finalizar o vídeo: ${error}. A gravação continua salva; o app tenta de novo ao abrir a lista.`]);
+      }
+    }
     camera = null;
     if (take.warnings.length) showWarnings(take.warnings);
     await refreshTakes();
@@ -636,6 +645,7 @@ async function refreshTakes() {
   takes = await invoke<Take[]>("list_takes");
   ui.emptyOpen.hidden = takes.length === 0;
   for (const id of [...picked]) if (!takes.some((take) => take.id === id)) picked.delete(id);
+  void joinPending();
   ui.takes.replaceChildren(
     ...takes.map((take) => {
       const item = document.createElement("li");
@@ -650,7 +660,7 @@ async function refreshTakes() {
       const name = document.createElement("strong");
       name.textContent = takeName(take);
       const meta = document.createElement("span");
-      meta.textContent = `${formatDate(take.createdAt)} · ${formatDuration(take.durationMs)}`;
+      meta.textContent = take.segments?.length ? "Finalizando a gravação…" : `${formatDate(take.createdAt)} · ${formatDuration(take.durationMs)}`;
       button.append(thumb, name, meta);
       button.addEventListener("click", (event) => {
         if (event.ctrlKey || event.shiftKey) {
@@ -700,6 +710,36 @@ function takeMenu(button: HTMLButtonElement, take: Take): MenuItem[] {
       action: () => void trashTake(take),
     },
   ];
+}
+
+let joining = false;
+/** Takes that failed to join this session; not retried until the app opens again. */
+const joinFailed = new Set<string>();
+
+/**
+ * Joins takes still in pieces: one whose joining was interrupted, or one recovered after the app
+ * stopped mid-recording. Not while recording, which needs the disk.
+ */
+async function joinPending() {
+  if (joining || recording) return;
+  const pending = takes.filter((take) => take.segments?.length && !joinFailed.has(take.id));
+  if (!pending.length) return;
+  joining = true;
+  try {
+    for (const take of pending) {
+      try {
+        await joinSegments(take, () => undefined);
+        toast(take.title === "Gravação recuperada" ? "Uma gravação interrompida foi recuperada. Ela está na lista." : "Gravação finalizada");
+      } catch (error) {
+        console.error("juntar segmentos", error);
+        joinFailed.add(take.id);
+        showWarnings([`Não foi possível finalizar "${takeName(take)}": ${error}`]);
+      }
+    }
+  } finally {
+    joining = false;
+  }
+  await refreshTakes();
 }
 
 /** Menu for several picked takes. */
@@ -800,6 +840,10 @@ async function trashTakes(chosen: Take[]) {
 async function openTake(id: string) {
   const take = takes.find((candidate) => candidate.id === id);
   if (!take) return;
+  if (take.segments?.length) {
+    toast("Esta gravação ainda está sendo finalizada. Ela abre em instantes.");
+    return;
+  }
   ui.empty.hidden = true;
   try {
     await editor.open(take);

@@ -86,6 +86,47 @@ async function fit() {
   await appWindow.setPosition(new PhysicalPosition(position.x + Math.round((size.width - newWidth) / 2), position.y));
 }
 
+// ---------- moving the bar ----------
+
+/**
+ * Drags the bar by its grip or its timer. Done here instead of with a drag region, which does not
+ * move this window (it sits above the drawing layer and never takes the focus).
+ */
+function makeDraggable(handle: HTMLElement) {
+  handle.addEventListener("pointerdown", async (event) => {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    handle.setPointerCapture(event.pointerId);
+    const from = { x: event.screenX, y: event.screenY };
+    const ratio = window.devicePixelRatio || 1;
+    let origin: { x: number; y: number } | null = null;
+    let latest = from;
+    let frame = 0;
+    const place = () => {
+      frame = 0;
+      if (!origin) return;
+      void appWindow.setPosition(new PhysicalPosition(Math.round(origin.x + (latest.x - from.x) * ratio), Math.round(origin.y + (latest.y - from.y) * ratio)));
+    };
+    const move = (moveEvent: PointerEvent) => {
+      latest = { x: moveEvent.screenX, y: moveEvent.screenY };
+      frame ||= requestAnimationFrame(place);
+    };
+    const end = () => {
+      handle.removeEventListener("pointermove", move);
+      handle.removeEventListener("pointerup", end);
+      handle.removeEventListener("pointercancel", end);
+      handle.classList.remove("dragging");
+    };
+    handle.classList.add("dragging");
+    handle.addEventListener("pointermove", move);
+    handle.addEventListener("pointerup", end);
+    handle.addEventListener("pointercancel", end);
+    const position = await appWindow.outerPosition();
+    origin = { x: position.x, y: position.y };
+    place();
+  });
+}
+
 // ---------- tray ----------
 
 function buildTray() {
@@ -201,6 +242,8 @@ async function toggleTray() {
 
 buildTray();
 update();
+makeDraggable(document.querySelector<HTMLElement>(".grip")!);
+makeDraggable(ui.status);
 
 void listen<{ elapsedMs: number; paused: boolean }>("recbar-state", (event) => {
   paused = event.payload.paused;

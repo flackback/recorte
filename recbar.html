@@ -69,8 +69,13 @@
         cursor: grab;
       }
 
-      .grip:active {
+      .grip:active,
+      .dragging {
         cursor: grabbing;
+      }
+
+      .grip svg {
+        pointer-events: none;
       }
 
       .status {
@@ -352,10 +357,10 @@
   <body>
     <div class="shell" id="shell">
       <div class="bar" id="bar">
-        <span class="grip" data-tauri-drag-region title="Arraste para mover a barra">
-          <svg viewBox="0 0 24 24" data-tauri-drag-region><path d="M9 6h.01M9 12h.01M9 18h.01M15 6h.01M15 12h.01M15 18h.01" stroke-width="3" /></svg>
+        <span class="grip" title="Arraste para mover a barra">
+          <svg viewBox="0 0 24 24"><path d="M9 6h.01M9 12h.01M9 18h.01M15 6h.01M15 12h.01M15 18h.01" stroke-width="3" /></svg>
         </span>
-        <span class="status" id="status" data-tauri-drag-region><span class="dot" data-tauri-drag-region></span><span id="time" data-tauri-drag-region>0:00</span></span>
+        <span class="status" id="status"><span class="dot"></span><span id="time">0:00</span></span>
         <button id="pause" title="Pausar: o trecho pausado sai cortado no editor">
           <svg viewBox="0 0 24 24"><path d="M9 6v12M15 6v12" /></svg><span>Pausar</span>
         </button>

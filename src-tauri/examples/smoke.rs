@@ -22,6 +22,8 @@ fn main() -> anyhow::Result<()> {
             system_audio: true,
             microphone: true,
             show_cursor: true,
+            keystrokes: false,
+            crop: None,
             fps: 60,
         },
         &root,

@@ -6,15 +6,16 @@
 
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { applyPalette, GIFEncoder, quantize } from "gifenc";
-import { createFile, DataStream, Endianness, MP4BoxBuffer, type Movie, type Sample, type Track } from "mp4box";
 import { Muxer, StreamTarget } from "mp4-muxer";
 
-import { joinPath } from "../types";
+import { joinPath, type Take } from "../types";
+import { openAudio, type AudioSource } from "./audio-source";
 import { cardLength, frameState, outputMoment, overlayText, sceneSource, totalDuration, type CardView, type Scene } from "./composition";
 import { OverlayPainter } from "./overlay";
 import { outputSize, type Aspect } from "./project";
 import { Renderer } from "./renderer";
 import { clickSound, keySounds } from "./sounds";
+import { readMp4, readSamples, urlSource, type ByteSource, type Mp4Track } from "./mp4";
 
 export type ExportOptions = {
   format: "mp4" | "gif";
@@ -31,8 +32,10 @@ const SAMPLE_RATE = 48_000;
 const CHANNELS = 2;
 /** Keyframe every 2 s keeps seeking in players snappy without bloating the file. */
 const KEYFRAME_SECONDS = 2;
-const WRITE_CHUNK = 4 * 1024 * 1024;
+export const WRITE_CHUNK = 4 * 1024 * 1024;
 const MUSIC_FADE = 1.5;
+/** Sound is mixed and encoded this many seconds at a time, so memory stays small for long takes. */
+const MIX_BLOCK = 30;
 
 export class ExportCancelled extends Error {
   constructor() {
@@ -127,140 +130,137 @@ export function hasAudio(scene: Scene) {
   );
 }
 
+const fileUrl = (take: Take, file: string) => convertFileSrc(joinPath(take.dir, file));
+
+/** The system sound: its own WAV in new takes, the video's audio track in older ones. */
+function systemAudio(take: Take): Promise<AudioSource | null> {
+  if (take.systemFile) return openAudio(fileUrl(take, take.systemFile));
+  return take.systemAudio ? openAudio(fileUrl(take, take.video)) : Promise.resolve(null);
+}
+
+/** The microphone, enhanced when that option is on and the enhanced file exists. */
+async function micAudio(take: Take, enhanced: boolean): Promise<AudioSource | null> {
+  if (!take.mic) return null;
+  if (enhanced) {
+    const better = await openAudio(fileUrl(take, "mic.enhanced.wav")).catch(() => null);
+    if (better) return better;
+  }
+  return openAudio(fileUrl(take, take.mic));
+}
+
+type Mixer = { blocks: number; block(index: number): Promise<AudioBuffer> };
+
 /**
- * The output's sound track at 48 kHz stereo: every kept span of system audio and microphone with
- * their volumes, background music looped and faded out, and click and key sounds at their moments.
+ * The output's sound track at 48 kHz stereo, a block at a time: every kept span of system audio
+ * and microphone with their volumes, background music looped and faded out, and click and key
+ * sounds at their moments. Sped-up stretches stay silent.
  */
-async function mixAudio(scene: Scene, recording: ArrayBuffer): Promise<AudioBuffer | null> {
+async function createMixer(scene: Scene): Promise<Mixer | null> {
   const { take, project, time } = scene;
   if (!hasAudio(scene) || time.duration <= 0) return null;
   // The recording's sound starts after the opening card; music plays over everything.
   const offset = cardLength(project.cards.intro) / 1000;
   const total = totalDuration(scene) / 1000;
-  const decoder = new OfflineAudioContext(CHANNELS, 1, SAMPLE_RATE);
-  const mixer = new OfflineAudioContext(CHANNELS, Math.max(1, Math.ceil(total * SAMPLE_RATE)), SAMPLE_RATE);
 
-  const tracks: { buffer: AudioBuffer; volume: number }[] = [];
-  if (take.systemAudio && project.audio.system > 0) tracks.push({ buffer: await decoder.decodeAudioData(recording.slice(0)), volume: project.audio.system });
-  if (take.mic && project.audio.mic > 0) {
-    // Prefer the denoised microphone when voice enhancement is on and it was produced.
-    let bytes: ArrayBuffer | null = null;
-    if (project.audio.enhance) bytes = await fetchBytes(joinPath(take.dir, "mic.enhanced.wav")).catch(() => null);
-    bytes ??= await fetchBytes(joinPath(take.dir, take.mic));
-    tracks.push({ buffer: await decoder.decodeAudioData(bytes), volume: project.audio.mic });
+  const tracks: { audio: AudioSource; volume: number }[] = [];
+  if (project.audio.system > 0) {
+    const audio = await systemAudio(take).catch(() => null);
+    if (audio) tracks.push({ audio, volume: project.audio.system });
   }
-  for (const track of tracks) {
-    const gain = mixer.createGain();
-    gain.gain.value = track.volume;
-    gain.connect(mixer.destination);
-    // Sped-up stretches stay silent; fast speech is noise.
-    for (const span of time.spans.filter((kept) => kept.rate === 1)) {
-      const source = mixer.createBufferSource();
-      source.buffer = track.buffer;
-      source.connect(gain);
-      source.start(offset + span.output / 1000, span.start / 1000, (span.end - span.start) / 1000);
-    }
+  if (project.audio.mic > 0) {
+    const audio = await micAudio(take, project.audio.enhance).catch(() => null);
+    if (audio) tracks.push({ audio, volume: project.audio.mic });
   }
-
+  // Music is a short file the user picked; it is decoded whole, once.
+  let music: AudioBuffer | null = null;
   if (project.audio.music) {
-    const music = await decoder.decodeAudioData(await fetchBytes(joinPath(take.dir, project.audio.music)));
-    const seconds = total;
-    const gain = mixer.createGain();
-    gain.gain.setValueAtTime(project.audio.musicVolume, 0);
-    gain.gain.setValueAtTime(project.audio.musicVolume, Math.max(0, seconds - MUSIC_FADE));
-    gain.gain.linearRampToValueAtTime(0, seconds);
-    gain.connect(mixer.destination);
-    const source = mixer.createBufferSource();
-    source.buffer = music;
-    source.loop = true;
-    source.connect(gain);
-    source.start(0);
-    source.stop(seconds);
+    const bytes = await fetchBytes(joinPath(take.dir, project.audio.music));
+    music = await new OfflineAudioContext(CHANNELS, 1, SAMPLE_RATE).decodeAudioData(bytes);
   }
+  const clicks = project.audio.clickSound ? scene.clicks.filter((click) => click.b === "l").map((click) => click.t) : [];
+  const keys = project.audio.keySound ? scene.keys.map((key) => key.t) : [];
 
-  const schedule = (sounds: AudioBuffer[], times: number[], volume: number) => {
-    times.forEach((t, index) => {
-      if (time.playable(t) !== t || time.rateAt(t) !== 1) return;
-      const source = mixer.createBufferSource();
-      source.buffer = sounds[index % sounds.length];
-      const gain = mixer.createGain();
-      gain.gain.value = volume;
-      source.connect(gain).connect(mixer.destination);
-      source.start(offset + time.toOutput(t) / 1000);
-    });
-  };
-  if (project.audio.clickSound) {
-    schedule([clickSound(mixer)], scene.clicks.filter((click) => click.b === "l").map((click) => click.t), 0.6);
-  }
-  if (project.audio.keySound) schedule(keySounds(mixer), scene.keys.map((key) => key.t), 0.5);
-
-  return mixer.startRendering();
-}
-
-type Demuxed = { config: VideoDecoderConfig; chunks: EncodedVideoChunk[] };
-
-/**
- * Reads a file's video track into encoded chunks plus the decoder configuration. Handles both
- * regular MP4 (the screen recording) and fragmented MP4 (the webcam, from MediaRecorder).
- */
-export async function demux(bytes: ArrayBuffer, fallback: { width: number; height: number }): Promise<Demuxed> {
-  const file = createFile();
-  const samples: Sample[] = [];
-  let found: Track | null = null;
-  // mp4box only extracts samples if extraction is set up inside onReady, before the data is flushed.
-  const ready = new Promise<Track>((resolve, reject) => {
-    file.onError = (_module: string, message: string) => reject(new Error(message));
-    file.onReady = (movie: Movie) => {
-      const track = movie.videoTracks[0];
-      if (!track) {
-        reject(new Error("O arquivo não tem faixa de vídeo."));
-        return;
-      }
-      found = track;
-      file.onSamples = (_id, _user, batch) => samples.push(...batch);
-      file.setExtractionOptions(track.id, undefined, { nbSamples: 1000 });
-      file.start();
-      resolve(track);
-    };
-  });
-  file.appendBuffer(MP4BoxBuffer.fromArrayBuffer(bytes, 0));
-  file.flush();
-  const track = await ready;
-  // Fragmented files deliver samples as fragments are parsed; let that finish.
-  for (let i = 0; i < 50 && (track.nb_samples === 0 || samples.length < track.nb_samples); i++) {
-    const before = samples.length;
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    if (track.nb_samples === 0 && samples.length === before && before > 0) break;
-  }
-  if (!samples.length || !found) throw new Error("O arquivo não tem quadros de vídeo.");
-
-  // The decoder needs the avcC box contents (without its 8-byte header) as `description`.
-  const entry = file.getTrackById(track.id).mdia.minf.stbl.stsd.entries[0] as unknown as Record<string, { write(stream: DataStream): void } | undefined>;
-  const box = entry.avcC ?? entry.hvcC;
-  if (!box) throw new Error("Formato de vídeo não suportado.");
-  const stream = new DataStream(undefined, 0, Endianness.BIG_ENDIAN);
-  box.write(stream);
-  const description = new Uint8Array(stream.buffer, 8);
-
-  const chunks = samples.map(
-    (sample) =>
-      new EncodedVideoChunk({
-        type: sample.is_sync ? "key" : "delta",
-        timestamp: (sample.cts * 1e6) / sample.timescale,
-        duration: (sample.duration * 1e6) / sample.timescale,
-        data: sample.data!,
-      }),
-  );
   return {
-    config: {
-      codec: track.codec,
-      codedWidth: track.video?.width ?? fallback.width,
-      codedHeight: track.video?.height ?? fallback.height,
-      description,
+    blocks: Math.ceil(total / MIX_BLOCK),
+    async block(index) {
+      const start = index * MIX_BLOCK;
+      const end = Math.min(total, start + MIX_BLOCK);
+      const mixer = new OfflineAudioContext(CHANNELS, Math.max(1, Math.round((end - start) * SAMPLE_RATE)), SAMPLE_RATE);
+
+      for (const track of tracks) {
+        const gain = mixer.createGain();
+        gain.gain.value = track.volume;
+        gain.connect(mixer.destination);
+        for (const span of time.spans) {
+          if (span.rate !== 1) continue;
+          const spanStart = offset + span.output / 1000;
+          const spanEnd = spanStart + (span.end - span.start) / 1000;
+          const from = Math.max(start, spanStart);
+          const to = Math.min(end, spanEnd);
+          if (to <= from) continue;
+          const sourceStart = span.start + (from - spanStart) * 1000;
+          const buffer = await track.audio.read(sourceStart, sourceStart + (to - from) * 1000);
+          const node = mixer.createBufferSource();
+          node.buffer = buffer;
+          node.connect(gain);
+          node.start(from - start);
+        }
+      }
+
+      if (music) {
+        const volume = project.audio.musicVolume;
+        const fadeStart = Math.max(0, total - MUSIC_FADE);
+        const level = (t: number) => volume * (t < fadeStart ? 1 : Math.max(0, (total - t) / MUSIC_FADE));
+        const gain = mixer.createGain();
+        gain.gain.setValueAtTime(level(start), 0);
+        if (fadeStart < end) {
+          gain.gain.setValueAtTime(level(Math.max(start, fadeStart)), Math.max(0, fadeStart - start));
+          gain.gain.linearRampToValueAtTime(level(end), end - start);
+        }
+        gain.connect(mixer.destination);
+        const node = mixer.createBufferSource();
+        node.buffer = music;
+        node.loop = true;
+        node.connect(gain);
+        node.start(0, start % music.duration);
+      }
+
+      const schedule = (sounds: AudioBuffer[], times: number[], volume: number) => {
+        times.forEach((t, index) => {
+          if (time.playable(t) !== t || time.rateAt(t) !== 1) return;
+          const at = offset + time.toOutput(t) / 1000;
+          if (at < start || at >= end) return;
+          const node = mixer.createBufferSource();
+          node.buffer = sounds[index % sounds.length];
+          const gain = mixer.createGain();
+          gain.gain.value = volume;
+          node.connect(gain).connect(mixer.destination);
+          node.start(at - start);
+        });
+      };
+      if (clicks.length) schedule([clickSound(mixer)], clicks, 0.6);
+      if (keys.length) schedule(keySounds(mixer), keys, 0.5);
+
+      return mixer.startRendering();
     },
-    chunks,
   };
 }
+
+/** The video track of a file, indexed for reading a piece at a time. */
+export async function openVideo(url: string): Promise<{ source: ByteSource; track: Mp4Track }> {
+  const source = await urlSource(url);
+  const track = (await readMp4(source)).tracks.find((candidate) => candidate.kind === "video");
+  if (!track?.count) throw new Error("O arquivo não tem quadros de vídeo.");
+  if (!track.codec.startsWith("avc")) throw new Error(`Formato de vídeo não suportado: ${track.codec}.`);
+  return { source, track };
+}
+
+export const decoderConfig = (track: Mp4Track): VideoDecoderConfig => ({
+  codec: track.codec,
+  codedWidth: track.width,
+  codedHeight: track.height,
+  description: track.description ?? undefined,
+});
 
 /**
  * Hands out the latest decoded frame at or before a time, decoding ahead only as far as needed.
@@ -269,14 +269,18 @@ export async function demux(bytes: ArrayBuffer, fallback: { width: number; heigh
  */
 class FrameSource {
   private queue: VideoFrame[] = [];
+  /** Next sample to read from the file. */
   private next: number;
+  /** Read but not yet given to the decoder. */
+  private pending: EncodedVideoChunk[] = [];
+  private reading = false;
   private flushing: Promise<void> | null = null;
   private finished = false;
   private failure: Error | null = null;
   private wake: (() => void) | null = null;
   private decoder: VideoDecoder;
 
-  constructor(config: VideoDecoderConfig, private chunks: EncodedVideoChunk[], startUs: number) {
+  constructor(private source: ByteSource, private track: Mp4Track, startUs: number) {
     this.decoder = new VideoDecoder({
       output: (frame) => {
         this.queue.push(frame);
@@ -287,14 +291,39 @@ class FrameSource {
         this.notify();
       },
     });
-    this.decoder.configure(config);
+    this.decoder.configure(decoderConfig(track));
     this.decoder.addEventListener("dequeue", () => this.notify());
     // Start at the last keyframe before the trim, so the frames before it aren't decoded for nothing.
     let start = 0;
-    chunks.forEach((chunk, index) => {
-      if (chunk.type === "key" && chunk.timestamp <= startUs) start = index;
-    });
+    for (let index = 0; index < track.count; index++) {
+      if (track.times[index] > startUs) break;
+      if (track.sync[index]) start = index;
+    }
     this.next = start;
+  }
+
+  /** Reads the next samples from the file in the background. */
+  private readAhead() {
+    if (this.reading || this.next >= this.track.count || this.pending.length > 60) return;
+    const from = this.next;
+    const to = Math.min(this.track.count, from + 90);
+    this.next = to;
+    this.reading = true;
+    readSamples(this.source, this.track, from, to).then(
+      (data) => {
+        data.forEach((bytes, k) => {
+          const i = from + k;
+          this.pending.push(new EncodedVideoChunk({ type: this.track.sync[i] ? "key" : "delta", timestamp: this.track.times[i], duration: this.track.durations[i], data: bytes }));
+        });
+        this.reading = false;
+        this.notify();
+      },
+      (error) => {
+        this.failure ??= error instanceof Error ? error : new Error(String(error));
+        this.reading = false;
+        this.notify();
+      },
+    );
   }
 
   private notify() {
@@ -315,9 +344,12 @@ class FrameSource {
       if (last && (last.timestamp > us || this.finished)) return this.queue[0];
       if (this.finished) throw new Error("A gravação não tem quadros de vídeo.");
 
-      if (this.next < this.chunks.length) {
-        if (this.decoder.decodeQueueSize < 4 && this.queue.length < 12) this.decoder.decode(this.chunks[this.next++]);
+      this.readAhead();
+      if (this.pending.length) {
+        if (this.decoder.decodeQueueSize < 4 && this.queue.length < 12) this.decoder.decode(this.pending.shift()!);
         else await this.sleep();
+      } else if (this.reading || this.next < this.track.count) {
+        await this.sleep();
       } else if (!this.flushing) {
         this.flushing = this.decoder.flush().then(
           () => {
@@ -343,19 +375,30 @@ class FrameSource {
 }
 
 /** Streams output to disk in order; the MP4 muxer seeks back once at the end to patch sizes. */
-class DiskWriter {
+export class DiskWriter {
   private chain: Promise<unknown> = Promise.resolve();
   private failure: unknown = null;
+  /** Bytes handed over but not yet written. */
+  private pending = 0;
 
   constructor(readonly id: number) {}
 
   write(data: Uint8Array, position: number) {
     const copy = data.slice();
+    this.pending += copy.length;
     this.chain = this.chain.then(() =>
-      invoke("export_write", copy, { headers: { "x-export-id": String(this.id), "x-position": String(position) } }).catch((error) => {
-        this.failure ??= error;
-      }),
+      invoke("export_write", copy, { headers: { "x-export-id": String(this.id), "x-position": String(position) } })
+        .catch((error) => {
+          this.failure ??= error;
+        })
+        .finally(() => (this.pending -= copy.length)),
     );
+  }
+
+  /** Waits while too much is queued, so a fast producer doesn't fill the memory. */
+  async throttle(limit = 64 * 1024 * 1024) {
+    if (this.pending > limit) await this.chain;
+    if (this.failure) throw new Error(`Falha ao gravar o arquivo: ${this.failure}`);
   }
 
   async drain() {
@@ -377,17 +420,16 @@ class FrameRenderer {
     this.overlay = new OverlayPainter(output.width, output.height);
   }
 
-  async start(recording: ArrayBuffer, signal: AbortSignal) {
+  async start(signal: AbortSignal) {
     const { take, project } = this.scene;
     this.renderer = await abortable(Renderer.create(this.canvas), signal);
     const background = await abortable(backgroundImage(this.scene), signal);
     if (background) this.renderer.setBackground(background);
-    const demuxed = await abortable(demux(recording, take), signal);
-    this.screen = new FrameSource(demuxed.config, demuxed.chunks, (this.scene.time.spans[0]?.start ?? 0) * 1000);
+    const screen = await abortable(openVideo(fileUrl(take, take.video)), signal);
+    this.screen = new FrameSource(screen.source, screen.track, (this.scene.time.spans[0]?.start ?? 0) * 1000);
     if (take.webcam && project.webcam.visible) {
-      const bytes = await abortable(fetchBytes(joinPath(take.dir, take.webcam)), signal);
-      const camera = await abortable(demux(bytes, { width: 1280, height: 720 }), signal);
-      this.webcam = new FrameSource(camera.config, camera.chunks, 0);
+      const camera = await abortable(openVideo(fileUrl(take, take.webcam)), signal);
+      this.webcam = new FrameSource(camera.source, camera.track, 0);
     }
   }
 
@@ -451,9 +493,9 @@ async function exportMp4(scene: Scene, options: ExportOptions, onProgress: (prog
 
   onProgress({ phase: "preparing", done: 0, total: totalFrames });
   const audioSetup = hasAudio(scene) ? await audioEncoderConfig() : null;
+  const mixer = audioSetup ? await abortable(createMixer(scene), signal) : null;
   const cap = options.maxBytes ? cappedBitrate(options.maxBytes, totalDuration(scene) / 1000, Boolean(audioSetup)) : null;
   const videoConfig = await videoEncoderConfig(output.width, output.height, fps, cap);
-  const recording = await abortable(fetchBytes(joinPath(take.dir, take.video)), signal);
   check();
 
   const created = await invoke<{ id: number; path: string }>("export_create", { takeId: take.id, extension: "mp4" });
@@ -473,14 +515,15 @@ async function exportMp4(scene: Scene, options: ExportOptions, onProgress: (prog
       firstTimestampBehavior: "offset",
     });
 
-    // Audio first: it is fast, and lets the video loop run uninterrupted afterwards.
-    if (audioSetup) {
+    // Audio first, a block at a time: it is fast, and lets the video loop run uninterrupted afterwards.
+    if (audioSetup && mixer) {
       onProgress({ phase: "audio", done: 0, total: totalFrames });
-      const mixed = await abortable(mixAudio(scene, recording), signal);
-      check();
-      if (mixed) {
-        audioEncoder = new AudioEncoder({ output: (chunk, meta) => muxer.addAudioChunk(chunk, meta), error: fail });
-        audioEncoder.configure(audioSetup.config);
+      audioEncoder = new AudioEncoder({ output: (chunk, meta) => muxer.addAudioChunk(chunk, meta), error: fail });
+      audioEncoder.configure(audioSetup.config);
+      let written = 0;
+      for (let index = 0; index < mixer.blocks; index++) {
+        const mixed = await abortable(mixer.block(index), signal);
+        check();
         const block = 4800;
         const left = mixed.getChannelData(0);
         const right = mixed.numberOfChannels > 1 ? mixed.getChannelData(1) : left;
@@ -494,19 +537,23 @@ async function exportMp4(scene: Scene, options: ExportOptions, onProgress: (prog
             sampleRate: SAMPLE_RATE,
             numberOfFrames: length,
             numberOfChannels: CHANNELS,
-            timestamp: Math.round((offset / SAMPLE_RATE) * 1e6),
+            timestamp: Math.round((written / SAMPLE_RATE) * 1e6),
             data: planar,
           });
           audioEncoder.encode(data);
           data.close();
+          written += length;
         }
-        await abortable(audioEncoder.flush(), signal);
+        // Lets the encoder catch up so its queue doesn't hold the whole track.
+        while (audioEncoder.encodeQueueSize > 50) await new Promise((resolve) => setTimeout(resolve, 5));
+        if (encodeError) throw encodeError;
       }
+      await abortable(audioEncoder.flush(), signal);
     }
     if (encodeError) throw encodeError;
     check();
 
-    await frames.start(recording, signal);
+    await frames.start(signal);
     videoEncoder = new VideoEncoder({ output: (chunk, meta) => muxer.addVideoChunk(chunk, meta), error: fail });
     videoEncoder.configure(videoConfig);
     const keyframeEvery = Math.max(1, Math.round(fps * KEYFRAME_SECONDS));
@@ -551,7 +598,6 @@ async function exportGif(scene: Scene, options: ExportOptions, onProgress: (prog
   const fps = options.fps;
   const totalFrames = Math.max(1, Math.round((totalDuration(scene) / 1000) * fps));
   onProgress({ phase: "preparing", done: 0, total: totalFrames });
-  const recording = await abortable(fetchBytes(joinPath(take.dir, take.video)), signal);
 
   const created = await invoke<{ id: number; path: string }>("export_create", { takeId: take.id, extension: "gif" });
   const writer = new DiskWriter(created.id);
@@ -562,7 +608,7 @@ async function exportGif(scene: Scene, options: ExportOptions, onProgress: (prog
   const delay = Math.round(1000 / fps);
 
   try {
-    await frames.start(recording, signal);
+    await frames.start(signal);
     for (let index = 0; index < totalFrames; index++) {
       if (signal.aborted) throw new ExportCancelled();
       const moment = outputMoment(scene, (index * 1000) / fps);

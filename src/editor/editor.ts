@@ -6,7 +6,9 @@ import { toast } from "../toast";
 import { joinPath, takeName, type CursorEvent, type KeyEvent, type Take, type Word } from "../types";
 import { CARD_FADE, cardLength, createScene, frameState, overlayText, refreshTime, sceneSource, wordCuts, type CardView, type Scene } from "./composition";
 import { confirmDialog, onContextMenu, type MenuItem } from "../menu";
+import { openAudio, type AudioSource } from "./audio-source";
 import { ExportDialog } from "./export-dialog";
+import { openVideo } from "./exporter";
 import { thumbnails, waveform } from "./media";
 import { cursorPath } from "./motion";
 import { OverlayPainter } from "./overlay";
@@ -70,15 +72,6 @@ async function fetchJson<T>(path: string): Promise<T | null> {
   }
 }
 
-async function fetchBytes(path: string): Promise<ArrayBuffer | null> {
-  try {
-    const response = await fetch(convertFileSrc(path));
-    return response.ok ? await response.arrayBuffer() : null;
-  } catch {
-    return null;
-  }
-}
-
 /** Uploads a file the user picked into the take folder; returns its name there. */
 async function saveAsset(dir: string, file: File, name: string): Promise<string> {
   const created = await invoke<{ id: number; path: string }>("asset_create", { dir, name });
@@ -105,6 +98,8 @@ export class Editor {
     video: $<HTMLVideoElement>("video"),
     webcam: $<HTMLVideoElement>("webcam-video"),
     mic: $<HTMLAudioElement>("mic"),
+    /** System sound of newer takes, which keep it in its own WAV. */
+    system: $<HTMLAudioElement>("system-sound"),
     play: $<HTMLButtonElement>("play"),
     time: $("time"),
     title: $("take-title"),
@@ -307,6 +302,7 @@ export class Editor {
     ui.title.textContent = takeName(take);
     ui.video.src = convertFileSrc(joinPath(take.dir, take.video));
     this.loadMic();
+    this.loadSystem();
     if (take.webcam) ui.webcam.src = convertFileSrc(joinPath(take.dir, take.webcam));
     else ui.webcam.removeAttribute("src");
     this.loadMusic();
@@ -346,16 +342,18 @@ export class Editor {
 
   /** Thumbnails and waveform for the timeline, in the background. */
   private async loadStrip(take: Take) {
-    const recording = await fetchBytes(joinPath(take.dir, take.video));
-    if (!recording || this.scene?.take.id !== take.id) return;
-    const sources: ArrayBuffer[] = [];
-    if (take.systemAudio) sources.push(recording);
-    if (take.mic) {
-      const mic = await fetchBytes(joinPath(take.dir, take.mic));
-      if (mic) sources.push(mic);
+    const url = (file: string) => convertFileSrc(joinPath(take.dir, file));
+    const video = await openVideo(url(take.video)).catch(() => null);
+    if (this.scene?.take.id !== take.id) return;
+    // Read a piece at a time: recordings can be far larger than the memory.
+    const sources: AudioSource[] = [];
+    const system = take.systemFile ? url(take.systemFile) : take.systemAudio ? url(take.video) : null;
+    for (const file of [system, take.mic ? url(take.mic) : null]) {
+      const audio = file ? await openAudio(file).catch(() => null) : null;
+      if (audio) sources.push(audio);
     }
     const [thumbs, wave] = await Promise.all([
-      thumbnails(recording, take).catch(() => []),
+      video ? thumbnails(video.source, video.track).catch(() => []) : Promise.resolve([]),
       waveform(sources, take.durationMs).catch(() => null),
     ]);
     if (this.scene?.take.id !== take.id) {
@@ -1235,6 +1233,19 @@ export class Editor {
     if (!this.ui.video.paused) void mic.play();
   }
 
+  /** The system sound's own file, for takes that have one; older takes play it from the video. */
+  private loadSystem() {
+    const scene = this.scene;
+    const system = this.ui.system;
+    if (!scene?.take.systemFile) {
+      system.removeAttribute("src");
+      return;
+    }
+    system.src = convertFileSrc(joinPath(scene.take.dir, scene.take.systemFile));
+    system.currentTime = this.ui.video.currentTime;
+    if (!this.ui.video.paused) void system.play();
+  }
+
   private toggleWords() {
     const selection = this.wordSelection;
     if (!selection || !this.scene) return;
@@ -1487,6 +1498,7 @@ export class Editor {
     }
     this.video.volume = Math.min(1, project.audio.system);
     this.ui.mic.volume = Math.min(1, project.audio.mic);
+    this.ui.system.volume = Math.min(1, project.audio.system);
     this.lastTimelineKey = "";
   }
 
@@ -1516,6 +1528,7 @@ export class Editor {
     video.addEventListener("pause", () => {
       showPlaying(false);
       mic.pause();
+      this.ui.system.pause();
       webcam.pause();
       this.music.pause();
     });
@@ -1529,6 +1542,8 @@ export class Editor {
     const { video, mic, webcam } = this.ui;
     const t = video.currentTime;
     if (scene.take.mic && (start || Math.abs(mic.currentTime - t) > 0.08)) mic.currentTime = t;
+    const system = this.ui.system;
+    if (scene.take.systemFile && (start || Math.abs(system.currentTime - t) > 0.08)) system.currentTime = t;
     const webcamTime = t - (scene.take.webcamOffsetMs ?? 0) / 1000;
     if (scene.take.webcam && webcamTime >= 0 && (start || Math.abs(webcam.currentTime - webcamTime) > 0.1)) webcam.currentTime = webcamTime;
     if (scene.project.audio.music && this.music.duration) {
@@ -1537,6 +1552,7 @@ export class Editor {
     }
     if (start && !video.paused) {
       if (scene.take.mic) void mic.play();
+      if (scene.take.systemFile) void system.play();
       if (scene.take.webcam) void webcam.play();
       if (scene.project.audio.music) void this.music.play();
     }
@@ -1651,7 +1667,7 @@ export class Editor {
     this.scene = null;
     this.selected = null;
     this.ui.root.hidden = true;
-    for (const media of [this.ui.video, this.ui.webcam, this.ui.mic]) media.removeAttribute("src");
+    for (const media of [this.ui.video, this.ui.webcam, this.ui.mic, this.ui.system]) media.removeAttribute("src");
     this.music.removeAttribute("src");
   }
 
@@ -1773,9 +1789,10 @@ export class Editor {
   private setRate(rate: number) {
     const { video, mic, webcam } = this.ui;
     if (video.playbackRate === rate) return;
-    for (const media of [video, mic, webcam]) media.playbackRate = rate;
+    for (const media of [video, mic, webcam, this.ui.system]) media.playbackRate = rate;
     video.muted = rate !== 1;
     mic.muted = rate !== 1;
+    this.ui.system.muted = rate !== 1;
   }
 
   private setSpeed(id: string, rate: number) {

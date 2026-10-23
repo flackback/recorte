@@ -7,7 +7,7 @@ Gravador de tela e editor para Windows, feito com Tauri 2 (Rust + TypeScript, We
 ## Gravação
 
 - **Fontes:** tela inteira, janela ou **área** (arraste um retângulo sobre a tela antes de gravar), a 30, 60 ou 120 fps. Usa Windows.Graphics.Capture com H.264 por hardware.
-- **Áudio do sistema:** loopback WASAPI, na faixa AAC do MP4; preenchido com silêncio quando nada toca.
+- **Áudio do sistema:** loopback WASAPI, num WAV próprio (`system.wav`); preenchido com silêncio quando nada toca. Gravações antigas têm esse áudio dentro do MP4, e o app lê os dois formatos.
 - **Microfone:** faixa separada (`mic.wav`).
 - **Webcam:** gravada pelo WebView em `webcam.mp4`, alinhada à tela pelo mesmo relógio.
 - **Mouse:** posição, cliques e formato do cursor (seta, mão, texto) em `cursor.json`.
@@ -23,6 +23,11 @@ Gravador de tela e editor para Windows, feito com Tauri 2 (Rust + TypeScript, We
 - **Contagem 3-2-1** na tela escolhida antes de começar (chip "Contagem"; Esc cancela, clique começa na hora).
 - **Barra flutuante** durante a gravação, fora do vídeo: tempo, Pausar/Continuar, Marcar, Desenhar (abre a bandeja de ferramentas) e Parar. O app se minimiza e volta sozinho ao parar.
 - **Pausar:** a gravação continua por baixo e o trecho pausado já abre cortado no editor.
+- **Proteção contra travamentos:**
+  - o vídeo é gravado em segmentos de 30 s, cada um finalizado; ao parar, o app junta os segmentos em `screen.mp4` sem recodificar;
+  - os WAVs atualizam o cabeçalho a cada 2 s, e os eventos do mouse e das teclas vão para o disco a cada 2 s;
+  - se o app ou o Windows travar, ao abrir de novo o app recupera a gravação até o último segmento completo e mostra "Gravação recuperada", com um aviso do que se perdeu (no máximo 30 s).
+- **Gravações longas:** a exportação, as miniaturas, a forma de onda, a transcrição e a junção leem os arquivos em partes. Uma gravação de 30 minutos (836 MB) abre no editor em cerca de 16 s, usando cerca de 60 MB de memória do JavaScript.
 
 ## Editor
 
@@ -234,7 +239,9 @@ Para capturas de tela ou automação da interface durante o desenvolvimento, def
 
 | Arquivo | Conteúdo |
 |---|---|
-| `screen.mp4` | Tela em H.264 e áudio do sistema em AAC |
+| `screen.mp4` | Tela em H.264 (em gravações antigas, também o áudio do sistema em AAC) |
+| `system.wav` | Áudio do sistema |
+| `segments\`, `segments.json`, `recording.json`, `*.partial.jsonl` | Só durante a gravação ou depois de um travamento: segmentos e dados para recuperar |
 | `mic.wav`, `mic.enhanced.wav` | Microfone original e melhorado |
 | `webcam.mp4` | Webcam (MP4 fragmentado) |
 | `cursor.json` | Mouse: `{t, k, b?, x, y, w?, c?}`, com `k` = m, d, u, w ou s (formato) |
@@ -264,6 +271,9 @@ Para capturas de tela ou automação da interface durante o desenvolvimento, def
 | `src/editor/timeline.ts` | Timeline em canvas |
 | `src/editor/exporter.ts` | Exportação MP4 e GIF |
 | `src/editor/transcribe.ts`, `transcribe.worker.ts` | Transcrição |
+| `src/editor/mp4.ts` | Leitor de MP4 por partes (índice e amostras sob demanda) |
+| `src/editor/audio-source.ts` | Áudio por partes (WAV e AAC) |
+| `src/join.ts` | Junta os segmentos da gravação em `screen.mp4` |
 | `src/editor/cleanup.ts` | Silêncios e hesitações |
 | `src/updates.ts`, `scripts/release.ps1` | Atualização automática e publicação |
 | `src-tauri/src/control.rs` | Canal local para o servidor MCP |

@@ -1,24 +1,21 @@
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 
 import { joinPath, type Take, type Word } from "../types";
+import { openAudio, readMono } from "./audio-source";
 
 export const SAMPLE_RATE = 16_000;
 const TRANSCRIPT_FILE = "transcript.json";
 
-/** Speech as 16 kHz mono: the microphone if there is one, otherwise the recording's own audio. */
+/**
+ * Speech as 16 kHz mono: the microphone if there is one, otherwise the system sound. Read a
+ * minute at a time, so long recordings don't have to fit in memory as a whole file.
+ */
 export async function speech(take: Take): Promise<Float32Array> {
-  const file = take.mic ?? (take.systemAudio ? take.video : null);
+  const file = take.mic ?? take.systemFile ?? (take.systemAudio ? take.video : null);
   if (!file) throw new Error("Esta gravação não tem áudio.");
-  const response = await fetch(convertFileSrc(joinPath(take.dir, file)));
-  const bytes = await response.arrayBuffer();
-  const length = Math.ceil((take.durationMs / 1000) * SAMPLE_RATE);
-  const context = new OfflineAudioContext(1, Math.max(1, length), SAMPLE_RATE);
-  const decoded = await context.decodeAudioData(bytes);
-  const source = context.createBufferSource();
-  source.buffer = decoded;
-  source.connect(context.destination);
-  source.start();
-  return (await context.startRendering()).getChannelData(0);
+  const audio = await openAudio(convertFileSrc(joinPath(take.dir, file)));
+  if (!audio) throw new Error("Esta gravação não tem áudio.");
+  return readMono(audio, SAMPLE_RATE, take.durationMs);
 }
 
 async function save(dir: string, words: Word[]) {

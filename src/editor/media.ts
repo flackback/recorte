@@ -1,12 +1,14 @@
-import { demux } from "./exporter";
+import type { AudioSource } from "./audio-source";
+import { decoderConfig } from "./exporter";
+import { readSamples, type ByteSource, type Mp4Track } from "./mp4";
 
 /**
- * Small frames for the timeline, decoded from keyframes only so it takes a fraction of a second
- * even for long takes.
+ * Small frames for the timeline, decoded from keyframes only and read one at a time, so it takes
+ * a fraction of a second even for long takes.
  */
-export async function thumbnails(recording: ArrayBuffer, size: { width: number; height: number }, count = 48): Promise<{ t: number; image: ImageBitmap }[]> {
-  const { config, chunks } = await demux(recording, size);
-  const keys = chunks.filter((chunk) => chunk.type === "key");
+export async function thumbnails(source: ByteSource, track: Mp4Track, count = 48): Promise<{ t: number; image: ImageBitmap }[]> {
+  const keys: number[] = [];
+  for (let i = 0; i < track.count; i++) if (track.sync[i]) keys.push(i);
   const step = Math.max(1, Math.floor(keys.length / count));
   const picked = keys.filter((_, index) => index % step === 0);
 
@@ -23,10 +25,11 @@ export async function thumbnails(recording: ArrayBuffer, size: { width: number; 
     },
     error: () => undefined,
   });
-  decoder.configure(config);
+  decoder.configure(decoderConfig(track));
   // Each keyframe decodes on its own; flushing between them resets the reference chain.
-  for (const chunk of picked) {
-    decoder.decode(chunk);
+  for (const index of picked) {
+    const [data] = await readSamples(source, track, index, index + 1);
+    decoder.decode(new EncodedVideoChunk({ type: "key", timestamp: track.times[index], data }));
     await decoder.flush().catch(() => undefined);
   }
   await Promise.all(pending);
@@ -34,26 +37,32 @@ export async function thumbnails(recording: ArrayBuffer, size: { width: number; 
   return result.sort((a, b) => a.t - b.t);
 }
 
-/** Peak level per bucket over the take, mixing every audio source given. */
-export async function waveform(sources: ArrayBuffer[], durationMs: number, buckets = 1600): Promise<Float32Array | null> {
+/** Peak level per bucket over the take, mixing every audio source given, read a minute at a time. */
+export async function waveform(sources: AudioSource[], durationMs: number, buckets = 1600): Promise<Float32Array | null> {
   if (!sources.length) return null;
-  const context = new OfflineAudioContext(1, 1, 8000);
   const peaks = new Float32Array(buckets);
-  for (const bytes of sources) {
-    let buffer: AudioBuffer;
-    try {
-      buffer = await context.decodeAudioData(bytes.slice(0));
-    } catch {
-      continue;
-    }
-    const data = buffer.getChannelData(0);
-    const perBucket = (buffer.sampleRate * durationMs) / 1000 / buckets;
-    for (let bucket = 0; bucket < buckets; bucket++) {
-      const start = Math.floor(bucket * perBucket);
-      const end = Math.min(data.length, Math.floor((bucket + 1) * perBucket));
-      let peak = 0;
-      for (let i = start; i < end; i += 4) peak = Math.max(peak, Math.abs(data[i]));
-      peaks[bucket] = Math.max(peaks[bucket], peak);
+  const bucketMs = durationMs / buckets;
+  const step = 60_000;
+  for (const audio of sources) {
+    for (let start = 0; start < durationMs; start += step) {
+      const end = Math.min(durationMs, start + step);
+      let buffer: AudioBuffer;
+      try {
+        buffer = await audio.read(start, end);
+      } catch {
+        break;
+      }
+      const data = buffer.getChannelData(0);
+      const perMs = buffer.sampleRate / 1000;
+      const first = Math.floor(start / bucketMs);
+      const last = Math.min(buckets - 1, Math.floor((end - 1) / bucketMs));
+      for (let bucket = first; bucket <= last; bucket++) {
+        const from = Math.max(0, Math.floor((bucket * bucketMs - start) * perMs));
+        const to = Math.min(data.length, Math.floor(((bucket + 1) * bucketMs - start) * perMs));
+        let peak = 0;
+        for (let i = from; i < to; i += 4) peak = Math.max(peak, Math.abs(data[i]));
+        peaks[bucket] = Math.max(peaks[bucket], peak);
+      }
     }
   }
   // Normalize so quiet recordings still show a readable shape.

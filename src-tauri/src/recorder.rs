@@ -2,8 +2,9 @@ use std::error::Error;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
+use std::io::Write as _;
 use std::sync::{Arc, Mutex};
-use std::thread::JoinHandle;
+use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 use anyhow::{Context as _, anyhow, bail};
@@ -23,7 +24,7 @@ use windows_capture::settings::{
 };
 use windows_capture::window::Window;
 
-use crate::audio::{self, EncoderSink, WavSink};
+use crate::audio::{self, WavSink};
 use crate::clock::{HNS_PER_SEC, now_hns};
 use crate::cursor::{self, Button, KeyPress, Kind, RawEvent, Shape};
 use crate::sources;
@@ -31,6 +32,19 @@ use crate::sources;
 pub const META_FILE: &str = "take.json";
 const VIDEO_FILE: &str = "screen.mp4";
 const MIC_FILE: &str = "mic.wav";
+const SYSTEM_FILE: &str = "system.wav";
+/// While recording, video goes to short, finished segments here; they become `screen.mp4` when
+/// the recording stops. A crash loses at most the segment being written.
+const SEGMENT_DIR: &str = "segments";
+const SEGMENT_HNS: i64 = 30 * HNS_PER_SEC;
+/// Finished segments and the first frame's time, rewritten after each segment.
+const SEGMENTS_FILE: &str = "segments.json";
+/// The take's description, written at the start so an interrupted take can be recovered.
+const RECORDING_FILE: &str = "recording.json";
+/// Mouse and key events, appended every few seconds while recording.
+const CURSOR_PARTIAL: &str = "cursor.partial.jsonl";
+const KEYS_PARTIAL: &str = "keys.partial.jsonl";
+const PARTIAL_EVERY: Duration = Duration::from_secs(2);
 const CURSOR_FILE: &str = "cursor.json";
 const KEYS_FILE: &str = "keys.json";
 const THUMB_FILE: &str = "thumb.jpg";
@@ -68,6 +82,16 @@ pub struct PauseSpan {
     pub end: f64,
 }
 
+/// A finished piece of the recording, placed on the take's timeline.
+#[derive(Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct Segment {
+    pub file: String,
+    pub start_ms: f64,
+    pub end_ms: f64,
+    pub frames: u64,
+}
+
 #[derive(Serialize, Deserialize, Clone, Copy)]
 pub struct CropRect {
     pub x: i32,
@@ -95,6 +119,9 @@ pub struct TakeMeta {
     pub frames: u64,
     pub video: String,
     pub system_audio: bool,
+    /// System sound as its own WAV; older takes have it inside the video instead.
+    #[serde(default)]
+    pub system_file: Option<String>,
     pub mic: Option<String>,
     pub cursor: String,
     pub cursor_in_video: bool,
@@ -122,16 +149,48 @@ pub struct TakeMeta {
     #[serde(default)]
     pub start_hns: i64,
     pub warnings: Vec<String>,
+    /// Video segments still to be joined into `video`; empty once joined.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub segments: Vec<Segment>,
     /// Filled in when listing; not stored.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub dir: String,
 }
 
 struct EncoderConfig {
-    path: PathBuf,
+    dir: PathBuf,
     width: u32,
     height: u32,
     fps: u32,
+}
+
+/// The segment being written: its number, first frame (QPC, 100 ns) and frame count.
+#[derive(Default)]
+struct SegmentState {
+    index: u32,
+    start: i64,
+    frames: u64,
+}
+
+fn segment_name(index: u32) -> String {
+    format!("{SEGMENT_DIR}/{index:03}.mp4")
+}
+
+fn new_encoder(config: &EncoderConfig, index: u32) -> Result<VideoEncoder, CaptureError> {
+    Ok(VideoEncoder::new(
+        VideoSettingsBuilder::new(config.width, config.height)
+            .sub_type(VideoSettingsSubType::H264)
+            .frame_rate(config.fps)
+            .bitrate(bitrate(config.width, config.height, config.fps)),
+        // Sound goes to WAV files, which survive a crash; segments are video only.
+        AudioSettingsBuilder::new().disabled(true),
+        ContainerSettingsBuilder::new(),
+        config.dir.join(segment_name(index)),
+    )?)
+}
+
+fn hns_to_ms(hns: i64) -> f64 {
+    (hns as f64 / (HNS_PER_SEC as f64 / 1000.0) * 10.0).round() / 10.0
 }
 
 /// State shared by the capture thread, the audio threads and the command that stops the take.
@@ -142,9 +201,24 @@ pub struct Shared {
     pub stop: AtomicBool,
     pub closed: AtomicBool,
     pub frames: AtomicU64,
-    system_audio: AtomicBool,
     thumbnail: PathBuf,
     config: EncoderConfig,
+    segment: Mutex<SegmentState>,
+    /// Segments whose file is finished, in order.
+    finished: Mutex<Vec<Segment>>,
+    /// Threads finishing earlier segments' files.
+    finishing: Mutex<Vec<JoinHandle<()>>>,
+}
+
+impl Shared {
+    /// Records a finished segment and rewrites the list, so recovery knows what is safe.
+    fn segment_done(&self, segment: Segment) {
+        let mut finished = self.finished.lock().unwrap();
+        finished.push(segment);
+        finished.sort_by(|a, b| a.start_ms.total_cmp(&b.start_ms));
+        let list = serde_json::json!({ "t0": self.t0.load(Ordering::Acquire), "segments": *finished });
+        let _ = write_json(&self.config.dir.join(SEGMENTS_FILE), &list);
+    }
 }
 
 struct Capture {
@@ -157,16 +231,8 @@ impl GraphicsCaptureApiHandler for Capture {
 
     fn new(ctx: Context<Self::Flags>) -> Result<Self, Self::Error> {
         let shared = ctx.flags;
-        let config = &shared.config;
-        let encoder = VideoEncoder::new(
-            VideoSettingsBuilder::new(config.width, config.height)
-                .sub_type(VideoSettingsSubType::H264)
-                .frame_rate(config.fps)
-                .bitrate(bitrate(config.width, config.height, config.fps)),
-            AudioSettingsBuilder::new().disabled(!shared.system_audio.load(Ordering::Acquire)),
-            ContainerSettingsBuilder::new(),
-            &config.path,
-        )?;
+        fs::create_dir_all(shared.config.dir.join(SEGMENT_DIR))?;
+        let encoder = new_encoder(&shared.config, 0)?;
         *shared.encoder.lock().unwrap() = Some(encoder);
         Ok(Self { shared })
     }
@@ -176,8 +242,30 @@ impl GraphicsCaptureApiHandler for Capture {
         let Some(encoder) = encoder.as_mut() else {
             return Ok(());
         };
-        // Set while holding the encoder lock, so no audio reaches the encoder before this frame.
-        let _ = self.shared.t0.compare_exchange(0, frame.timestamp()?.Duration, Ordering::AcqRel, Ordering::Acquire);
+        let time = frame.timestamp()?.Duration;
+        let _ = self.shared.t0.compare_exchange(0, time, Ordering::AcqRel, Ordering::Acquire);
+        {
+            let mut segment = self.shared.segment.lock().unwrap();
+            // Every 30 s a new file starts; the finished one is closed on its own thread.
+            if segment.frames > 0 && time - segment.start >= SEGMENT_HNS {
+                let next = segment.index + 1;
+                let finished = std::mem::replace(encoder, new_encoder(&self.shared.config, next)?);
+                let t0 = self.shared.t0.load(Ordering::Acquire);
+                let done = Segment { file: segment_name(segment.index), start_ms: hns_to_ms(segment.start - t0), end_ms: hns_to_ms(time - t0), frames: segment.frames };
+                let shared = self.shared.clone();
+                let handle = thread::spawn(move || {
+                    if finished.finish().is_ok() {
+                        shared.segment_done(done);
+                    }
+                });
+                self.shared.finishing.lock().unwrap().push(handle);
+                *segment = SegmentState { index: next, start: time, frames: 0 };
+            }
+            if segment.frames == 0 {
+                segment.start = time;
+            }
+            segment.frames += 1;
+        }
         encoder.send_frame(frame)?;
         if self.shared.frames.fetch_add(1, Ordering::Relaxed) == THUMB_FRAME {
             let _ = frame.save_as_image(&self.shared.thumbnail, ImageFormat::Jpeg);
@@ -239,6 +327,8 @@ pub struct Recording {
     control: CaptureControl<Capture, CaptureError>,
     audio: Vec<(&'static str, JoinHandle<anyhow::Result<()>>)>,
     cursor: cursor::Logger,
+    /// Appends input events to disk while recording.
+    saver: Option<JoinHandle<()>>,
     meta: TakeMeta,
     dir: PathBuf,
     /// When the current pause began, in ms on the take's timeline.
@@ -293,22 +383,30 @@ impl Recording {
             stop: AtomicBool::new(false),
             closed: AtomicBool::new(false),
             frames: AtomicU64::new(0),
-            system_audio: AtomicBool::new(false),
             thumbnail: dir.join(THUMB_FILE),
-            config: EncoderConfig { path: dir.join(VIDEO_FILE), width, height, fps },
+            config: EncoderConfig { dir: dir.clone(), width, height, fps },
+            segment: Mutex::new(SegmentState::default()),
+            finished: Mutex::new(Vec::new()),
+            finishing: Mutex::new(Vec::new()),
         });
 
         let mut warnings = Vec::new();
         let mut audio_threads = Vec::new();
         let cursor = cursor::Logger::start(options.keystrokes)?;
 
+        let mut system_file = None;
         if options.system_audio {
-            match audio::spawn(audio::Source::System, shared.clone(), Box::new(EncoderSink(shared.clone()))) {
+            let path = dir.join(SYSTEM_FILE);
+            let started = WavSink::create(&path).and_then(|sink| audio::spawn(audio::Source::System, shared.clone(), Box::new(sink)));
+            match started {
                 Ok(handle) => {
-                    shared.system_audio.store(true, Ordering::Release);
+                    system_file = Some(SYSTEM_FILE.to_string());
                     audio_threads.push(("áudio do sistema", handle));
                 }
-                Err(error) => warnings.push(format!("Áudio do sistema desativado: {error:#}")),
+                Err(error) => {
+                    let _ = fs::remove_file(&path);
+                    warnings.push(format!("Áudio do sistema desativado: {error:#}"));
+                }
             }
         }
         let mut mic = None;
@@ -371,7 +469,8 @@ impl Recording {
             duration_ms: 0.0,
             frames: 0,
             video: VIDEO_FILE.into(),
-            system_audio: shared.system_audio.load(Ordering::Acquire),
+            system_audio: system_file.is_some(),
+            system_file,
             mic,
             cursor: CURSOR_FILE.into(),
             cursor_in_video: options.show_cursor || cursor_setting == CursorCaptureSettings::Default,
@@ -385,10 +484,14 @@ impl Recording {
             markers: Vec::new(),
             start_hns: 0,
             warnings,
+            segments: Vec::new(),
             dir: String::new(),
         };
+        // Everything recovery needs to rebuild take.json if the app never gets to stop.
+        write_json(&dir.join(RECORDING_FILE), &meta)?;
+        let saver = spawn_saver(shared.clone(), dir.clone(), meta.origin_x, meta.origin_y);
 
-        Ok(Self { shared, control, audio: audio_threads, cursor, meta, dir, paused_since: None })
+        Ok(Self { shared, control, audio: audio_threads, cursor, saver: Some(saver), meta, dir, paused_since: None })
     }
 
     pub fn dir(&self) -> &Path {
@@ -438,7 +541,7 @@ impl Recording {
 
     pub fn stop(mut self) -> anyhow::Result<TakeMeta> {
         self.resume();
-        let Self { shared, control, audio, cursor, mut meta, dir, .. } = self;
+        let Self { shared, control, audio, cursor, saver, mut meta, dir, .. } = self;
         let end = now_hns();
         shared.stop.store(true, Ordering::Release);
 
@@ -452,14 +555,26 @@ impl Recording {
         }
         let (events, keys) = cursor.stop();
         control.stop().map_err(|error| anyhow!("parar a captura: {error}"))?;
+        // After the capture, so waiting for it never adds frames past the stop.
+        if let Some(saver) = saver {
+            let _ = saver.join();
+        }
 
         let encoder = shared.encoder.lock().unwrap().take();
         match encoder {
             Some(encoder) => encoder.finish().map_err(|error| anyhow!("finalizar o vídeo: {error}"))?,
             None => bail!("o codificador de vídeo não foi criado"),
         }
+        for handle in shared.finishing.lock().unwrap().drain(..) {
+            let _ = handle.join();
+        }
 
         let t0 = shared.t0.load(Ordering::Acquire);
+        let last = std::mem::take(&mut *shared.segment.lock().unwrap());
+        if last.frames > 0 {
+            shared.segment_done(Segment { file: segment_name(last.index), start_ms: hns_to_ms(last.start - t0), end_ms: hns_to_ms(end - t0), frames: last.frames });
+        }
+        meta.segments = shared.finished.lock().unwrap().clone();
         if t0 == 0 {
             meta.warnings.push("Nenhum quadro foi capturado.".into());
         }
@@ -473,9 +588,105 @@ impl Recording {
             write_json(&dir.join(KEYS_FILE), &key_track(&keys, t0))?;
         }
         write_json(&dir.join(META_FILE), &meta)?;
+        for partial in [CURSOR_PARTIAL, KEYS_PARTIAL, RECORDING_FILE] {
+            let _ = fs::remove_file(dir.join(partial));
+        }
         meta.dir = dir.to_string_lossy().into_owned();
         Ok(meta)
     }
+}
+
+/// Appends new mouse and key events to disk every few seconds, already on the take's timeline,
+/// so an interrupted take keeps them.
+fn spawn_saver(shared: Arc<Shared>, dir: PathBuf, origin_x: i32, origin_y: i32) -> JoinHandle<()> {
+    thread::spawn(move || {
+        let (mut events_done, mut keys_done) = (0, 0);
+        loop {
+            let stopping = shared.stop.load(Ordering::Acquire);
+            let t0 = shared.t0.load(Ordering::Acquire);
+            if t0 != 0 {
+                let (events, keys) = cursor::since(events_done, keys_done);
+                events_done += events.len();
+                keys_done += keys.len();
+                let lines = |values: Vec<serde_json::Value>| values.iter().map(|value| format!("{value}\n")).collect::<String>();
+                let track = serde_json::to_value(cursor_track(&events, t0, origin_x, origin_y)).unwrap_or_default();
+                append(&dir.join(CURSOR_PARTIAL), &lines(track["events"].as_array().cloned().unwrap_or_default()));
+                let keys = key_track(&keys, t0);
+                append(&dir.join(KEYS_PARTIAL), &lines(keys["events"].as_array().cloned().unwrap_or_default()));
+            }
+            if stopping {
+                break;
+            }
+            // Short naps, so a stop is noticed at once.
+            let started = std::time::Instant::now();
+            while started.elapsed() < PARTIAL_EVERY && !shared.stop.load(Ordering::Acquire) {
+                thread::sleep(Duration::from_millis(50));
+            }
+        }
+    })
+}
+
+fn append(path: &Path, text: &str) {
+    if text.is_empty() {
+        return;
+    }
+    if let Ok(mut file) = fs::OpenOptions::new().create(true).append(true).open(path) {
+        let _ = file.write_all(text.as_bytes());
+    }
+}
+
+/// Rebuilds `take.json` for a take whose app stopped mid-recording: up to the last finished
+/// segment, with the mouse and key events saved so far. Returns false when nothing is usable.
+fn recover(dir: &Path) -> bool {
+    let read = |name: &str| fs::read_to_string(dir.join(name)).ok().and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok());
+    let Some(mut meta) = read(RECORDING_FILE).and_then(|value| serde_json::from_value::<TakeMeta>(value).ok()) else {
+        return false;
+    };
+    let Some(list) = read(SEGMENTS_FILE) else {
+        return false;
+    };
+    let segments: Vec<Segment> = serde_json::from_value(list["segments"].clone()).unwrap_or_default();
+    let Some(last) = segments.last() else {
+        return false;
+    };
+    let partial_events = |name: &str| -> Vec<serde_json::Value> {
+        fs::read_to_string(dir.join(name)).unwrap_or_default().lines().filter_map(|line| serde_json::from_str(line).ok()).collect()
+    };
+    let _ = write_json(&dir.join(CURSOR_FILE), &serde_json::json!({ "version": 2, "events": partial_events(CURSOR_PARTIAL) }));
+    if meta.keys.is_some() {
+        let _ = write_json(&dir.join(KEYS_FILE), &serde_json::json!({ "version": 1, "events": partial_events(KEYS_PARTIAL) }));
+    }
+    meta.duration_ms = last.end_ms;
+    meta.frames = segments.iter().map(|segment| segment.frames).sum();
+    meta.start_hns = list["t0"].as_i64().unwrap_or(0);
+    meta.thumbnail = dir.join(THUMB_FILE).exists().then(|| THUMB_FILE.to_string());
+    let total = (last.end_ms / 1000.0) as u64;
+    meta.warnings.push(format!(
+        "Esta gravação foi interrompida e recuperada até {}:{:02}. O que veio depois desse ponto se perdeu.",
+        total / 60,
+        total % 60
+    ));
+    meta.title = Some("Gravação recuperada".into());
+    meta.segments = segments;
+    write_json(&dir.join(META_FILE), &meta).is_ok()
+}
+
+/// Called once the frontend has joined the segments into the video file: removes them.
+pub fn segments_joined(dir: &Path) -> anyhow::Result<TakeMeta> {
+    let text = fs::read_to_string(dir.join(META_FILE))?;
+    let mut meta: TakeMeta = serde_json::from_str(&text)?;
+    let video = dir.join(&meta.video);
+    if !fs::metadata(&video).is_ok_and(|file| file.len() > 0) {
+        bail!("o vídeo juntado não foi encontrado");
+    }
+    meta.segments.clear();
+    write_json(&dir.join(META_FILE), &meta)?;
+    let _ = fs::remove_dir_all(dir.join(SEGMENT_DIR));
+    for leftover in [SEGMENTS_FILE, RECORDING_FILE, CURSOR_PARTIAL, KEYS_PARTIAL] {
+        let _ = fs::remove_file(dir.join(leftover));
+    }
+    meta.dir = dir.to_string_lossy().into_owned();
+    Ok(meta)
 }
 
 #[derive(Serialize)]
@@ -578,7 +789,7 @@ pub fn list_takes(root: &Path) -> Vec<TakeMeta> {
         .filter_map(Result::ok)
         .filter_map(|entry| {
             let dir = entry.path();
-            if !dir.join(META_FILE).exists() {
+            if !dir.join(META_FILE).exists() && !(dir.join(RECORDING_FILE).exists() && recover(&dir)) {
                 remove_if_abandoned(&dir);
                 return None;
             }

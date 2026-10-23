@@ -11,6 +11,8 @@ export type Take = {
   frames: number;
   video: string;
   systemAudio: boolean;
+  /** System sound as its own WAV; older takes keep it inside the video. */
+  systemFile?: string | null;
   mic: string | null;
   cursor: string;
   cursorInVideo: boolean;
@@ -31,8 +33,13 @@ export type Take = {
   /** Where the webcam recording starts on the take's timeline, in ms. */
   webcamOffsetMs?: number;
   warnings: string[];
+  /** Video pieces not yet joined into `video` (right after recording, or after a crash). */
+  segments?: Segment[];
   dir: string;
 };
+
+/** A finished piece of a recording, on the take's timeline. */
+export type Segment = { file: string; startMs: number; endMs: number; frames: number };
 
 /**
  * One entry of `cursor.json`: `t` in ms from the first frame, `x`/`y` in video pixels. `s` events

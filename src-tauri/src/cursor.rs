@@ -154,6 +154,13 @@ impl Logger {
     }
 }
 
+/// Events and key presses logged so far, from the given positions on (for saving as they come).
+pub fn since(events_from: usize, keys_from: usize) -> (Vec<RawEvent>, Vec<KeyPress>) {
+    let events = EVENTS.lock().unwrap();
+    let keys = KEYS.lock().unwrap();
+    (events.get(events_from..).unwrap_or_default().to_vec(), keys.get(keys_from..).unwrap_or_default().to_vec())
+}
+
 fn record(event: RawEvent) {
     EVENTS.lock().unwrap().push(event);
 }

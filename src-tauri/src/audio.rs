@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::sync::mpsc;
 use std::thread::{self, JoinHandle};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, anyhow};
 use wasapi::{DeviceEnumerator, Direction, SampleType, StreamMode, WaveFormat, initialize_mta};
@@ -36,25 +36,14 @@ pub trait Sink: Send {
     fn finish(self: Box<Self>) -> anyhow::Result<()>;
 }
 
-/// Feeds system audio into the MP4 encoder as its audio track.
-pub struct EncoderSink(pub Arc<Shared>);
+/// How often the WAV header is brought up to date, so an interrupted take keeps its audio.
+const FLUSH_EVERY: Duration = Duration::from_secs(2);
 
-impl Sink for EncoderSink {
-    fn write(&mut self, pcm: &[u8]) {
-        if let Some(encoder) = self.0.encoder.lock().unwrap().as_mut() {
-            let _ = encoder.send_audio_buffer(pcm, 0);
-        }
-    }
-
-    fn finish(self: Box<Self>) -> anyhow::Result<()> {
-        Ok(())
-    }
-}
-
-/// Writes the microphone to its own WAV track, as the editor treats it separately.
+/// Writes a track (microphone or system sound) to its own WAV file.
 pub struct WavSink {
     writer: hound::WavWriter<BufWriter<File>>,
     error: Option<hound::Error>,
+    flushed: Instant,
 }
 
 impl WavSink {
@@ -66,7 +55,7 @@ impl WavSink {
             sample_format: hound::SampleFormat::Int,
         };
         let writer = hound::WavWriter::create(path, spec).with_context(|| format!("criar {}", path.display()))?;
-        Ok(Self { writer, error: None })
+        Ok(Self { writer, error: None, flushed: Instant::now() })
     }
 }
 
@@ -79,6 +68,13 @@ impl Sink for WavSink {
             if let Err(error) = self.writer.write_sample(i16::from_le_bytes([sample[0], sample[1]])) {
                 self.error = Some(error);
                 return;
+            }
+        }
+        // Writes the buffered samples and the real sizes into the header.
+        if self.flushed.elapsed() >= FLUSH_EVERY {
+            self.flushed = Instant::now();
+            if let Err(error) = self.writer.flush() {
+                self.error = Some(error);
             }
         }
     }

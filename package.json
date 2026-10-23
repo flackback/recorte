@@ -19,7 +19,6 @@
     "@tauri-apps/plugin-updater": "^2.14.0",
     "gifenc": "^1.0.3",
     "mp4-muxer": "^5.2.2",
-    "mp4box": "^2.4.1",
     "zod": "^4.6.7"
   },
   "devDependencies": {

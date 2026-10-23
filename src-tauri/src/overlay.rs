@@ -37,6 +37,10 @@ pub async fn overlay_open(app: AppHandle, mode: String, monitor: usize) -> Resul
     window
         .set_size(PhysicalSize::new((rect.right - rect.left) as u32, (rect.bottom - rect.top) as u32))
         .map_err(|error| error.to_string())?;
+    if mode == "draw" {
+        // Lets clicks through while the page loads; the page takes them once a tool is chosen.
+        let _ = window.set_ignore_cursor_events(true);
+    }
     window.show().map_err(|error| error.to_string())?;
     if mode == "draw" {
         // The drawing layer covers the whole monitor; the floating bar must stay above it to be
