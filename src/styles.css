@@ -1636,6 +1636,43 @@ input[type="range"]:focus-visible::-webkit-slider-thumb {
   transition: border-color var(--fast) var(--ease), background var(--fast) var(--ease), color var(--fast) var(--ease), transform var(--fast) var(--ease);
 }
 
+/* Área mode: each monitor invites a click to draw the area. */
+.monitor-map.area-mode .monitor {
+  cursor: crosshair;
+}
+
+.monitor-map.area-mode .monitor::after {
+  content: "Desenhar área";
+  position: absolute;
+  inset: auto 0 4px;
+  color: var(--accent);
+  font-size: 10px;
+  font-weight: 600;
+  opacity: 0;
+  transition: opacity var(--fast) var(--ease);
+}
+
+.monitor-map.area-mode .monitor:hover:not(:disabled)::after {
+  opacity: 1;
+}
+
+.monitor .area-mark.flash {
+  animation: area-flash 1.2s var(--ease) 2;
+}
+
+@keyframes area-flash {
+  50% {
+    background: color-mix(in srgb, var(--accent) 65%, transparent);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 35%, transparent);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .monitor .area-mark.flash {
+    animation: none;
+  }
+}
+
 /* The chosen area, to scale inside its monitor. */
 .monitor .area-mark {
   position: absolute;

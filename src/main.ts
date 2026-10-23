@@ -46,6 +46,7 @@ const ui = {
   takeSelectionTrash: $<HTMLButtonElement>("take-selection-trash"),
   takeSelectionClear: $<HTMLButtonElement>("take-selection-clear"),
   emptyRecord: $<HTMLButtonElement>("empty-record"),
+  areaHint: $("area-hint"),
   emptyOpen: $<HTMLButtonElement>("empty-open"),
   titlebarStatus: $("titlebar-status"),
   titlebarTime: $("titlebar-time"),
@@ -215,6 +216,9 @@ function renderMonitors() {
   const places = monitorPlaces(monitors);
   const ordered = [...monitors].sort((a, b) => a.x - b.x || a.y - b.y);
 
+  ui.monitorMap.classList.toggle("area-mode", picker.kind === "a");
+  // Says how to choose the area, since clicking a monitor is not obvious.
+  ui.areaHint.hidden = picker.kind !== "a";
   ui.monitorMap.replaceChildren(
     ...monitors.map((monitor) => {
       const button = document.createElement("button");
@@ -223,7 +227,9 @@ function renderMonitors() {
       button.setAttribute("role", "radio");
       button.setAttribute("aria-checked", String(monitor.index === picker.monitor));
       button.textContent = String(ordered.indexOf(monitor) + 1);
-      button.title = `${places.get(monitor.index)} · ${monitor.name} · ${monitor.width}×${monitor.height}`;
+      button.title = picker.kind === "a"
+        ? `Clique para desenhar a área na ${places.get(monitor.index)?.toLowerCase()}`
+        : `${places.get(monitor.index)} · ${monitor.name} · ${monitor.width}×${monitor.height}`;
       button.style.left = `${offsetX + (monitor.x - left) * scale + gap / 2}px`;
       button.style.top = `${offsetY + (monitor.y - top) * scale + gap / 2}px`;
       button.style.width = `${monitor.width * scale - gap}px`;
@@ -377,6 +383,7 @@ function renderPicker() {
   for (const input of ui.sourceKind.querySelectorAll<HTMLInputElement>("input")) input.checked = input.value === picker.kind;
   const showWindows = picker.kind === "w";
   ui.monitorMap.hidden = showWindows;
+  ui.areaHint.hidden = picker.kind !== "a";
   ui.windowList.hidden = !showWindows;
   if (showWindows) renderWindows();
   else renderMonitors();
@@ -1016,8 +1023,9 @@ ui.sourceKind.addEventListener("change", (event) => {
   picker.kind = (event.target as HTMLInputElement).value as typeof picker.kind;
   renderPicker();
   saveSettings();
-  // Área: draw it right away, unless one is already chosen on this monitor.
+  // Área: draw it right away, unless one is already chosen on this monitor; then show where it is.
   if (picker.kind === "a" && picker.area?.monitor !== picker.monitor) void chooseArea();
+  else if (picker.kind === "a") ui.monitorMap.querySelector(".area-mark")?.classList.add("flash");
   // Window titles change all the time; refresh when switching to the list.
   if (picker.kind === "w") void refreshSources();
 });
