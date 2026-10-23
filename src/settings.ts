@@ -51,6 +51,7 @@ export class Settings {
     changes: $<HTMLButtonElement>("settings-changes"),
     aboutVersion: $("about-version"),
     repo: $<HTMLButtonElement>("about-repo"),
+    slice: $<HTMLButtonElement>("about-slice"),
     shortcuts: $<HTMLButtonElement>("about-shortcuts"),
   };
   private returnFocus: HTMLElement | null = null;
@@ -95,7 +96,8 @@ export class Settings {
     ui.autoUpdate.addEventListener("change", () => setAutoUpdate(ui.autoUpdate.checked));
     ui.check.addEventListener("click", () => void updates.check(true));
     ui.changes.addEventListener("click", () => void openUrl(`${REPO}/releases`));
-    ui.repo.addEventListener("click", () => void openUrl(REPO));
+    ui.repo.addEventListener("click", () => void openUrl(`${REPO}#créditos`));
+    ui.slice.addEventListener("click", () => void openUrl("https://github.com/rit3zh/Slice"));
     ui.shortcuts.addEventListener("click", () => {
       this.close();
       actions.showShortcuts();

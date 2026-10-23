@@ -1,6 +1,8 @@
 # Recorte
 
-Gravador de tela e editor para Windows, feito com Tauri 2 (Rust + TypeScript, WebGPU). Escrito do zero, inspirado nas funcionalidades do [Slice](https://github.com/rit3zh/slice) para macOS, sem reaproveitar código nem arquivos dele.
+Gravador de tela e editor para Windows, feito com Tauri 2 (Rust + TypeScript, WebGPU).
+
+> **Inspirado no [Slice](https://github.com/rit3zh/Slice), de [rit3zh](https://github.com/rit3zh)**, um gravador de tela e editor para macOS ([slice.rit3zh.dev](https://slice.rit3zh.dev)). O Recorte é um projeto independente para Windows, escrito do zero: não contém código, ícones nem outros arquivos do Slice. As ideias de recursos vêm dele. Veja [Créditos](#créditos).
 
 ## Gravação
 
@@ -172,6 +174,38 @@ Depois de mudar o código em `mcp/` ou em `src/editor/project.ts`, rode `npm run
 3. O script muda a versão nos três arquivos, gera o instalador assinado, cria o `latest.json` e publica a release.
 
 A chave de assinatura fica em `%USERPROFILE%\.tauri\recorte.key`, fora do projeto. Guarde uma cópia: sem ela, os apps instalados não aceitam versões novas.
+
+## Créditos
+
+### Slice, a inspiração
+
+O Recorte existe por causa do **[Slice](https://github.com/rit3zh/Slice)**, criado por **[rit3zh](https://github.com/rit3zh)** para macOS. A lista de recursos do Recorte (zoom automático pelos cliques, cursor suavizado, estilos prontos, desenho durante a gravação, transcrição com cortes por palavras, entre outros) segue o que o Slice mostrou ser útil.
+
+- O Recorte foi escrito do zero para Windows, com outras tecnologias (Tauri, WebGPU e APIs do Windows). Ele não copia código, ícones, sons nem modelos do Slice.
+- O Slice é distribuído pela licença própria dele, a *Slice Source-Available License*, de rit3zh. Ela vale para o código do Slice, não para o Recorte.
+- O Recorte não é afiliado ao Slice nem a rit3zh, e não tem o apoio deles. "Slice" é o nome do projeto de rit3zh e aparece aqui só para dizer de onde vem a inspiração.
+
+Se você usa Mac, use o Slice original: https://github.com/rit3zh/Slice
+
+### Bibliotecas e modelos
+
+| Componente | Uso no Recorte | Licença |
+|---|---|---|
+| [Tauri](https://tauri.app) | Base do app (janela, comandos, atualização) | MIT ou Apache-2.0 |
+| [windows-capture](https://github.com/NiiightmareXD/windows-capture) | Captura da tela e codificação H.264 | MIT |
+| [windows-rs](https://github.com/microsoft/windows-rs) | APIs do Windows | MIT ou Apache-2.0 |
+| [wasapi](https://github.com/HEnquist/wasapi-rs) | Áudio do sistema e microfone | MIT |
+| [hound](https://github.com/ruuda/hound) | Arquivos WAV | Apache-2.0 |
+| [nnnoiseless](https://github.com/jneem/nnnoiseless) (porta do [RNNoise](https://github.com/xiph/rnnoise)) | Remoção de ruído da voz | BSD-3-Clause |
+| [trash](https://github.com/Byron/trash-rs) | Mover gravações para a Lixeira | MIT |
+| [tiny_http](https://github.com/tiny-http/tiny-http) | Canal local do servidor MCP | MIT ou Apache-2.0 |
+| [Transformers.js](https://github.com/huggingface/transformers.js) | Transcrição no próprio computador | Apache-2.0 |
+| [Whisper](https://github.com/openai/whisper) (modelo `onnx-community/whisper-base_timestamped`) | Reconhecimento de fala; baixado na primeira transcrição | MIT |
+| [mp4box.js](https://github.com/gpac/mp4box.js) | Leitura de MP4 na exportação | BSD-3-Clause |
+| [mp4-muxer](https://github.com/Vanilagy/mp4-muxer) | Escrita do MP4 exportado | MIT |
+| [gifenc](https://github.com/mattdesl/gifenc) | Exportação em GIF | MIT |
+| [MCP TypeScript SDK](https://github.com/modelcontextprotocol/typescript-sdk) | Servidor MCP | MIT |
+| [Zod](https://github.com/colinhacks/zod) | Validação das ferramentas do MCP | MIT |
 
 ## Requisitos
 
