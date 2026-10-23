@@ -69,10 +69,17 @@ pub struct StartOptions {
     pub show_cursor: bool,
     #[serde(default)]
     pub keystrokes: bool,
+    /// Clicks made while drawing on the screen count as clicks (they make zooms in the editor).
+    #[serde(default = "yes")]
+    pub draw_zoom: bool,
     /// Area picked before recording, in video pixels; becomes the take's initial crop.
     #[serde(default)]
     pub crop: Option<CropRect>,
     pub fps: u32,
+}
+
+fn yes() -> bool {
+    true
 }
 
 /// A paused stretch of the take, in ms from the first frame. The editor starts with it cut.
@@ -392,7 +399,7 @@ impl Recording {
 
         let mut warnings = Vec::new();
         let mut audio_threads = Vec::new();
-        let cursor = cursor::Logger::start(options.keystrokes)?;
+        let cursor = cursor::Logger::start(options.keystrokes, options.draw_zoom)?;
 
         let mut system_file = None;
         if options.system_audio {

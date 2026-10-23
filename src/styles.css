@@ -1667,8 +1667,20 @@ input[type="range"]:focus-visible::-webkit-slider-thumb {
   }
 }
 
+/* Gravar was pressed before an area was drawn: the hint says what to do. */
+.area-hint.flash {
+  animation: hint-flash 0.9s var(--ease) 2;
+}
+
+@keyframes hint-flash {
+  50% {
+    color: var(--accent);
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
-  .monitor .area-mark.flash {
+  .monitor .area-mark.flash,
+  .area-hint.flash {
     animation: none;
   }
 }

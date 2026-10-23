@@ -23,6 +23,7 @@ fn main() -> anyhow::Result<()> {
             microphone: true,
             show_cursor: true,
             keystrokes: false,
+            draw_zoom: true,
             crop: None,
             fps: 60,
         },

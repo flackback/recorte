@@ -86,12 +86,21 @@ static EVENTS: Mutex<Vec<RawEvent>> = Mutex::new(Vec::new());
 static KEYS: Mutex<Vec<KeyPress>> = Mutex::new(Vec::new());
 static HELD: Mutex<Option<HashSet<u32>>> = Mutex::new(None);
 static LAST_MOVE: AtomicI64 = AtomicI64::new(0);
-/// A button went down on one of Recorte's own windows; its release is dropped too.
+/// A button went down where its clicks are dropped; its release is dropped too.
 static OWN_PRESS: AtomicBool = AtomicBool::new(false);
+/// The drawing layer's window while it is open, and whether clicks on it count.
+static DRAWING_LAYER: AtomicIsize = AtomicIsize::new(0);
+static DRAW_CLICKS: AtomicBool = AtomicBool::new(true);
 
-/// Whether a screen point is over a window of this app (the recording bar, the drawing layer, the
-/// main window). Those windows are not in the video, so clicks on them must not make zooms or effects.
-fn over_own_window(point: POINT) -> bool {
+/// Called when the drawing layer opens (its window handle) and closes (0).
+pub fn set_drawing_layer(hwnd: isize) {
+    DRAWING_LAYER.store(hwnd, Ordering::Relaxed);
+}
+
+/// Whether a click at a screen point is dropped. Recorte's own windows (the recording bar, the main
+/// window) are not in the video, so their clicks must not make zooms or effects. Strokes on the
+/// drawing layer count only when the user chose "Zoom ao desenhar".
+fn dropped_click(point: POINT) -> bool {
     unsafe {
         let hit = WindowFromPoint(point);
         if hit.is_invalid() {
@@ -99,9 +108,14 @@ fn over_own_window(point: POINT) -> bool {
         }
         // The deepest window belongs to the WebView2 process; its top-level window is ours.
         let root = GetAncestor(hit, GA_ROOT);
+        let root = if root.is_invalid() { hit } else { root };
         let mut process = 0u32;
-        GetWindowThreadProcessId(if root.is_invalid() { hit } else { root }, Some(&mut process));
-        process == GetCurrentProcessId()
+        GetWindowThreadProcessId(root, Some(&mut process));
+        if process != GetCurrentProcessId() {
+            return false;
+        }
+        let layer = DRAWING_LAYER.load(Ordering::Relaxed);
+        !(layer != 0 && root.0 as isize == layer && DRAW_CLICKS.load(Ordering::Relaxed))
     }
 }
 static LAST_SHAPE: AtomicIsize = AtomicIsize::new(-1);
@@ -114,7 +128,9 @@ pub struct Logger {
 }
 
 impl Logger {
-    pub fn start(keyboard: bool) -> anyhow::Result<Self> {
+    pub fn start(keyboard: bool, draw_clicks: bool) -> anyhow::Result<Self> {
+        DRAW_CLICKS.store(draw_clicks, Ordering::Relaxed);
+        OWN_PRESS.store(false, Ordering::Relaxed);
         EVENTS.lock().unwrap().clear();
         KEYS.lock().unwrap().clear();
         *HELD.lock().unwrap() = Some(HashSet::new());
@@ -231,12 +247,12 @@ unsafe extern "system" fn mouse_proc(code: i32, wparam: WPARAM, lparam: LPARAM) 
                 due
             }
             Some(Kind::Down) => {
-                let own = over_own_window(info.pt);
-                OWN_PRESS.store(own, Ordering::Relaxed);
-                !own
+                let dropped = dropped_click(info.pt);
+                OWN_PRESS.store(dropped, Ordering::Relaxed);
+                !dropped
             }
             Some(Kind::Up) => !OWN_PRESS.swap(false, Ordering::Relaxed),
-            Some(Kind::Wheel) => !over_own_window(info.pt),
+            Some(Kind::Wheel) => !dropped_click(info.pt),
             Some(Kind::Shape) => true,
             None => false,
         };

@@ -31,6 +31,7 @@ const ui = {
   microphone: $<HTMLInputElement>("microphone"),
   webcam: $<HTMLInputElement>("webcam"),
   keystrokes: $<HTMLInputElement>("keystrokes"),
+  drawZoom: $<HTMLInputElement>("draw-zoom"),
   showCursor: $<HTMLInputElement>("show-cursor"),
   countdown: $<HTMLInputElement>("countdown"),
   fps: $("fps"),
@@ -113,6 +114,7 @@ function loadSettings() {
       ["keystrokes", ui.keystrokes],
       ["showCursor", ui.showCursor],
       ["countdown", ui.countdown],
+      ["drawZoom", ui.drawZoom],
     ] as const) {
       if (typeof saved[key] === "boolean") input.checked = saved[key];
     }
@@ -137,6 +139,7 @@ function saveSettings() {
         keystrokes: ui.keystrokes.checked,
         showCursor: ui.showCursor.checked,
         countdown: ui.countdown.checked,
+        drawZoom: ui.drawZoom.checked,
         fps: selectedFps(),
       }),
     );
@@ -155,6 +158,8 @@ const picker = {
   sources: { monitors: [], windows: [] } as Sources,
   /** The area chosen in "Área" mode, in physical pixels of its monitor. */
   area: null as { monitor: number; x: number; y: number; width: number; height: number } | null,
+  /** "Área" was just chosen: no monitor is selected until the user clicks one and draws the area. */
+  areaPending: false,
 };
 
 /** Saved form, e.g. "m:2" or "w:12345", kept compatible with older settings. */
@@ -217,6 +222,7 @@ function renderMonitors() {
   const ordered = [...monitors].sort((a, b) => a.x - b.x || a.y - b.y);
 
   ui.monitorMap.classList.toggle("area-mode", picker.kind === "a");
+  const pending = picker.kind === "a" && picker.areaPending;
   // Says how to choose the area, since clicking a monitor is not obvious.
   ui.areaHint.hidden = picker.kind !== "a";
   ui.monitorMap.replaceChildren(
@@ -225,7 +231,7 @@ function renderMonitors() {
       button.className = "monitor";
       button.classList.toggle("primary", monitor.primary);
       button.setAttribute("role", "radio");
-      button.setAttribute("aria-checked", String(monitor.index === picker.monitor));
+      button.setAttribute("aria-checked", String(!pending && monitor.index === picker.monitor));
       button.textContent = String(ordered.indexOf(monitor) + 1);
       button.title = picker.kind === "a"
         ? `Clique para desenhar a área na ${places.get(monitor.index)?.toLowerCase()}`
@@ -242,7 +248,7 @@ function renderMonitors() {
         if (picker.kind === "a") void chooseArea();
       });
       // The chosen area, drawn to scale inside its monitor.
-      const area = picker.kind === "a" && picker.area?.monitor === monitor.index ? picker.area : null;
+      const area = picker.kind === "a" && !pending && picker.area?.monitor === monitor.index ? picker.area : null;
       if (area) {
         const mark = document.createElement("span");
         mark.className = "area-mark";
@@ -274,7 +280,7 @@ function renderMonitors() {
   const place = selected ? `${places.get(selected.index)}${selected.primary ? " (principal)" : ""}` : "";
   const area = picker.area?.monitor === picker.monitor ? picker.area : null;
   ui.sourceCaption.replaceChildren();
-  if (!selected) return;
+  if (!selected || pending) return;
   if (picker.kind !== "a") {
     ui.sourceCaption.textContent = `${place} · ${selected.width}×${selected.height}`;
     return;
@@ -305,8 +311,11 @@ async function chooseArea() {
     renderPicker();
     return;
   }
-  if (picked) picker.area = { monitor, ...picked };
-  else {
+  if (picked) {
+    picker.area = { monitor, ...picked };
+    picker.areaPending = false;
+  } else {
+    picker.areaPending = false;
     picker.kind = "m";
     const radio = ui.sourceKind.querySelector<HTMLInputElement>('input[value="m"]');
     if (radio) radio.checked = true;
@@ -411,6 +420,7 @@ async function checkDevices() {
 
 function selectedSource() {
   if (picker.kind === "w") return picker.window ? { kind: "window", hwnd: picker.window } : null;
+  if (picker.kind === "a" && picker.areaPending) return null;
   return picker.monitor ? { kind: "monitor", index: picker.monitor } : null;
 }
 
@@ -485,7 +495,7 @@ function setRecordingUi(active: boolean) {
   ui.titlebarTime.textContent = "Gravando";
   ui.record.classList.toggle("active", active);
   ui.recordLabel.textContent = active ? "Parar · 0:00.0" : "Gravar";
-  for (const control of [ui.refresh, ui.systemAudio, ui.microphone, ui.webcam, ui.keystrokes, ui.showCursor, ...ui.sourceKind.querySelectorAll("input")]) {
+  for (const control of [ui.refresh, ui.systemAudio, ui.microphone, ui.webcam, ui.keystrokes, ui.showCursor, ui.drawZoom, ...ui.sourceKind.querySelectorAll("input")]) {
     (control as HTMLInputElement).disabled = active;
   }
   renderPicker();
@@ -499,6 +509,13 @@ function setRecordingUi(active: boolean) {
 }
 
 async function startRecording() {
+  if (picker.kind === "a" && picker.areaPending) {
+    toast("Clique numa tela no mapa e desenhe a área para gravar");
+    ui.areaHint.classList.remove("flash");
+    void ui.areaHint.offsetWidth;
+    ui.areaHint.classList.add("flash");
+    return;
+  }
   const source = selectedSource();
   if (!source) {
     showWarnings(["Escolha uma tela ou janela."]);
@@ -541,6 +558,7 @@ async function startRecording() {
     microphone: ui.microphone.checked,
     showCursor: ui.showCursor.checked,
     keystrokes: ui.keystrokes.checked,
+    drawZoom: ui.drawZoom.checked,
     crop,
     fps: selectedFps(),
   };
@@ -1021,15 +1039,14 @@ ui.emptyOpen.addEventListener("click", () => {
 ui.refresh.addEventListener("click", () => refreshSources());
 ui.sourceKind.addEventListener("change", (event) => {
   picker.kind = (event.target as HTMLInputElement).value as typeof picker.kind;
+  // Área: no monitor is selected yet; clicking one opens the area drawing there.
+  picker.areaPending = picker.kind === "a";
   renderPicker();
   saveSettings();
-  // Área: draw it right away, unless one is already chosen on this monitor; then show where it is.
-  if (picker.kind === "a" && picker.area?.monitor !== picker.monitor) void chooseArea();
-  else if (picker.kind === "a") ui.monitorMap.querySelector(".area-mark")?.classList.add("flash");
   // Window titles change all the time; refresh when switching to the list.
   if (picker.kind === "w") void refreshSources();
 });
-for (const control of [ui.systemAudio, ui.microphone, ui.webcam, ui.keystrokes, ui.showCursor, ui.countdown, ui.fps]) {
+for (const control of [ui.systemAudio, ui.microphone, ui.webcam, ui.keystrokes, ui.showCursor, ui.countdown, ui.drawZoom, ui.fps]) {
   control.addEventListener("change", saveSettings);
 }
 ui.keystrokes.addEventListener("change", () => {

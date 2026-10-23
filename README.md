@@ -6,7 +6,7 @@ Gravador de tela e editor para Windows, feito com Tauri 2 (Rust + TypeScript, We
 
 ## Gravação
 
-- **Fontes:** tela inteira, janela ou **área**, a 30, 60 ou 120 fps. Ao escolher "Área" (ou clicar numa tela nesse modo), a seleção abre na hora para você desenhar o retângulo; a área fica desenhada no mapa das telas, com "Alterar área", e o app lembra dela para as próximas gravações. Usa Windows.Graphics.Capture com H.264 por hardware.
+- **Fontes:** tela inteira, janela ou **área**, a 30, 60 ou 120 fps. Ao escolher "Área", nenhuma tela vem marcada: clique numa tela do mapa e desenhe o retângulo nela. A área fica desenhada no mapa, com "Alterar área", e o app lembra dela para as próximas gravações. Gravar fica desligado até haver uma área. Usa Windows.Graphics.Capture com H.264 por hardware.
 - **Áudio do sistema:** loopback WASAPI, num WAV próprio (`system.wav`); preenchido com silêncio quando nada toca. Gravações antigas têm esse áudio dentro do MP4, e o app lê os dois formatos.
 - **Microfone:** faixa separada (`mic.wav`).
 - **Webcam:** gravada pelo WebView em `webcam.mp4`, alinhada à tela pelo mesmo relógio.
@@ -38,7 +38,7 @@ Gravador de tela e editor para Windows, feito com Tauri 2 (Rust + TypeScript, We
   - estilos: Clássico, Claro, Ponto, Pizza, Melancia e Foguete;
   - esconder quando parado (0,5 s a 5 s), voltar ao início no fim (para vídeos em loop) e ignorar trocas rápidas de formato, para o cursor não piscar sobre links;
   - "aperto" ao clicar, efeito de clique (Anel ou Líquido, com tamanho), destaque (spotlight) e som de clique (Clique, Suave ou Mecânico);
-  - cliques na barra de gravação e nas outras janelas do Recorte não entram no vídeo e não geram zoom;
+  - cliques na barra de gravação (inclusive ao escolher uma ferramenta) e nas outras janelas do Recorte não entram no vídeo e não geram zoom. Os traços das ferramentas de desenho geram zoom quando o chip "Zoom ao desenhar" está ligado (padrão);
   - teclas na tela: só atalhos ou tudo o que foi digitado, com som de teclado.
 - **Zoom:**
   - automático a partir dos cliques, com a câmera seguindo o cursor;

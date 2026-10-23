@@ -16,6 +16,7 @@ pub async fn overlay_open(app: AppHandle, mode: String, monitor: usize, area: Op
         return Err("modo inválido".into());
     }
     if let Some(existing) = app.get_webview_window(LABEL) {
+        crate::cursor::set_drawing_layer(0);
         let _ = existing.close();
     }
     sources::use_physical_pixels();
@@ -44,6 +45,9 @@ pub async fn overlay_open(app: AppHandle, mode: String, monitor: usize, area: Op
     if mode == "draw" {
         // Lets clicks through while the page loads; the page takes them once a tool is chosen.
         let _ = window.set_ignore_cursor_events(true);
+        if let Ok(hwnd) = window.hwnd() {
+            crate::cursor::set_drawing_layer(hwnd.0 as isize);
+        }
         // The drawing layer covers the whole monitor; the floating bar must stay above it to be
         // clickable, even when the layer takes the focus to draw. Linked before the layer shows,
         // so it never appears on top of the bar.
@@ -134,6 +138,7 @@ pub fn recbar_close(app: AppHandle) {
 #[tauri::command]
 pub fn overlay_close(app: AppHandle) {
     if let Some(window) = app.get_webview_window(LABEL) {
+        crate::cursor::set_drawing_layer(0);
         let _ = window.close();
     }
 }
