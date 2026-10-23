@@ -19,24 +19,35 @@ pub fn enhance(input: &Path, output: &Path) -> anyhow::Result<()> {
         anyhow::bail!("o microfone precisa estar em 48 kHz e 16 bits");
     }
     let channels = spec.channels.max(1) as usize;
-    let samples: Vec<i16> = reader.samples::<i16>().collect::<Result<_, _>>()?;
 
-    // Mono in i16 range, as RNNoise expects.
-    let mono: Vec<f32> = samples.chunks(channels).map(|frame| frame.iter().map(|&s| s as f32).sum::<f32>() / channels as f32).collect();
+    // Mono in i16 range, as RNNoise expects, mixed down while reading so only one buffer is kept;
+    // every step below works on it in place.
+    let mut voice: Vec<f32> = Vec::with_capacity(reader.duration() as usize);
+    let (mut sum, mut count) = (0.0f32, 0);
+    for sample in reader.samples::<i16>() {
+        sum += sample? as f32;
+        count += 1;
+        if count == channels {
+            voice.push(sum / channels as f32);
+            (sum, count) = (0.0, 0);
+        }
+    }
+    if count > 0 {
+        voice.push(sum / channels as f32);
+    }
 
     let mut state = DenoiseState::new();
-    let mut denoised = vec![0.0f32; mono.len()];
     let mut input_frame = [0.0f32; DenoiseState::FRAME_SIZE];
     let mut output_frame = [0.0f32; DenoiseState::FRAME_SIZE];
-    for (index, chunk) in mono.chunks(DenoiseState::FRAME_SIZE).enumerate() {
+    for chunk in voice.chunks_mut(DenoiseState::FRAME_SIZE) {
         input_frame.fill(0.0);
         input_frame[..chunk.len()].copy_from_slice(chunk);
         state.process_frame(&mut output_frame, &input_frame);
-        let start = index * DenoiseState::FRAME_SIZE;
-        denoised[start..start + chunk.len()].copy_from_slice(&output_frame[..chunk.len()]);
+        for (sample, denoised) in chunk.iter_mut().zip(&output_frame) {
+            *sample = denoised / 32768.0;
+        }
     }
 
-    let mut voice: Vec<f32> = denoised.iter().map(|sample| sample / 32768.0).collect();
     high_pass(&mut voice, 80.0);
     compress(&mut voice);
     normalize(&mut voice);

@@ -1,4 +1,4 @@
-import { readMp4, readSamples, urlSource, type ByteSource, type Mp4Track } from "./mp4";
+import { readMp4, readSamples, sampleAt, urlSource, type ByteSource, type Mp4Track } from "./mp4";
 
 /**
  * Audio read a stretch at a time, so hour-long recordings never sit whole in memory: WAV files
@@ -110,9 +110,7 @@ export function trackAudioSource(source: ByteSource, track: Mp4Track): AudioSour
       const startUs = startMs * 1000;
       const endUs = endMs * 1000;
       // Samples are in time order for audio.
-      let from = 0;
-      while (from < track.count - 1 && track.times[from + 1] <= startUs) from++;
-      from = Math.max(0, from - PREROLL_FRAMES);
+      const from = Math.max(0, sampleAt(track, startUs) - PREROLL_FRAMES);
       let to = from;
       while (to < track.count && track.times[to] < endUs) to++;
       if (to <= from) return buffer;
@@ -131,7 +129,10 @@ export function trackAudioSource(source: ByteSource, track: Mp4Track): AudioSour
       });
       await decoder.flush().catch((error) => (failure ??= error));
       decoder.close();
-      if (failure) throw failure;
+      if (failure) {
+        for (const data of decoded) data.close();
+        throw failure;
+      }
 
       const startFrame = Math.round((startMs / 1000) * sampleRate);
       for (const data of decoded) {

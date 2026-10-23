@@ -4,7 +4,7 @@ import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { showTour } from "../tips";
 import { toast } from "../toast";
 import { joinPath, takeName, type CursorEvent, type KeyEvent, type Take, type Word } from "../types";
-import { CARD_FADE, cardLength, createScene, frameState, overlayText, refreshTime, sceneSource, wordCuts, type CardView, type Scene } from "./composition";
+import { CARD_FADE, cardLength, createScene, frameState, leftClicks, overlayText, refreshTime, sceneSource, wordCuts, type CardView, type Scene } from "./composition";
 import { confirmDialog, onContextMenu, type MenuItem } from "../menu";
 import { openAudio, type AudioSource } from "./audio-source";
 import { ExportDialog } from "./export-dialog";
@@ -239,6 +239,8 @@ export class Editor {
   private wave: Float32Array | null = null;
   private backgroundKey = "";
   private lastTimelineKey = "";
+  /** Playhead time (whole ms) the timeline last showed. */
+  private lastTimelineMoment = "";
   /** Bumped on every project or selection change, so a paused preview knows to redraw. */
   private version = 0;
   private lastRenderKey = "";
@@ -254,6 +256,24 @@ export class Editor {
   private playIcons: { play: Element; pause: Element } | null = null;
   /** True while the microphone is being enhanced, so other edits don't reset the switch. */
   private enhancing = false;
+  /** Bumped by every open and close, so a slower earlier open gives up instead of overwriting. */
+  private openGen = 0;
+  /** The renderer being created, so concurrent callers share one device. */
+  private rendererPromise: Promise<void> | null = null;
+  /** The GPU device was lost; the next frame creates the renderer again. */
+  private rendererLost = false;
+  /** The renderer the overlay canvas was last uploaded to; a new one needs it again. */
+  private overlayTarget: Renderer | null = null;
+  /** The inspector is out of date; the next frame syncs it once for a whole burst of edits. */
+  private inspectorDirty = false;
+  /** A seek asked for while the video was still seeking; applied once that one lands. */
+  private pendingSeek: number | null = null;
+  /** Size of the preview area, kept by a ResizeObserver instead of measured every frame. */
+  private previewBox: { width: number; height: number } | null = null;
+  /** What the last frame showed while paused; the same again means there is nothing to do. */
+  private lastIdleKey = "";
+  /** Left-click and key times of the open scene, for the sounds and the timeline. */
+  private times: { scene: Scene; clicks: number[]; keys: number[] } | null = null;
 
   constructor() {
     this.timeline = new Timeline($<HTMLCanvasElement>("timeline"), {
@@ -270,6 +290,10 @@ export class Editor {
     this.bindPlayback();
     this.bindShortcuts();
     this.music.loop = true;
+    new ResizeObserver(() => {
+      const box = this.ui.preview.getBoundingClientRect();
+      this.previewBox = { width: box.width, height: box.height };
+    }).observe(this.ui.preview);
     requestAnimationFrame(() => this.frame());
   }
 
@@ -283,18 +307,25 @@ export class Editor {
     this.flushSave();
     this.ui.video.pause();
     this.rectEditor.close();
+    // Opening another take before this one finished loading makes this one give up.
+    const gen = ++this.openGen;
 
     const cursor = await fetchJson<{ events: CursorEvent[] }>(joinPath(take.dir, take.cursor));
+    if (gen !== this.openGen) return;
     const keys = take.keys ? await fetchJson<{ events: KeyEvent[] }>(joinPath(take.dir, take.keys)) : null;
+    if (gen !== this.openGen) return;
     const transcript = await fetchJson<{ words: Word[] }>(joinPath(take.dir, "transcript.json"));
+    if (gen !== this.openGen) return;
     const events = cursor?.events ?? [];
 
     const fallback = defaultProject(take, events);
     let project = fallback;
     try {
       const saved = await invoke<string | null>("load_project", { dir: take.dir });
+      if (gen !== this.openGen) return;
       if (saved) project = normalizeProject(JSON.parse(saved), fallback);
     } catch (error) {
+      if (gen !== this.openGen) return;
       console.warn("projeto não carregado", error);
     }
 
@@ -306,7 +337,8 @@ export class Editor {
     this.undoStack = [];
     this.redoStack = [];
     this.burstStart = null;
-    this.thumbs = [];
+    this.pendingSeek = null;
+    this.releaseThumbs();
     this.wave = null;
     this.backgroundKey = "";
     this.setSaveState("");
@@ -327,6 +359,7 @@ export class Editor {
     this.renderTranscript();
     this.syncInspector();
     await this.ensureRenderer();
+    if (gen !== this.openGen) return;
     void this.loadBackground();
     // First time in the editor: a short tour of the essentials.
     window.setTimeout(() => {
@@ -354,14 +387,21 @@ export class Editor {
         },
       ]);
     }, 600);
-    void this.loadStrip(take);
+    void this.loadStrip(take, gen);
+  }
+
+  /** Closes the timeline thumbnails; their bitmaps hold memory until then. */
+  private releaseThumbs() {
+    for (const thumb of this.thumbs) thumb.image.close();
+    this.thumbs = [];
+    this.lastTimelineKey = "";
   }
 
   /** Thumbnails and waveform for the timeline, in the background. */
-  private async loadStrip(take: Take) {
+  private async loadStrip(take: Take, gen: number) {
     const url = (file: string) => convertFileSrc(joinPath(take.dir, file));
     const video = await openVideo(url(take.video)).catch(() => null);
-    if (this.scene?.take.id !== take.id) return;
+    if (gen !== this.openGen) return;
     // Read a piece at a time: recordings can be far larger than the memory.
     const sources: AudioSource[] = [];
     const system = take.systemFile ? url(take.systemFile) : take.systemAudio ? url(take.video) : null;
@@ -373,24 +413,50 @@ export class Editor {
       video ? thumbnails(video.source, video.track).catch(() => []) : Promise.resolve([]),
       waveform(sources, take.durationMs).catch(() => null),
     ]);
-    if (this.scene?.take.id !== take.id) {
+    if (gen !== this.openGen) {
       for (const thumb of thumbs) thumb.image.close();
       return;
     }
+    this.releaseThumbs();
     this.thumbs = thumbs;
     this.wave = wave;
     this.lastTimelineKey = "";
   }
 
-  private async ensureRenderer() {
-    if (this.renderer) return;
+  private ensureRenderer(): Promise<void> {
+    if (this.renderer) return Promise.resolve();
+    this.rendererPromise ??= this.createRenderer().finally(() => (this.rendererPromise = null));
+    return this.rendererPromise;
+  }
+
+  private async createRenderer() {
     try {
-      this.renderer = await Renderer.create(this.ui.canvas);
+      const renderer = await Renderer.create(this.ui.canvas);
+      this.renderer = renderer;
       this.ui.error.hidden = true;
+      this.version++;
+      void renderer.lost.then((info) => {
+        // A renderer dropped on purpose (destroy) is not this one any more.
+        if (this.renderer !== renderer) return;
+        console.warn("dispositivo WebGPU perdido", info.reason, info.message);
+        this.renderer = null;
+        this.overlayTarget = null;
+        this.backgroundKey = "";
+        this.rendererLost = true;
+        this.version++;
+      });
     } catch (error) {
       this.ui.error.hidden = false;
       this.ui.error.textContent = `Não foi possível iniciar a renderização: ${error}`;
     }
+  }
+
+  /** After the GPU device was lost: a new renderer, with the background image uploaded again. */
+  private async recoverRenderer() {
+    this.rendererLost = false;
+    await this.ensureRenderer();
+    if (this.renderer) void this.loadBackground();
+    else toast("A prévia parou porque a placa de vídeo foi reiniciada. Reabra a gravação para tentar de novo.");
   }
 
   /** Loads, blurs and uploads the background image when it or its blur changes. */
@@ -429,7 +495,9 @@ export class Editor {
     this.burstStart ??= JSON.stringify(scene.project);
     mutate(scene.project);
     refreshTime(scene);
-    this.syncInspector();
+    // Drags and sliders change on every pointer move; the inspector catches up once per frame.
+    this.inspectorDirty = true;
+    this.version++;
     if (save) this.save();
   }
 
@@ -1420,6 +1488,7 @@ export class Editor {
   private syncInspector() {
     const scene = this.scene;
     if (!scene) return;
+    this.inspectorDirty = false;
     this.version++;
     const { project, take } = scene;
     const ui = this.ui;
@@ -1612,7 +1681,11 @@ export class Editor {
       webcam.pause();
       this.music.pause();
     });
-    video.addEventListener("seeked", () => this.syncCompanions(false));
+    video.addEventListener("seeked", () => {
+      // A newer seek waited for this one; the companions follow when it lands.
+      if (this.applyPendingSeek()) return;
+      this.syncCompanions(false);
+    });
   }
 
   /** Keeps microphone, webcam and music in step with the main video. */
@@ -1697,6 +1770,11 @@ export class Editor {
       video.pause();
       return;
     }
+    // Play from where the user last scrubbed to, even if that seek is still waiting.
+    if (this.pendingSeek !== null) {
+      video.currentTime = this.pendingSeek / 1000;
+      this.pendingSeek = null;
+    }
     const first = scene.time.spans[0]?.start ?? 0;
     const t = video.currentTime * 1000;
     const next = scene.time.playable(t);
@@ -1759,7 +1837,22 @@ export class Editor {
 
   private seek(time: number) {
     if (this.card) this.stopCard();
+    // Scrubbing asks for a seek on every pointer move: keep one in flight and only the latest waiting.
+    if (this.ui.video.seeking) {
+      this.pendingSeek = time;
+      return;
+    }
+    this.pendingSeek = null;
     this.ui.video.currentTime = time / 1000;
+  }
+
+  /** Starts the seek that waited for the previous one; true if there was one. */
+  private applyPendingSeek() {
+    if (this.pendingSeek === null || this.ui.video.seeking) return false;
+    const time = this.pendingSeek;
+    this.pendingSeek = null;
+    this.ui.video.currentTime = time / 1000;
+    return true;
   }
 
   /** Closes the open take (e.g. after it was moved to the Recycle Bin). */
@@ -1767,6 +1860,9 @@ export class Editor {
     this.flushSave();
     this.ui.video.pause();
     this.rectEditor.close();
+    this.openGen++;
+    this.pendingSeek = null;
+    this.releaseThumbs();
     this.scene = null;
     this.selected = null;
     this.ui.root.hidden = true;
@@ -1956,13 +2052,13 @@ export class Editor {
 
   /** Sizes the canvas to fit the preview area at the output's aspect ratio. */
   private layoutCanvas(output: { width: number; height: number }) {
-    const box = this.ui.preview.getBoundingClientRect();
+    const box = this.previewBox ?? this.ui.preview.getBoundingClientRect();
     const scale = Math.min(box.width / output.width, (box.height - (this.rectEditor.isOpen ? 48 : 0)) / output.height);
     const cssWidth = Math.max(1, Math.floor(output.width * scale));
     const cssHeight = Math.max(1, Math.floor(output.height * scale));
     const canvas = this.ui.canvas;
-    canvas.style.width = `${cssWidth}px`;
-    canvas.style.height = `${cssHeight}px`;
+    if (canvas.style.width !== `${cssWidth}px`) canvas.style.width = `${cssWidth}px`;
+    if (canvas.style.height !== `${cssHeight}px`) canvas.style.height = `${cssHeight}px`;
     const ratio = window.devicePixelRatio || 1;
     const width = Math.min(output.width, Math.round(cssWidth * ratio));
     const height = Math.max(1, Math.round((width * output.height) / output.width));
@@ -1982,7 +2078,8 @@ export class Editor {
     if (!renderer) return;
     try {
       const output = this.outputFor(scene);
-      this.overlay.resize(output.width, output.height);
+      // The shader samples the overlay by position, so the preview only needs its own resolution.
+      this.overlay.resize(output.width, output.height, this.ui.canvas.width / output.width);
       let state;
       if (this.rawView) {
         // The area editor works on the whole recording, without framing or effects.
@@ -2003,13 +2100,23 @@ export class Editor {
           background: { ...state.background, padding: 0, radius: 0, shadow: 0 },
         });
       } else {
-        if (this.overlay.paint(overlayText(scene, t), scene.project, this.cardView())) renderer.setOverlay(this.overlay.canvas);
+        const painted = this.overlay.paint(overlayText(scene, t), scene.project, this.cardView());
+        if (painted || this.overlayTarget !== renderer) {
+          renderer.setOverlay(this.overlay.canvas);
+          this.overlayTarget = renderer;
+        }
         state = frameState(scene, t, output, this.overlay.visible);
       }
       if (renderer.render(this.ui.video, state, scene.take.webcam ? this.ui.webcam : null)) this.lastRenderKey = key;
     } catch (error) {
       // Show the failure once instead of throwing on every frame.
       this.renderer = null;
+      this.overlayTarget = null;
+      try {
+        renderer.destroy();
+      } catch {
+        // Already unusable; nothing more to release.
+      }
       this.ui.error.hidden = false;
       this.ui.error.textContent = `A renderização falhou: ${error}`;
     }
@@ -2020,8 +2127,16 @@ export class Editor {
     const scene = this.scene;
     if (!scene || this.ui.root.hidden) return;
     const { video } = this.ui;
+    if (this.inspectorDirty) this.syncInspector();
+    if (this.pendingSeek !== null) this.applyPendingSeek();
+    if (this.rendererLost && !this.rendererPromise) void this.recoverRenderer();
     const { project, take, time } = scene;
     let t = video.currentTime * 1000;
+
+    // Paused with nothing new since the last frame: it still stands.
+    const idleKey = `${t}|${this.version}|${video.readyState}|${this.ui.webcam.readyState}|${this.previewBox?.width}|${this.previewBox?.height}|${window.devicePixelRatio}|${this.lastRenderKey}|${this.lastTimelineKey}`;
+    if (video.paused && !this.card && idleKey === this.lastIdleKey) return;
+    this.lastIdleKey = idleKey;
 
     if (this.card) {
       // A title card plays on its own clock; the video waits under it.
@@ -2046,12 +2161,8 @@ export class Editor {
       } else {
         this.setRate(time.rateAt(t));
         this.syncCompanions(false);
-        this.sounds.update(
-          t,
-          scene.clicks.filter((click) => click.b === "l").map((click) => click.t),
-          scene.keys.map((key) => key.t),
-          { click: project.audio.clickSound, tone: project.audio.clickTone, key: project.audio.keySound },
-        );
+        const times = this.eventTimes(scene);
+        this.sounds.update(t, times.clicks, times.keys, { click: project.audio.clickSound, tone: project.audio.clickTone, key: project.audio.keySound });
       }
     }
 
@@ -2067,9 +2178,18 @@ export class Editor {
     if (currentNode && currentNode.textContent !== current) currentNode.textContent = current;
     if (totalNode && totalNode.textContent !== total) totalNode.textContent = total;
 
-    const key = `${t.toFixed(0)}|${this.version}|${this.thumbs.length}|${this.wave ? 1 : 0}|${this.range?.start}|${this.range?.end}`;
-    if (key !== this.lastTimelineKey) {
+    // Only the playhead moves while playing; the rest of the timeline is rebuilt when the edit changes.
+    const moment = t.toFixed(0);
+    const key = `${this.version}|${this.thumbs.length}|${this.wave ? 1 : 0}|${this.range?.start}|${this.range?.end}`;
+    if (key === this.lastTimelineKey) {
+      if (moment !== this.lastTimelineMoment) {
+        this.lastTimelineMoment = moment;
+        this.timeline.setTime(t);
+        this.highlightWord(t);
+      }
+    } else {
       this.lastTimelineKey = key;
+      this.lastTimelineMoment = moment;
       const zoomColor = "#ff9f0a";
       const tracks: Track[] = [
         {
@@ -2109,7 +2229,7 @@ export class Editor {
         trim: project.trim,
         tracks,
         wordCuts: wordCuts(scene),
-        clicks: scene.clicks.filter((click) => click.b === "l").map((click) => click.t),
+        clicks: this.eventTimes(scene).clicks,
         markers: take.markers ?? [],
         selected: this.selected,
         thumbnails: this.thumbs,
@@ -2118,6 +2238,12 @@ export class Editor {
       });
       this.highlightWord(t);
     }
+  }
+
+  /** Left-click and key times of the scene, sorted; built once per scene. */
+  private eventTimes(scene: Scene) {
+    if (this.times?.scene !== scene) this.times = { scene, clicks: leftClicks(scene), keys: scene.keys.map((key) => key.t) };
+    return this.times;
   }
 
   private highlightWord(t: number) {

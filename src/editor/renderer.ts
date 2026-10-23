@@ -106,6 +106,26 @@ fn sd_rect(p: vec2f, rect: vec4f, r: f32) -> f32 {
   return rounded_rect(p - rect.xy - half, half, min(r, min(half.x, half.y)));
 }
 
+// Symmetric trapezoid centered on the origin: half width r1 at the top (y = -he), r2 at the bottom.
+fn sd_trapezoid(p: vec2f, r1: f32, r2: f32, he: f32) -> f32 {
+  let k1 = vec2f(r2, he);
+  let k2 = vec2f(r2 - r1, 2.0 * he);
+  let q = vec2f(abs(p.x), p.y);
+  var r = r2;
+  if (q.y < 0.0) { r = r1; }
+  let ca = vec2f(q.x - min(q.x, r), abs(q.y) - he);
+  let cb = q - k1 + k2 * clamp(dot(k1 - q, k2) / dot(k2, k2), 0.0, 1.0);
+  var s = 1.0;
+  if (cb.x < 0.0 && ca.y < 0.0) { s = -1.0; }
+  return s * sqrt(min(dot(ca, ca), dot(cb, cb)));
+}
+
+// The laptop's deck seen from slightly above: a trapezoid wider at the front.
+fn sd_deck(q: vec2f) -> f32 {
+  let b = u.base;
+  return sd_trapezoid(q - (b.xy + b.zw * 0.5), u.box.z * 0.5, b.z * 0.5, b.w * 0.5) - b.w * 0.04;
+}
+
 // Where a composed-space point lands on the tilted screen plane, in flat composed coordinates.
 fn untilt(p: vec2f) -> vec2f {
   let ay = u.tilt.x;
@@ -255,18 +275,47 @@ fn fs(@builtin(position) frag: vec4f) -> @location(0) vec4f {
   var shadow_show = show;
   if (tkind > 3.5 && tkind < 5.5) { shadow_show = 1.0 - tamount; }
 
-  // Shadow under the frame (and the laptop base).
-  var ds = sd_rect(q - vec2f(0.0, blur * 0.4), u.box, radius);
-  if (u.extra.z > 0.5) { ds = min(ds, sd_rect(q - vec2f(0.0, blur * 0.4), u.base, u.base.w * 0.5)); }
+  // Shadow under the frame (and the laptop base, with a tighter contact shadow where it sits).
+  var frame_radius = radius;
+  if (frame_kind > 1.5) { frame_radius = u.box.z * 0.028; }
+  var ds = sd_rect(q - vec2f(0.0, blur * 0.4), u.box, frame_radius);
+  if (u.extra.z > 0.5) {
+    ds = min(ds, sd_deck(q - vec2f(0.0, blur * 0.4)));
+    let contact = sd_deck(q - vec2f(0.0, u.base.w * 0.35));
+    color = mix(color, vec3f(0.0), u.camera.w * 0.45 * shadow_show * (1.0 - smoothstep(-u.base.w * 0.3, u.base.w * 0.6, contact)));
+  }
   color = mix(color, vec3f(0.0), u.camera.w * 0.55 * shadow_show * (1.0 - smoothstep(-blur, blur * 1.6, ds)));
 
-  // Frame chrome: window title bar or laptop bezel and base.
-  if (frame_kind > 0.5) {
+  // Frame chrome: window title bar, or the laptop's deck, hinge and lid.
+  if (frame_kind > 1.5) {
+    let w = u.box.z;
+    let visible = show * mask.x;
     if (u.extra.z > 0.5) {
-      let db = sd_rect(q, u.base, u.base.w * 0.5);
-      let base_color = mix(vec3f(0.78, 0.79, 0.82), vec3f(0.62, 0.63, 0.66), clamp((q.y - u.base.y) / u.base.w, 0.0, 1.0));
-      color = mix(color, base_color, clamp(0.5 - db / px, 0.0, 1.0) * show * mask.x);
+      // Deck: brushed aluminum lit from the front, then the darker front lip with a thumb notch.
+      let b = u.base;
+      let t = clamp((q.y - b.y) / b.w, 0.0, 1.0);
+      let lip = 0.7;
+      var deck = mix(vec3f(0.6, 0.61, 0.64), vec3f(0.86, 0.87, 0.89), smoothstep(0.0, lip, t));
+      if (t > lip) { deck = mix(vec3f(0.74, 0.75, 0.78), vec3f(0.5, 0.51, 0.54), (t - lip) / (1.0 - lip)); }
+      deck += vec3f(0.07) * (1.0 - smoothstep(0.0, b.w * 0.05, abs(q.y - (b.y + b.w * lip))));
+      let notch = sd_rect(q, vec4f(b.x + b.z * 0.5 - w * 0.075, b.y + b.w * lip, w * 0.15, b.w * (1.0 - lip) * 0.5), b.w * 0.12);
+      deck = mix(deck, deck * 0.8, clamp(0.5 - notch / px, 0.0, 1.0));
+      color = mix(color, deck, clamp(0.5 - sd_deck(q) / px, 0.0, 1.0) * visible);
+      // Hinge: a dark strip where the lid meets the deck.
+      let hinge = sd_rect(q, vec4f(u.box.x + w * 0.1, u.box.y + u.box.w - b.w * 0.1, w * 0.8, b.w * 0.28), b.w * 0.1);
+      color = mix(color, vec3f(0.16, 0.16, 0.18), clamp(0.5 - hinge / px, 0.0, 1.0) * visible);
     }
+    // Lid: black glass framed by a thin aluminum edge, with the camera and a faint reflection.
+    let lid_radius = w * 0.028;
+    let dlid = sd_rect(q, u.box, lid_radius);
+    let uvl = (q - u.box.xy) / u.box.zw;
+    var lid = vec3f(0.03, 0.03, 0.035) + vec3f(0.045) * smoothstep(0.35, 1.0, 1.0 - (uvl.x * 0.55 + uvl.y * 0.8));
+    let edge = w * 0.0045;
+    lid = mix(lid, mix(vec3f(0.8, 0.81, 0.84), vec3f(0.56, 0.57, 0.6), uvl.y), smoothstep(-edge - px, -edge, dlid));
+    let camera = length(q - vec2f(u.box.x + w * 0.5, (u.box.y + u.content.y) * 0.5)) - w * 0.0032;
+    lid = mix(lid, vec3f(0.13, 0.14, 0.18), clamp(0.5 - camera / px, 0.0, 1.0));
+    color = mix(color, lid, clamp(0.5 - dlid / px, 0.0, 1.0) * visible);
+  } else if (frame_kind > 0.5) {
     let dbox = sd_rect(q, u.box, radius);
     var chrome = vec3f(0.11, 0.11, 0.12);
     if (frame_kind < 1.5) {
@@ -288,6 +337,7 @@ fn fs(@builtin(position) frag: vec4f) -> @location(0) vec4f {
   // The recording.
   var content_radius = radius;
   if (frame_kind > 0.5) { content_radius = radius * 0.35; }
+  if (frame_kind > 1.5) { content_radius = u.box.z * 0.004; }
   let d = sd_rect(q, u.content, content_radius);
   let cover = clamp(0.5 - d / px, 0.0, 1.0) * show * mask.x;
   if (cover > 0.0) {
@@ -526,11 +576,15 @@ export function layout(output: { width: number; height: number }, source: { widt
   const ratio = source.height / source.width;
   // Everything in units of the content width.
   const bar = frame === "window" ? 0.045 : 0;
-  const bezel = frame === "laptop" ? 0.028 : 0;
+  // Laptop: a thin glass bezel (a little taller above, for the camera, and below), then the deck.
+  const laptop = frame === "laptop";
+  const bezel = laptop ? 0.022 : 0;
+  const bezelTop = laptop ? 0.03 : 0;
+  const bezelBottom = laptop ? 0.034 : 0;
   const boxWidth = 1 + bezel * 2;
-  const boxHeight = ratio + bar + bezel * 2;
-  const baseWidth = frame === "laptop" ? boxWidth * 1.16 : 0;
-  const baseHeight = frame === "laptop" ? 0.034 : 0;
+  const boxHeight = ratio + bar + bezelTop + bezelBottom;
+  const baseWidth = laptop ? boxWidth * 1.2 : 0;
+  const baseHeight = laptop ? 0.055 : 0;
   const totalWidth = Math.max(boxWidth, baseWidth);
   const totalHeight = boxHeight + baseHeight;
 
@@ -540,8 +594,8 @@ export function layout(output: { width: number; height: number }, source: { widt
   const left = (output.width - totalWidth * scale) / 2;
   const top = (output.height - totalHeight * scale) / 2;
   const box = { x: left + ((totalWidth - boxWidth) * scale) / 2, y: top, width: boxWidth * scale, height: boxHeight * scale };
-  const content = { x: box.x + bezel * scale, y: box.y + (bar + bezel) * scale, width: scale, height: ratio * scale };
-  const base = frame === "laptop" ? { x: left, y: box.y + box.height - scale * 0.004, width: baseWidth * scale, height: baseHeight * scale } : null;
+  const content = { x: box.x + bezel * scale, y: box.y + (bar + bezelTop) * scale, width: scale, height: ratio * scale };
+  const base = laptop ? { x: left, y: box.y + box.height - scale * 0.002, width: baseWidth * scale, height: baseHeight * scale } : null;
   return { content, box, base };
 }
 
@@ -576,8 +630,14 @@ export class Renderer {
   private emptyTexture: GPUTexture;
   private backgroundSize = { width: 1, height: 1 };
   private context: GPUCanvasContext;
+  /**
+   * Settles when the GPU device goes away (driver reset, sleep, or destroy()); the renderer draws
+   * nothing after that and must be created again.
+   */
+  readonly lost: Promise<GPUDeviceLostInfo>;
 
   private constructor(private device: GPUDevice, private canvas: HTMLCanvasElement | OffscreenCanvas, format: GPUTextureFormat) {
+    this.lost = device.lost;
     this.context = canvas.getContext("webgpu") as GPUCanvasContext;
     this.context.configure({ device, format, alphaMode: "opaque" });
     const module = device.createShaderModule({ code: SHADER });

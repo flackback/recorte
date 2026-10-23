@@ -25,15 +25,23 @@ export async function thumbnails(source: ByteSource, track: Mp4Track, count = 48
     },
     error: () => undefined,
   });
-  decoder.configure(decoderConfig(track));
-  // Each keyframe decodes on its own; flushing between them resets the reference chain.
-  for (const index of picked) {
-    const [data] = await readSamples(source, track, index, index + 1);
-    decoder.decode(new EncodedVideoChunk({ type: "key", timestamp: track.times[index], data }));
-    await decoder.flush().catch(() => undefined);
+  try {
+    decoder.configure(decoderConfig(track));
+    // Each keyframe decodes on its own; flushing between them resets the reference chain.
+    for (const index of picked) {
+      const [data] = await readSamples(source, track, index, index + 1);
+      decoder.decode(new EncodedVideoChunk({ type: "key", timestamp: track.times[index], data }));
+      await decoder.flush().catch(() => undefined);
+    }
+    await Promise.all(pending);
+  } catch (error) {
+    // Nobody gets the frames decoded so far: release them with the decoder.
+    await Promise.allSettled(pending);
+    for (const { image } of result) image.close();
+    throw error;
+  } finally {
+    if (decoder.state !== "closed") decoder.close();
   }
-  await Promise.all(pending);
-  decoder.close();
   return result.sort((a, b) => a.t - b.t);
 }
 

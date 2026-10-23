@@ -67,7 +67,27 @@ type Drag =
   | { kind: "move"; track: TrackKey; id: string; offset: number; length: number }
   | { kind: "edge"; track: TrackKey; id: string; side: "start" | "end" };
 
-const color = (name: string) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+/** Reads theme colors; one style lookup serves every color of a draw. */
+const palette = () => {
+  const style = getComputedStyle(document.documentElement);
+  return (name: string) => style.getPropertyValue(name).trim();
+};
+
+/** The thumbnail closest in time to `t` (sorted by time; the earlier one on a tie). */
+function nearestThumb(thumbs: TimelineState["thumbnails"], t: number) {
+  let low = 0;
+  let high = thumbs.length;
+  while (low < high) {
+    const middle = (low + high) >> 1;
+    if (thumbs[middle].t < t) low = middle + 1;
+    else high = middle;
+  }
+  const after = thumbs[low];
+  const before = thumbs[low - 1];
+  if (!after) return before;
+  if (!before) return after;
+  return Math.abs(after.t - t) < Math.abs(before.t - t) ? after : before;
+}
 
 /** Rows inside a track, so items that overlap in time sit one above the other. */
 function laneLayout(items: Range[]) {
@@ -104,7 +124,18 @@ export class Timeline {
   private view = { start: 0, end: 0 };
   /** Rows per track, recomputed with each state. */
   private lanes: ReturnType<typeof laneLayout>[] = [];
-  private resize = new ResizeObserver(() => this.draw());
+  /**
+   * Everything but the playhead, drawn when the state, view or size changes; while playing, each
+   * frame copies it and adds the playhead.
+   */
+  private layer = document.createElement("canvas");
+  private layerDirty = true;
+  /** CSS size and pixel ratio of the last full draw. */
+  private size = { width: 0, height: 0, ratio: 0 };
+  private resize = new ResizeObserver(() => {
+    this.layerDirty = true;
+    this.draw();
+  });
 
   constructor(private canvas: HTMLCanvasElement, private events: TimelineEvents) {
     canvas.addEventListener("pointerdown", (event) => this.pointerDown(event));
@@ -114,6 +145,11 @@ export class Timeline {
     canvas.addEventListener("dblclick", (event) => this.doubleClick(event));
     canvas.addEventListener("wheel", (event) => this.wheel(event), { passive: false });
     this.resize.observe(canvas);
+    // Colors come from the theme, which follows the system's light or dark mode.
+    matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => {
+      this.layerDirty = true;
+      this.draw();
+    });
   }
 
   set(state: TimelineState) {
@@ -124,11 +160,23 @@ export class Timeline {
     if (this.canvas.style.height !== height) this.canvas.style.height = height;
     this.state = state;
     this.followPlayhead();
+    this.layerDirty = true;
+    this.draw();
+  }
+
+  /** Moves the playhead; the rest is redrawn only if the view had to scroll to follow it. */
+  setTime(time: number) {
+    const state = this.state;
+    if (!state || state.time === time) return;
+    state.time = time;
+    const { start, end } = this.view;
+    this.followPlayhead();
+    if (this.view.start !== start || this.view.end !== end) this.layerDirty = true;
     this.draw();
   }
 
   private get width() {
-    return this.canvas.clientWidth;
+    return this.layerDirty || !this.size.width ? this.canvas.clientWidth : this.size.width;
   }
 
   private get span() {
@@ -196,6 +244,7 @@ export class Timeline {
       const start = Math.min(Math.max(0, this.view.start + shift), duration - this.span);
       this.view = { start, end: start + this.span };
     }
+    this.layerDirty = true;
     this.draw();
   }
 
@@ -331,20 +380,61 @@ export class Timeline {
   }
 
   draw() {
-    const canvas = this.canvas;
     const ratio = window.devicePixelRatio || 1;
+    if (this.layerDirty || this.size.ratio !== ratio) this.drawLayer(ratio);
+    const canvas = this.canvas;
+    const context = canvas.getContext("2d")!;
+    context.setTransform(1, 0, 0, 1, 0, 0);
+    context.clearRect(0, 0, canvas.width, canvas.height);
+    if (this.layer.width && this.layer.height) context.drawImage(this.layer, 0, 0);
+    const state = this.state;
+    if (!state || !state.duration) return;
+
+    // Playhead, clipped like the rest past the gutter.
+    const { width, height } = this.size;
+    context.setTransform(ratio, 0, 0, ratio, 0, 0);
+    context.save();
+    context.beginPath();
+    context.rect(LEFT - 2, 0, width - LEFT + 2, height);
+    context.clip();
+    const playhead = Math.round(this.toX(state.time)) + 0.5;
+    const bottom = this.trackTop(state.tracks.length) - TRACK_GAP;
+    context.strokeStyle = "#ff3b30";
+    context.lineWidth = 1.5;
+    context.beginPath();
+    context.moveTo(playhead, 2);
+    context.lineTo(playhead, bottom);
+    context.stroke();
+    context.fillStyle = "#ff3b30";
+    context.beginPath();
+    context.moveTo(playhead - 5, 0);
+    context.lineTo(playhead + 5, 0);
+    context.lineTo(playhead, 7);
+    context.closePath();
+    context.fill();
+    context.restore();
+  }
+
+  /** Draws everything except the playhead into the layer, at the canvas's current size. */
+  private drawLayer(ratio: number) {
+    const canvas = this.canvas;
     const width = canvas.clientWidth;
     const height = canvas.clientHeight;
-    if (canvas.width !== Math.round(width * ratio) || canvas.height !== Math.round(height * ratio)) {
-      canvas.width = Math.round(width * ratio);
-      canvas.height = Math.round(height * ratio);
+    this.size = { width, height, ratio };
+    this.layerDirty = false;
+    for (const target of [canvas, this.layer]) {
+      if (target.width !== Math.round(width * ratio) || target.height !== Math.round(height * ratio)) {
+        target.width = Math.round(width * ratio);
+        target.height = Math.round(height * ratio);
+      }
     }
-    const context = canvas.getContext("2d")!;
+    const context = this.layer.getContext("2d")!;
     context.setTransform(ratio, 0, 0, ratio, 0, 0);
     context.clearRect(0, 0, width, height);
     const state = this.state;
     if (!state || !state.duration) return;
 
+    const color = palette();
     const muted = color("--muted");
     const border = color("--border");
     const accent = color("--accent");
@@ -402,15 +492,14 @@ export class Timeline {
     context.clip();
     context.fillStyle = surface;
     context.fillRect(clipLeft, CLIP.top, clipRight - clipLeft, CLIP.height);
-    if (state.thumbnails.length) {
+    // A closed bitmap (the take was just switched) has no size; it is skipped until the new state.
+    if (state.thumbnails.length && state.thumbnails[0].image.width && state.thumbnails[0].image.height) {
       const first = state.thumbnails[0].image;
       const thumbWidth = (CLIP.height * first.width) / first.height;
       for (let x = clipLeft; x < clipRight; x += thumbWidth) {
         if (x + thumbWidth < LEFT || x > width) continue;
-        const t = this.toTime(x + thumbWidth / 2);
-        let best = state.thumbnails[0];
-        for (const thumb of state.thumbnails) if (Math.abs(thumb.t - t) < Math.abs(best.t - t)) best = thumb;
-        context.drawImage(best.image, x, CLIP.top, thumbWidth, CLIP.height);
+        const best = nearestThumb(state.thumbnails, this.toTime(x + thumbWidth / 2));
+        if (best.image.width) context.drawImage(best.image, x, CLIP.top, thumbWidth, CLIP.height);
       }
     }
     if (state.waveform) {
@@ -477,6 +566,8 @@ export class Timeline {
     context.fillStyle = "#ffffff";
     for (const t of state.clicks) {
       const x = this.toX(t);
+      // Off-screen dots would be clipped anyway.
+      if (x < LEFT - 6 || x > width + 3) continue;
       context.beginPath();
       context.arc(x, CLIP.top + 7, 2.2, 0, Math.PI * 2);
       context.fill();
@@ -551,22 +642,7 @@ export class Timeline {
       }
     });
 
-    // Playhead.
-    const playhead = Math.round(this.toX(state.time)) + 0.5;
-    const bottom = this.trackTop(state.tracks.length) - TRACK_GAP;
-    context.strokeStyle = "#ff3b30";
-    context.lineWidth = 1.5;
-    context.beginPath();
-    context.moveTo(playhead, 2);
-    context.lineTo(playhead, bottom);
-    context.stroke();
-    context.fillStyle = "#ff3b30";
-    context.beginPath();
-    context.moveTo(playhead - 5, 0);
-    context.lineTo(playhead + 5, 0);
-    context.lineTo(playhead, 7);
-    context.closePath();
-    context.fill();
+    // The playhead goes on top, in draw().
     context.restore();
 
     // Gutter labels.

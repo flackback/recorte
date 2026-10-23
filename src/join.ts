@@ -22,6 +22,13 @@ export async function joinSegments(take: Take, onProgress: (fraction: number) =>
   }
   if (!parts.length) throw new Error("Os segmentos da gravação não têm vídeo.");
   const first = parts[0].track;
+  // The file carries one decoder setup (the first segment's); a segment with another would play as garbage.
+  const sameSetup = (track: Mp4Track) => {
+    const a = track.description;
+    const b = first.description;
+    return track.codec === first.codec && (a === b || (a !== null && b !== null && a.length === b.length && a.every((value, i) => value === b[i])));
+  };
+  if (!parts.every((part) => sameSetup(part.track))) throw new Error("Os segmentos da gravação têm configurações de vídeo diferentes e não podem ser unidos.");
   const total = parts.reduce((sum, part) => sum + part.track.count, 0);
 
   const created = await invoke<{ id: number }>("asset_create", { dir: take.dir, name: take.video });

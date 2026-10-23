@@ -6,7 +6,7 @@ import { createScene, refreshTime, type Scene } from "./editor/composition";
 import type { Editor } from "./editor/editor";
 import { findSilences } from "./editor/cleanup";
 import { PRESETS } from "./editor/export-dialog";
-import { ExportCancelled, exportVideo, type ExportOptions } from "./editor/exporter";
+import { ExportCancelled, exportVideo, maxFps, type ExportOptions } from "./editor/exporter";
 import { defaultProject, normalizeProject } from "./editor/project";
 import { LANGUAGES, preferredLanguage, SAMPLE_RATE, speech, transcribe } from "./editor/transcribe";
 import { toast } from "./toast";
@@ -173,10 +173,12 @@ export function startAgent(host: AgentHost) {
       case "export": {
         const take = await findTake(payload.takeId);
         const preset = PRESETS.find((candidate) => candidate.id === payload.preset);
+        const longSide = Number(payload.longSide);
         const options: ExportOptions = {
           format: payload.format === "gif" ? "gif" : "mp4",
-          longSide: Number(payload.longSide),
-          fps: Number(payload.fps),
+          longSide,
+          // Whole frame rates only (the MP4 muxer rejects 29.97), within what the encoder handles.
+          fps: Math.min(Math.round(Number(payload.fps)), maxFps(longSide)),
           aspect: preset?.aspect,
           maxBytes: preset?.maxBytes,
         };

@@ -11,6 +11,7 @@ mod voice;
 
 use std::path::PathBuf;
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use serde::Serialize;
 use tauri::{AppHandle, Manager};
@@ -22,6 +23,19 @@ const PROJECT_FILE: &str = "project.json";
 #[derive(Default)]
 struct AppState {
     recording: Mutex<Option<Recording>>,
+    /// Set while a recording starts, which takes seconds, so `recording` isn't locked meanwhile.
+    starting: AtomicBool,
+    /// Folder of the take being recorded or stopped, which the takes list must leave alone.
+    active: Mutex<Option<PathBuf>>,
+}
+
+/// Clears `AppState::starting` however the start ends.
+struct Starting<'a>(&'a AtomicBool);
+
+impl Drop for Starting<'_> {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::Release);
+    }
 }
 
 #[derive(Serialize)]
@@ -40,6 +54,8 @@ struct Status {
     frames: u64,
     closed: bool,
     paused: bool,
+    /// Why the capture stopped on its own (the take still has to be stopped), or null.
+    error: Option<String>,
 }
 
 pub(crate) fn takes_root(app: &AppHandle) -> Result<PathBuf, String> {
@@ -62,14 +78,15 @@ async fn start_recording(app: AppHandle, options: StartOptions) -> Result<Starte
     let root = takes_root(&app)?;
     blocking(move || {
         let state = app.state::<AppState>();
-        let mut slot = state.recording.lock().unwrap();
-        if slot.is_some() {
+        if state.recording.lock().unwrap().is_some() || state.starting.swap(true, Ordering::AcqRel) {
             return Err("já existe uma gravação em andamento".into());
         }
+        let _starting = Starting(&state.starting);
         let recording = Recording::start(options, &root).map_err(|error| format!("{error:#}"))?;
         let warnings = recording.warnings().to_vec();
         let dir = recording.dir().to_string_lossy().into_owned();
-        *slot = Some(recording);
+        *state.active.lock().unwrap() = Some(recording.dir().to_path_buf());
+        *state.recording.lock().unwrap() = Some(recording);
         Ok(Started { warnings, dir })
     })
     .await
@@ -78,9 +95,12 @@ async fn start_recording(app: AppHandle, options: StartOptions) -> Result<Starte
 #[tauri::command]
 async fn stop_recording(app: AppHandle) -> Result<TakeMeta, String> {
     blocking(move || {
-        let recording = app.state::<AppState>().recording.lock().unwrap().take();
+        let state = app.state::<AppState>();
+        let recording = state.recording.lock().unwrap().take();
         let recording = recording.ok_or("nenhuma gravação em andamento")?;
-        recording.stop().map_err(|error| format!("{error:#}"))
+        let stopped = recording.stop().map_err(|error| format!("{error:#}"));
+        *state.active.lock().unwrap() = None;
+        stopped
     })
     .await
 }
@@ -90,8 +110,8 @@ fn recording_status(app: AppHandle) -> Status {
     let state = app.state::<AppState>();
     let recording = state.recording.lock().unwrap();
     match recording.as_ref().map(Recording::status) {
-        Some(status) => Status { recording: true, elapsed_ms: status.elapsed_ms, frames: status.frames, closed: status.closed, paused: status.paused },
-        None => Status { recording: false, elapsed_ms: 0.0, frames: 0, closed: false, paused: false },
+        Some(status) => Status { recording: true, elapsed_ms: status.elapsed_ms, frames: status.frames, closed: status.closed, paused: status.paused, error: status.error },
+        None => Status { recording: false, elapsed_ms: 0.0, frames: 0, closed: false, paused: false, error: None },
     }
 }
 
@@ -120,7 +140,11 @@ fn recording_mark(app: AppHandle) -> Result<usize, String> {
 #[tauri::command]
 async fn list_takes(app: AppHandle) -> Result<Vec<TakeMeta>, String> {
     let root = takes_root(&app)?;
-    blocking(move || Ok(recorder::list_takes(&root))).await
+    blocking(move || {
+        let active = app.state::<AppState>().active.lock().unwrap().clone();
+        Ok(recorder::list_takes(&root, active.as_deref()))
+    })
+    .await
 }
 
 #[tauri::command]
@@ -161,24 +185,16 @@ fn clock_now() -> i64 {
     clock::now_hns()
 }
 
-fn read_meta(dir: &std::path::Path) -> Result<TakeMeta, String> {
-    let text = std::fs::read_to_string(dir.join(recorder::META_FILE)).map_err(|error| error.to_string())?;
-    serde_json::from_str(&text).map_err(|error| error.to_string())
-}
-
-fn write_meta(dir: &std::path::Path, meta: &TakeMeta) -> Result<(), String> {
-    let json = serde_json::to_vec_pretty(meta).map_err(|error| error.to_string())?;
-    std::fs::write(dir.join(recorder::META_FILE), json).map_err(|error| error.to_string())
-}
-
 /// Renames a take in the list (an empty title goes back to the source name).
 #[tauri::command]
 fn take_rename(app: AppHandle, dir: String, title: String) -> Result<(), String> {
     let dir = take_dir(&app, &dir)?;
-    let mut meta = read_meta(&dir)?;
     let title = title.trim();
-    meta.title = (!title.is_empty()).then(|| title.chars().take(120).collect());
-    write_meta(&dir, &meta)
+    let renamed = recorder::update_meta(&dir, |meta| {
+        meta.title = (!title.is_empty()).then(|| title.chars().take(120).collect());
+        Ok(())
+    });
+    renamed.map(drop).map_err(|error| format!("{error:#}"))
 }
 
 /// Moves a take's folder to the Recycle Bin, so it can still be restored from there.
@@ -192,13 +208,12 @@ fn take_trash(app: AppHandle, dir: String) -> Result<(), String> {
 #[tauri::command]
 fn take_set_webcam(app: AppHandle, dir: String, file: String, started_hns: i64) -> Result<TakeMeta, String> {
     let dir = take_dir(&app, &dir)?;
-    let path = dir.join(recorder::META_FILE);
-    let text = std::fs::read_to_string(&path).map_err(|error| error.to_string())?;
-    let mut meta: TakeMeta = serde_json::from_str(&text).map_err(|error| error.to_string())?;
-    meta.webcam = Some(file);
-    meta.webcam_offset_ms = Some((started_hns - meta.start_hns) as f64 / 10_000.0);
-    let json = serde_json::to_vec_pretty(&meta).map_err(|error| error.to_string())?;
-    std::fs::write(&path, json).map_err(|error| error.to_string())?;
+    let updated = recorder::update_meta(&dir, |meta| {
+        meta.webcam = Some(file);
+        meta.webcam_offset_ms = Some((started_hns - meta.start_hns) as f64 / 10_000.0);
+        Ok(())
+    });
+    let mut meta = updated.map_err(|error| format!("{error:#}"))?;
     meta.dir = dir.to_string_lossy().into_owned();
     Ok(meta)
 }
@@ -273,17 +288,18 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
-        .plugin(
-            tauri_plugin_global_shortcut::Builder::new()
-                .with_shortcuts([overlay::draw_shortcut(), overlay::stop_shortcut(), overlay::record_shortcut(), overlay::mark_shortcut()])
-                .expect("atalhos globais")
-                .with_handler(overlay::on_shortcut)
-                .build(),
-        )
+        .plugin(tauri_plugin_global_shortcut::Builder::new().with_handler(overlay::on_shortcut).build())
         .manage(AppState::default())
         .manage(export::Exports::default())
         .manage(control::Pending::default())
         .setup(|app| {
+            use tauri_plugin_global_shortcut::GlobalShortcutExt;
+            // One at a time: a shortcut another program already owns only loses that shortcut.
+            for shortcut in [overlay::draw_shortcut(), overlay::stop_shortcut(), overlay::record_shortcut(), overlay::mark_shortcut()] {
+                if let Err(error) = app.global_shortcut().register(shortcut) {
+                    eprintln!("atalho global {shortcut} indisponível: {error}");
+                }
+            }
             if control::enabled(app.handle()) {
                 if let Err(error) = control::start(app.handle()) {
                     eprintln!("canal do MCP desligado: {error}");

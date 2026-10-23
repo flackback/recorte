@@ -3,7 +3,7 @@ import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { toast } from "../toast";
 import type { Scene } from "./composition";
 import { sceneSource, totalDuration } from "./composition";
-import { AUDIO_BITRATE, cappedBitrate, ExportCancelled, exportVideo, hasAudio, videoBitrate, type ExportOptions, type ExportProgress } from "./exporter";
+import { AUDIO_BITRATE, cappedBitrate, ExportCancelled, exportVideo, hasAudio, maxFps, videoBitrate, type ExportOptions, type ExportProgress } from "./exporter";
 import { outputSize, type Aspect } from "./project";
 
 /** Ready-made settings per destination. Sizes and rates are capped by the recording. */
@@ -38,6 +38,12 @@ const FORMATS = {
 } as const;
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
+
+/** Replaces a select's options, keeping `value` when offered (else the last option). */
+function fill(select: HTMLSelectElement, options: [string, string][], value: string) {
+  select.replaceChildren(...options.map(([optionValue, label]) => new Option(label, optionValue)));
+  select.value = options.some(([optionValue]) => optionValue === value) ? value : options[options.length - 1][0];
+}
 
 const CHECK_ICON = '<svg class="i"><use href="#i-check" /></svg>';
 const ERROR_ICON = '<svg class="i"><use href="#i-close" /></svg>';
@@ -97,7 +103,10 @@ export class ExportDialog {
       if (this.format === "gif") this.setPreset(PRESETS[0]);
       this.applyFormat();
     });
-    ui.resolution.addEventListener("change", () => this.updateSummary());
+    ui.resolution.addEventListener("change", () => {
+      this.applyRates();
+      this.updateSummary();
+    });
     ui.fps.addEventListener("change", () => this.updateSummary());
     ui.start.addEventListener("click", () => void this.run());
     ui.close.addEventListener("click", () => this.close());
@@ -168,6 +177,7 @@ export class ExportDialog {
       select.value = String(best);
     };
     pickAtMost(this.ui.resolution, preset.side);
+    this.applyRates();
     pickAtMost(this.ui.fps, preset.fps);
     this.updateSummary();
   }
@@ -185,10 +195,6 @@ export class ExportDialog {
     const scene = this.scene;
     if (!scene) return;
     const format = FORMATS[this.format];
-    const fill = (select: HTMLSelectElement, options: [string, string][], value: string) => {
-      select.replaceChildren(...options.map(([optionValue, label]) => new Option(label, optionValue)));
-      select.value = options.some(([optionValue]) => optionValue === value) ? value : options[options.length - 1][0];
-    };
 
     // Only sizes up to the recording itself (enlarging adds blur, not detail), labeled with the real
     // output size so 1:1 and 9:16 aren't described as "1080p".
@@ -207,12 +213,24 @@ export class ExportDialog {
     const pick = resolutions.filter(([value]) => Number(value) <= preferred).pop() ?? resolutions[0];
     fill(this.ui.resolution, resolutions, pick[0]);
 
-    // No more frames than were recorded.
-    const takeFps = scene.take.fps;
-    const rates = format.fps.filter(([value]) => this.format === "gif" || Number(value) <= takeFps).map(([value, name]): [string, string] => [value, name]);
-    fill(this.ui.fps, rates.length ? rates : [[String(takeFps), `${takeFps} fps`]], this.format === "gif" ? "15" : String(takeFps));
+    this.ui.fps.replaceChildren();
+    this.applyRates();
     this.ui.start.textContent = this.format === "gif" ? "Exportar GIF" : "Exportar vídeo";
     this.updateSummary();
+  }
+
+  /**
+   * Fills the frame rates for the chosen format and size, keeping the current one when it stays
+   * available: no more frames than were recorded, and no 120 fps above 1440p.
+   */
+  private applyRates() {
+    const scene = this.scene;
+    if (!scene) return;
+    const gif = this.format === "gif";
+    const takeFps = scene.take.fps;
+    const limit = gif ? Infinity : Math.min(takeFps, maxFps(Number(this.ui.resolution.value)));
+    const rates = FORMATS[this.format].fps.filter(([value]) => Number(value) <= limit).map(([value, name]): [string, string] => [value, name]);
+    fill(this.ui.fps, rates.length ? rates : [[String(takeFps), `${takeFps} fps`]], this.ui.fps.value || (gif ? "15" : String(takeFps)));
   }
 
   private options(): ExportOptions {

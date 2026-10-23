@@ -14,7 +14,7 @@ use windows_capture::capture::{CaptureControl, Context, GraphicsCaptureApiHandle
 use windows_capture::encoder::{
     AudioSettingsBuilder, ContainerSettingsBuilder, VideoEncoder, VideoSettingsBuilder, VideoSettingsSubType,
 };
-use windows_capture::encoder::ImageFormat;
+use windows_capture::encoder::{ImageEncoder, ImageEncoderPixelFormat, ImageFormat};
 use windows_capture::frame::Frame;
 use windows_capture::graphics_capture_api::{GraphicsCaptureApi, InternalCaptureControl};
 use windows_capture::monitor::Monitor;
@@ -37,6 +37,10 @@ const SYSTEM_FILE: &str = "system.wav";
 /// the recording stops. A crash loses at most the segment being written.
 const SEGMENT_DIR: &str = "segments";
 const SEGMENT_HNS: i64 = 30 * HNS_PER_SEC;
+/// The next segment's encoder is made this long before it is needed, on its own thread.
+const PREPARE_HNS: i64 = 3 * HNS_PER_SEC;
+/// After a segment fails to start, the current one goes on this much longer before a new try.
+const RETRY_HNS: i64 = 5 * HNS_PER_SEC;
 /// Finished segments and the first frame's time, rewritten after each segment.
 const SEGMENTS_FILE: &str = "segments.json";
 /// The take's description, written at the start so an interrupted take can be recovered.
@@ -177,6 +181,24 @@ struct SegmentState {
     index: u32,
     start: i64,
     frames: u64,
+    /// Extra length after failed tries to start the next segment.
+    delay: i64,
+    /// Whether the next segment's encoder was asked for.
+    asked: bool,
+}
+
+/// Top-left of the captured area from `time` (QPC, 100 ns) on, in physical screen pixels.
+#[derive(Clone, Copy, Default)]
+struct Origin {
+    time: i64,
+    x: i32,
+    y: i32,
+}
+
+/// Where the captured area was at `time`.
+fn origin_at(origins: &[Origin], time: i64) -> Origin {
+    let index = origins.partition_point(|origin| origin.time <= time);
+    origins.get(index.saturating_sub(1)).copied().unwrap_or_default()
 }
 
 fn segment_name(index: u32) -> String {
@@ -211,13 +233,41 @@ pub struct Shared {
     thumbnail: PathBuf,
     config: EncoderConfig,
     segment: Mutex<SegmentState>,
+    /// The next segment's encoder, made ahead on its own thread: making it on the frame thread
+    /// blocks long enough to drop frames.
+    next: Mutex<Option<Result<VideoEncoder, String>>>,
+    /// Set while `next` is being made.
+    preparing: AtomicBool,
     /// Segments whose file is finished, in order.
     finished: Mutex<Vec<Segment>>,
-    /// Threads finishing earlier segments' files.
+    /// Threads finishing earlier segments' files, making the next encoder or saving the thumbnail.
     finishing: Mutex<Vec<JoinHandle<()>>>,
+    /// Why the capture ended on its own, if it did. The capture then never calls `on_closed`.
+    failure: Mutex<Option<String>>,
+    /// Problems the capture worked around, added to the take's warnings when it stops.
+    notes: Mutex<Vec<String>>,
+    /// Where the captured area was over time, oldest first; a recorded window can move.
+    origins: Mutex<Vec<Origin>>,
 }
 
 impl Shared {
+    fn fail(&self, error: String) {
+        self.failure.lock().unwrap().get_or_insert(error);
+    }
+
+    /// The encoder for segment `index`: the one made ahead, or a new one if none was asked for.
+    /// `None` while it is still being made.
+    fn take_next(&self, index: u32) -> Option<Result<VideoEncoder, String>> {
+        // Checked before `next`, which is filled before `preparing` is cleared.
+        if self.preparing.load(Ordering::Acquire) {
+            return None;
+        }
+        if let Some(ready) = self.next.lock().unwrap().take() {
+            return Some(ready);
+        }
+        Some(new_encoder(&self.config, index).map_err(|error| error.to_string()))
+    }
+
     /// Records a finished segment and rewrites the list, so recovery knows what is safe.
     fn segment_done(&self, segment: Segment) {
         let mut finished = self.finished.lock().unwrap();
@@ -226,6 +276,40 @@ impl Shared {
         let list = serde_json::json!({ "t0": self.t0.load(Ordering::Acquire), "segments": *finished });
         let _ = write_json(&self.config.dir.join(SEGMENTS_FILE), &list);
     }
+}
+
+/// Makes segment `index`'s encoder on its own thread, for `Shared::take_next`.
+fn prepare_next(shared: &Arc<Shared>, index: u32) {
+    shared.preparing.store(true, Ordering::Release);
+    let worker = shared.clone();
+    let spawned = thread::Builder::new().name("segment-encoder".into()).spawn(move || {
+        let encoder = new_encoder(&worker.config, index).map_err(|error| error.to_string());
+        *worker.next.lock().unwrap() = Some(encoder);
+        worker.preparing.store(false, Ordering::Release);
+    });
+    match spawned {
+        Ok(handle) => shared.finishing.lock().unwrap().push(handle),
+        // `take_next` then makes it on the frame thread.
+        Err(_) => shared.preparing.store(false, Ordering::Release),
+    }
+}
+
+/// Saves the thumbnail on its own thread; only reading the pixels back happens on the frame thread.
+fn save_thumbnail(shared: &Shared, frame: &mut Frame) {
+    let Ok(buffer) = frame.buffer() else {
+        return;
+    };
+    let (width, height) = (buffer.width(), buffer.height());
+    let mut unpadded = Vec::new();
+    let pixels = buffer.as_nopadding_buffer(&mut unpadded).to_vec();
+    let path = shared.thumbnail.clone();
+    let handle = thread::spawn(move || {
+        let image = ImageEncoder::new(ImageFormat::Jpeg, ImageEncoderPixelFormat::Rgba8).and_then(|encoder| encoder.encode(&pixels, width, height));
+        if let Ok(bytes) = image {
+            let _ = fs::write(path, bytes);
+        }
+    });
+    shared.finishing.lock().unwrap().push(handle);
 }
 
 struct Capture {
@@ -245,6 +329,18 @@ impl GraphicsCaptureApiHandler for Capture {
     }
 
     fn on_frame_arrived(&mut self, frame: &mut Frame, _control: InternalCaptureControl) -> Result<(), Self::Error> {
+        // An error ends the capture; it is kept so the app can tell and the take still stops.
+        self.frame_arrived(frame).inspect_err(|error| self.shared.fail(error.to_string()))
+    }
+
+    fn on_closed(&mut self) -> Result<(), Self::Error> {
+        self.shared.closed.store(true, Ordering::Release);
+        Ok(())
+    }
+}
+
+impl Capture {
+    fn frame_arrived(&mut self, frame: &mut Frame) -> Result<(), CaptureError> {
         let mut encoder = self.shared.encoder.lock().unwrap();
         let Some(encoder) = encoder.as_mut() else {
             return Ok(());
@@ -253,20 +349,40 @@ impl GraphicsCaptureApiHandler for Capture {
         let _ = self.shared.t0.compare_exchange(0, time, Ordering::AcqRel, Ordering::Acquire);
         {
             let mut segment = self.shared.segment.lock().unwrap();
+            let length = time - segment.start;
+            let due = SEGMENT_HNS + segment.delay;
+            if segment.frames > 0 && !segment.asked && length >= due - PREPARE_HNS {
+                segment.asked = true;
+                prepare_next(&self.shared, segment.index + 1);
+            }
             // Every 30 s a new file starts; the finished one is closed on its own thread.
-            if segment.frames > 0 && time - segment.start >= SEGMENT_HNS {
+            if segment.frames > 0 && length >= due {
                 let next = segment.index + 1;
-                let finished = std::mem::replace(encoder, new_encoder(&self.shared.config, next)?);
-                let t0 = self.shared.t0.load(Ordering::Acquire);
-                let done = Segment { file: segment_name(segment.index), start_ms: hns_to_ms(segment.start - t0), end_ms: hns_to_ms(time - t0), frames: segment.frames };
-                let shared = self.shared.clone();
-                let handle = thread::spawn(move || {
-                    if finished.finish().is_ok() {
-                        shared.segment_done(done);
+                match self.shared.take_next(next) {
+                    // Still being made: the current file goes on a little longer.
+                    None => {}
+                    Some(Ok(next_encoder)) => {
+                        let finished = std::mem::replace(encoder, next_encoder);
+                        let t0 = self.shared.t0.load(Ordering::Acquire);
+                        let done = Segment { file: segment_name(segment.index), start_ms: hns_to_ms(segment.start - t0), end_ms: hns_to_ms(time - t0), frames: segment.frames };
+                        let shared = self.shared.clone();
+                        let handle = thread::spawn(move || {
+                            if finished.finish().is_ok() {
+                                shared.segment_done(done);
+                            }
+                        });
+                        self.shared.finishing.lock().unwrap().push(handle);
+                        *segment = SegmentState { index: next, start: time, ..SegmentState::default() };
                     }
-                });
-                self.shared.finishing.lock().unwrap().push(handle);
-                *segment = SegmentState { index: next, start: time, frames: 0 };
+                    // Keeps writing to the current file and tries again later, instead of ending the capture.
+                    Some(Err(error)) => {
+                        if segment.delay == 0 {
+                            self.shared.notes.lock().unwrap().push(format!("Um trecho do vídeo ficou mais longo: o próximo não pôde ser criado ({error})."));
+                        }
+                        segment.delay += RETRY_HNS;
+                        segment.asked = false;
+                    }
+                }
             }
             if segment.frames == 0 {
                 segment.start = time;
@@ -275,13 +391,8 @@ impl GraphicsCaptureApiHandler for Capture {
         }
         encoder.send_frame(frame)?;
         if self.shared.frames.fetch_add(1, Ordering::Relaxed) == THUMB_FRAME {
-            let _ = frame.save_as_image(&self.shared.thumbnail, ImageFormat::Jpeg);
+            save_thumbnail(&self.shared, frame);
         }
-        Ok(())
-    }
-
-    fn on_closed(&mut self) -> Result<(), Self::Error> {
-        self.shared.closed.store(true, Ordering::Release);
         Ok(())
     }
 }
@@ -327,6 +438,8 @@ pub struct Status {
     pub frames: u64,
     pub closed: bool,
     pub paused: bool,
+    /// Why the capture stopped on its own, if it did; the take still has to be stopped.
+    pub error: Option<String>,
 }
 
 pub struct Recording {
@@ -380,9 +493,7 @@ impl Recording {
         }
 
         let created = chrono::Local::now();
-        let id = format!("take-{}", created.format("%Y%m%d-%H%M%S"));
-        let dir = root.join(&id);
-        fs::create_dir_all(&dir).with_context(|| format!("criar {}", dir.display()))?;
+        let (id, dir) = create_take_dir(root, &format!("take-{}", created.format("%Y%m%d-%H%M%S")))?;
 
         let shared = Arc::new(Shared {
             encoder: Mutex::new(None),
@@ -393,13 +504,25 @@ impl Recording {
             thumbnail: dir.join(THUMB_FILE),
             config: EncoderConfig { dir: dir.clone(), width, height, fps },
             segment: Mutex::new(SegmentState::default()),
+            next: Mutex::new(None),
+            preparing: AtomicBool::new(false),
             finished: Mutex::new(Vec::new()),
             finishing: Mutex::new(Vec::new()),
+            failure: Mutex::new(None),
+            notes: Mutex::new(Vec::new()),
+            origins: Mutex::new(vec![Origin { time: 0, x: target.rect.left, y: target.rect.top }]),
         });
+        // A recorded window can move; its place is followed so mouse positions stay on it.
+        let followed = match &item {
+            Item::Window(window) => Some(*window),
+            Item::Monitor(_) => None,
+        };
 
         let mut warnings = Vec::new();
         let mut audio_threads = Vec::new();
-        let cursor = cursor::Logger::start(options.keystrokes, options.draw_zoom)?;
+        let cursor = cursor::Logger::start(options.keystrokes, options.draw_zoom).inspect_err(|_| {
+            let _ = fs::remove_dir_all(&dir);
+        })?;
 
         let mut system_file = None;
         if options.system_audio {
@@ -444,24 +567,6 @@ impl Recording {
             MinimumUpdateIntervalSettings::Default
         };
 
-        let capture_options = CaptureOptions { cursor: cursor_setting, interval };
-        let launched = match item {
-            Item::Monitor(monitor) => launch(monitor, &capture_options, shared.clone()),
-            Item::Window(window) => launch(window, &capture_options, shared.clone()),
-        };
-        let control = match launched {
-            Ok(control) => control,
-            Err(error) => {
-                shared.stop.store(true, Ordering::Release);
-                for (_, handle) in audio_threads {
-                    let _ = handle.join();
-                }
-                let _ = cursor.stop();
-                let _ = fs::remove_dir_all(&dir);
-                bail!("iniciar a captura: {error}");
-            }
-        };
-
         let meta = TakeMeta {
             version: 1,
             id,
@@ -494,9 +599,26 @@ impl Recording {
             segments: Vec::new(),
             dir: String::new(),
         };
-        // Everything recovery needs to rebuild take.json if the app never gets to stop.
-        write_json(&dir.join(RECORDING_FILE), &meta)?;
-        let saver = spawn_saver(shared.clone(), dir.clone(), meta.origin_x, meta.origin_y);
+        // Everything recovery needs to rebuild take.json if the app never gets to stop. Written
+        // before the capture starts, so nothing can fail once it runs.
+        if let Err(error) = write_json(&dir.join(RECORDING_FILE), &meta) {
+            abandon(&shared, audio_threads, cursor, &dir);
+            return Err(error);
+        }
+
+        let capture_options = CaptureOptions { cursor: cursor_setting, interval };
+        let launched = match item {
+            Item::Monitor(monitor) => launch(monitor, &capture_options, shared.clone()),
+            Item::Window(window) => launch(window, &capture_options, shared.clone()),
+        };
+        let control = match launched {
+            Ok(control) => control,
+            Err(error) => {
+                abandon(&shared, audio_threads, cursor, &dir);
+                bail!("iniciar a captura: {error}");
+            }
+        };
+        let saver = spawn_saver(shared.clone(), dir.clone(), followed);
 
         Ok(Self { shared, control, audio: audio_threads, cursor, saver: Some(saver), meta, dir, paused_since: None })
     }
@@ -523,6 +645,7 @@ impl Recording {
             frames: self.shared.frames.load(Ordering::Relaxed),
             closed: self.shared.closed.load(Ordering::Acquire),
             paused: self.paused_since.is_some(),
+            error: self.shared.failure.lock().unwrap().clone(),
         }
     }
 
@@ -561,27 +684,46 @@ impl Recording {
             }
         }
         let (events, keys) = cursor.stop();
-        control.stop().map_err(|error| anyhow!("parar a captura: {error}"))?;
+        // A failed stop still leaves finished segments and input events: the take is saved anyway.
+        // A capture that already failed reports that failure again here; it is noted once below.
+        if let Err(error) = control.stop() {
+            if shared.failure.lock().unwrap().is_none() {
+                meta.warnings.push(format!("Falha ao parar a captura: {error}"));
+            }
+        }
         // After the capture, so waiting for it never adds frames past the stop.
         if let Some(saver) = saver {
             let _ = saver.join();
         }
 
         let encoder = shared.encoder.lock().unwrap().take();
-        match encoder {
-            Some(encoder) => encoder.finish().map_err(|error| anyhow!("finalizar o vídeo: {error}"))?,
-            None => bail!("o codificador de vídeo não foi criado"),
-        }
+        let Some(encoder) = encoder else {
+            bail!("o codificador de vídeo não foi criado");
+        };
+        let last_finished = match encoder.finish() {
+            Ok(()) => true,
+            Err(error) => {
+                meta.warnings.push(format!("O último trecho do vídeo se perdeu ao finalizar: {error}"));
+                false
+            }
+        };
         for handle in shared.finishing.lock().unwrap().drain(..) {
             let _ = handle.join();
         }
 
         let t0 = shared.t0.load(Ordering::Acquire);
         let last = std::mem::take(&mut *shared.segment.lock().unwrap());
-        if last.frames > 0 {
+        if last.frames > 0 && last_finished {
             shared.segment_done(Segment { file: segment_name(last.index), start_ms: hns_to_ms(last.start - t0), end_ms: hns_to_ms(end - t0), frames: last.frames });
         }
+        // An encoder made ahead for a segment that never started, and its empty file.
+        drop(shared.next.lock().unwrap().take());
+        let _ = fs::remove_file(dir.join(segment_name(last.index + 1)));
         meta.segments = shared.finished.lock().unwrap().clone();
+        if let Some(error) = shared.failure.lock().unwrap().clone() {
+            meta.warnings.push(format!("A captura de vídeo parou antes da hora: {error}"));
+        }
+        meta.warnings.append(&mut shared.notes.lock().unwrap());
         if t0 == 0 {
             meta.warnings.push("Nenhum quadro foi capturado.".into());
         }
@@ -590,11 +732,14 @@ impl Recording {
         meta.start_hns = t0;
         meta.thumbnail = dir.join(THUMB_FILE).exists().then(|| THUMB_FILE.to_string());
 
-        write_json(&dir.join(CURSOR_FILE), &cursor_track(&events, t0, meta.origin_x, meta.origin_y))?;
+        write_json(&dir.join(CURSOR_FILE), &cursor_track(&events, t0, &shared.origins.lock().unwrap()))?;
         if meta.keys.is_some() {
             write_json(&dir.join(KEYS_FILE), &key_track(&keys, t0))?;
         }
-        write_json(&dir.join(META_FILE), &meta)?;
+        {
+            let _guard = META_LOCK.lock().unwrap();
+            write_json(&dir.join(META_FILE), &meta)?;
+        }
         for partial in [CURSOR_PARTIAL, KEYS_PARTIAL, RECORDING_FILE] {
             let _ = fs::remove_file(dir.join(partial));
         }
@@ -603,10 +748,54 @@ impl Recording {
     }
 }
 
+/// Creates a new folder for a take; a take started in the same second gets a `-2`, `-3`… suffix.
+fn create_take_dir(root: &Path, base: &str) -> anyhow::Result<(String, PathBuf)> {
+    fs::create_dir_all(root).with_context(|| format!("criar {}", root.display()))?;
+    for attempt in 1..100 {
+        let id = if attempt == 1 { base.to_string() } else { format!("{base}-{attempt}") };
+        let dir = root.join(&id);
+        match fs::create_dir(&dir) {
+            Ok(()) => return Ok((id, dir)),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(error).with_context(|| format!("criar {}", dir.display())),
+        }
+    }
+    bail!("criar a pasta da gravação em {}", root.display())
+}
+
+/// Stops what a take that failed to start had started, and removes its folder.
+fn abandon(shared: &Shared, audio: Vec<(&'static str, JoinHandle<anyhow::Result<()>>)>, cursor: cursor::Logger, dir: &Path) {
+    shared.stop.store(true, Ordering::Release);
+    for (_, handle) in audio {
+        let _ = handle.join();
+    }
+    let _ = cursor.stop();
+    let _ = fs::remove_dir_all(dir);
+}
+
+/// Notes where a recorded window is when it has moved. A minimized window keeps its last place.
+fn follow(shared: &Shared, window: &Window) {
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::UI::WindowsAndMessaging::IsIconic;
+
+    if unsafe { IsIconic(HWND(window.as_raw_hwnd())) }.as_bool() {
+        return;
+    }
+    let Some(rect) = sources::window_rect(window) else {
+        return;
+    };
+    let mut origins = shared.origins.lock().unwrap();
+    if origins.last().is_none_or(|origin| (origin.x, origin.y) != (rect.left, rect.top)) {
+        origins.push(Origin { time: now_hns(), x: rect.left, y: rect.top });
+    }
+}
+
 /// Appends new mouse and key events to disk every few seconds, already on the take's timeline,
-/// so an interrupted take keeps them.
-fn spawn_saver(shared: Arc<Shared>, dir: PathBuf, origin_x: i32, origin_y: i32) -> JoinHandle<()> {
+/// so an interrupted take keeps them. Also follows a recorded window's place.
+fn spawn_saver(shared: Arc<Shared>, dir: PathBuf, window: Option<Window>) -> JoinHandle<()> {
     thread::spawn(move || {
+        // Window bounds in physical pixels, like the capture and the mouse events.
+        sources::use_physical_pixels();
         let (mut events_done, mut keys_done) = (0, 0);
         loop {
             let stopping = shared.stop.load(Ordering::Acquire);
@@ -616,7 +805,7 @@ fn spawn_saver(shared: Arc<Shared>, dir: PathBuf, origin_x: i32, origin_y: i32) 
                 events_done += events.len();
                 keys_done += keys.len();
                 let lines = |values: Vec<serde_json::Value>| values.iter().map(|value| format!("{value}\n")).collect::<String>();
-                let track = serde_json::to_value(cursor_track(&events, t0, origin_x, origin_y)).unwrap_or_default();
+                let track = serde_json::to_value(cursor_track(&events, t0, &shared.origins.lock().unwrap())).unwrap_or_default();
                 append(&dir.join(CURSOR_PARTIAL), &lines(track["events"].as_array().cloned().unwrap_or_default()));
                 let keys = key_track(&keys, t0);
                 append(&dir.join(KEYS_PARTIAL), &lines(keys["events"].as_array().cloned().unwrap_or_default()));
@@ -624,9 +813,12 @@ fn spawn_saver(shared: Arc<Shared>, dir: PathBuf, origin_x: i32, origin_y: i32) 
             if stopping {
                 break;
             }
-            // Short naps, so a stop is noticed at once.
+            // Short naps, so a stop is noticed at once and a moving window is followed closely.
             let started = std::time::Instant::now();
             while started.elapsed() < PARTIAL_EVERY && !shared.stop.load(Ordering::Acquire) {
+                if let Some(window) = &window {
+                    follow(&shared, window);
+                }
                 thread::sleep(Duration::from_millis(50));
             }
         }
@@ -675,19 +867,35 @@ fn recover(dir: &Path) -> bool {
     ));
     meta.title = Some("Gravação recuperada".into());
     meta.segments = segments;
+    let _guard = META_LOCK.lock().unwrap();
     write_json(&dir.join(META_FILE), &meta).is_ok()
+}
+
+/// Guards every read-modify-write of `take.json`: commands that change it can run at once.
+static META_LOCK: Mutex<()> = Mutex::new(());
+
+/// Reads a take's `take.json`, applies `change` and writes it back. Returns the new metadata,
+/// without `dir`.
+pub fn update_meta(dir: &Path, change: impl FnOnce(&mut TakeMeta) -> anyhow::Result<()>) -> anyhow::Result<TakeMeta> {
+    let _guard = META_LOCK.lock().unwrap();
+    let path = dir.join(META_FILE);
+    let text = fs::read_to_string(&path).with_context(|| format!("ler {}", path.display()))?;
+    let mut meta: TakeMeta = serde_json::from_str(&text)?;
+    change(&mut meta)?;
+    write_json(&path, &meta)?;
+    Ok(meta)
 }
 
 /// Called once the frontend has joined the segments into the video file: removes them.
 pub fn segments_joined(dir: &Path) -> anyhow::Result<TakeMeta> {
-    let text = fs::read_to_string(dir.join(META_FILE))?;
-    let mut meta: TakeMeta = serde_json::from_str(&text)?;
-    let video = dir.join(&meta.video);
-    if !fs::metadata(&video).is_ok_and(|file| file.len() > 0) {
-        bail!("o vídeo juntado não foi encontrado");
-    }
-    meta.segments.clear();
-    write_json(&dir.join(META_FILE), &meta)?;
+    let mut meta = update_meta(dir, |meta| {
+        let video = dir.join(&meta.video);
+        if !fs::metadata(&video).is_ok_and(|file| file.len() > 0) {
+            bail!("o vídeo juntado não foi encontrado");
+        }
+        meta.segments.clear();
+        Ok(())
+    })?;
     let _ = fs::remove_dir_all(dir.join(SEGMENT_DIR));
     for leftover in [SEGMENTS_FILE, RECORDING_FILE, CURSOR_PARTIAL, KEYS_PARTIAL] {
         let _ = fs::remove_file(dir.join(leftover));
@@ -722,22 +930,25 @@ struct CursorTrack {
 }
 
 /// Puts events on the take's timeline in video pixels, keeping the last one before the start as
-/// the initial position.
-fn cursor_track(events: &[RawEvent], t0: i64, origin_x: i32, origin_y: i32) -> CursorTrack {
+/// the initial position. Each event is placed against where the captured area was at that time.
+fn cursor_track(events: &[RawEvent], t0: i64, origins: &[Origin]) -> CursorTrack {
     let last_before = |shape: bool| events.iter().rposition(|event| event.time <= t0 && matches!(event.kind, Kind::Shape) == shape);
     let (first_move, first_shape) = (last_before(false), last_before(true));
     let events = events
         .iter()
         .enumerate()
         .filter(|(index, event)| event.time > t0 || Some(*index) == first_move || Some(*index) == first_shape)
-        .map(|(_, event)| CursorEvent {
-            t: (((event.time - t0).max(0) as f64 / (HNS_PER_SEC as f64 / 1000.0)) * 10.0).round() / 10.0,
-            k: event.kind,
-            b: event.button,
-            x: event.x - origin_x,
-            y: event.y - origin_y,
-            w: event.wheel,
-            c: event.shape,
+        .map(|(_, event)| {
+            let origin = origin_at(origins, event.time);
+            CursorEvent {
+                t: (((event.time - t0).max(0) as f64 / (HNS_PER_SEC as f64 / 1000.0)) * 10.0).round() / 10.0,
+                k: event.kind,
+                b: event.button,
+                x: event.x - origin.x,
+                y: event.y - origin.y,
+                w: event.wheel,
+                c: event.shape,
+            }
         })
         .collect();
     CursorTrack { version: 2, events }
@@ -763,9 +974,12 @@ fn key_track(keys: &[KeyPress], t0: i64) -> serde_json::Value {
     serde_json::json!({ "version": 1, "events": events })
 }
 
+/// Writes then renames, so a crash mid-write never leaves a truncated file.
 fn write_json(path: &Path, value: &impl Serialize) -> anyhow::Result<()> {
     let json = serde_json::to_vec_pretty(value)?;
-    fs::write(path, json).with_context(|| format!("gravar {}", path.display()))
+    let temporary = path.with_extension("json.tmp");
+    fs::write(&temporary, json).with_context(|| format!("gravar {}", temporary.display()))?;
+    fs::rename(&temporary, path).with_context(|| format!("gravar {}", path.display()))
 }
 
 /// Removes a take folder left by a recording that never got going (app closed at the start): no
@@ -787,8 +1001,9 @@ fn remove_if_abandoned(dir: &Path) {
     }
 }
 
-/// Takes in `root`, newest first. Folders without a readable `take.json` are skipped.
-pub fn list_takes(root: &Path) -> Vec<TakeMeta> {
+/// Takes in `root`, newest first. Folders without a readable `take.json` are skipped, and so is
+/// `active`, the take being recorded or stopped: it isn't interrupted, so it must not be recovered.
+pub fn list_takes(root: &Path, active: Option<&Path>) -> Vec<TakeMeta> {
     let Ok(entries) = fs::read_dir(root) else {
         return Vec::new();
     };
@@ -796,6 +1011,9 @@ pub fn list_takes(root: &Path) -> Vec<TakeMeta> {
         .filter_map(Result::ok)
         .filter_map(|entry| {
             let dir = entry.path();
+            if active == Some(dir.as_path()) {
+                return None;
+            }
             if !dir.join(META_FILE).exists() && !(dir.join(RECORDING_FILE).exists() && recover(&dir)) {
                 remove_if_abandoned(&dir);
                 return None;

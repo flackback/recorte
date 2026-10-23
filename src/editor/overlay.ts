@@ -8,17 +8,20 @@ const FONT = "'Segoe UI Variable Display', 'Segoe UI', system-ui, sans-serif";
 /**
  * Draws notes (text, arrows, highlight boxes), the keys badge and captions into a canvas the size
  * of the output frame. Redraws only when something changes; the renderer uploads the canvas only
- * then.
+ * then. The preview can ask for fewer pixels: drawing stays in output units, scaled down.
  */
 export class OverlayPainter {
   readonly canvas: OffscreenCanvas;
   private context: OffscreenCanvasRenderingContext2D;
   private lastKey = "";
+  /** The output frame the overlay is laid out in; the canvas is this times `scale`. */
+  private size: { width: number; height: number };
   visible = false;
 
   constructor(width: number, height: number) {
     this.canvas = new OffscreenCanvas(width, height);
     this.context = this.canvas.getContext("2d")!;
+    this.size = { width, height };
   }
 
   /** Returns true when the canvas changed and must be uploaded again. */
@@ -29,15 +32,20 @@ export class OverlayPainter {
     if (key === this.lastKey) return false;
     this.lastKey = key;
 
-    const { canvas, context } = this;
-    context.clearRect(0, 0, canvas.width, canvas.height);
+    const { context } = this;
+    context.setTransform(1, 0, 0, 1, 0, 0);
+    context.clearRect(0, 0, this.canvas.width, this.canvas.height);
+    context.setTransform(this.canvas.width / this.size.width, 0, 0, this.canvas.height / this.size.height, 0, 0);
+    // Shadow blur ignores the transform, so it is scaled by hand.
+    const blur = this.canvas.width / this.size.width;
+    const canvas = this.size;
     const short = Math.min(canvas.width, canvas.height);
     this.visible = Boolean(text.keys || text.caption || text.notes.length || (card && card.opacity > 0));
 
     for (const { note, opacity } of text.notes) {
       context.save();
       context.globalAlpha = opacity;
-      drawNote(context, note, canvas.width, canvas.height);
+      drawNote(context, note, canvas.width, canvas.height, blur);
       context.restore();
     }
 
@@ -93,29 +101,32 @@ export class OverlayPainter {
     if (card && card.opacity > 0) {
       context.save();
       context.globalAlpha = card.opacity;
-      drawCard(context, card.card, project, canvas.width, canvas.height);
+      drawCard(context, card.card, project, canvas.width, canvas.height, blur);
       context.restore();
     }
     return true;
   }
 
-  resize(width: number, height: number) {
-    if (this.canvas.width === width && this.canvas.height === height) return;
-    this.canvas.width = width;
-    this.canvas.height = height;
+  /** Lays the overlay out in a `width` × `height` frame, drawn at `scale` times that many pixels. */
+  resize(width: number, height: number, scale = 1) {
+    const pixels = { width: Math.max(1, Math.round(width * scale)), height: Math.max(1, Math.round(height * scale)) };
+    if (this.size.width === width && this.size.height === height && this.canvas.width === pixels.width && this.canvas.height === pixels.height) return;
+    this.size = { width, height };
+    this.canvas.width = pixels.width;
+    this.canvas.height = pixels.height;
     this.lastKey = "";
   }
 }
 
-/** One note, in a frame of `width` × `height` pixels. */
-function drawNote(context: OffscreenCanvasRenderingContext2D, note: Note, width: number, height: number) {
+/** One note, in a frame of `width` × `height` pixels; `blur` scales the shadow to the canvas. */
+function drawNote(context: OffscreenCanvasRenderingContext2D, note: Note, width: number, height: number, blur = 1) {
   const short = Math.min(width, height);
   const x = note.x * width;
   const y = note.y * height;
   const w = note.width * width;
   const h = note.height * height;
   context.shadowColor = "rgba(0, 0, 0, 0.45)";
-  context.shadowBlur = short * 0.012;
+  context.shadowBlur = short * 0.012 * blur;
 
   if (note.kind === "box") {
     const line = Math.max(3, short * 0.006 * note.size);
@@ -185,7 +196,7 @@ function drawNote(context: OffscreenCanvasRenderingContext2D, note: Note, width:
 }
 
 /** A full-frame title screen on the style's gradient. */
-function drawCard(context: OffscreenCanvasRenderingContext2D, card: CardView["card"], project: Project, width: number, height: number) {
+function drawCard(context: OffscreenCanvasRenderingContext2D, card: CardView["card"], project: Project, width: number, height: number, blur = 1) {
   const preset = BACKGROUNDS.find((background) => background.id === project.background.preset) ?? BACKGROUNDS[0];
   const angle = (preset.angle * Math.PI) / 180;
   const reach = (Math.abs(Math.cos(angle)) * width + Math.abs(Math.sin(angle)) * height) / 2;
@@ -214,7 +225,7 @@ function drawCard(context: OffscreenCanvasRenderingContext2D, card: CardView["ca
   context.textAlign = "center";
   context.textBaseline = "top";
   context.shadowColor = light ? "transparent" : "rgba(0, 0, 0, 0.25)";
-  context.shadowBlur = short * 0.02;
+  context.shadowBlur = short * 0.02 * blur;
   if (title) {
     context.fillStyle = light ? "#111114" : "#ffffff";
     context.fillText(title, width / 2, y, width * 0.9);

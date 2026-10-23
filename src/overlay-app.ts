@@ -20,6 +20,10 @@ function resize() {
   canvas.width = Math.round(innerWidth * ratio);
   canvas.height = Math.round(innerHeight * ratio);
   context.setTransform(ratio, 0, 0, ratio, 0, 0);
+  still.width = canvas.width;
+  still.height = canvas.height;
+  stillContext.setTransform(ratio, 0, 0, ratio, 0, 0);
+  stillDirty = true;
   draw();
 }
 
@@ -34,6 +38,9 @@ let area: Rect | null = (() => {
   return { x, y, width, height };
 })();
 let dragFrom: { x: number; y: number } | null = null;
+/** The area before the current drag, restored when the drag is too small to use. */
+let areaBefore: Rect | null = null;
+const MIN_AREA = 16;
 
 function drawArea() {
   context.clearRect(0, 0, innerWidth, innerHeight);
@@ -55,7 +62,10 @@ function drawArea() {
 }
 
 async function confirmArea(full: boolean) {
-  const rect = full || !area || area.width < 16 || area.height < 16 ? null : area;
+  const usable = area && area.width >= MIN_AREA && area.height >= MIN_AREA ? area : null;
+  // "Gravar área" with no area keeps the picker open; only "Tela inteira" records the whole screen.
+  if (!full && !usable) return;
+  const rect = full ? null : usable;
   // Physical pixels relative to the monitor, which is what the recording uses.
   await emit("area-selected", rect && {
     x: Math.round(rect.x * ratio),
@@ -82,6 +92,8 @@ type Shape = {
   text?: string;
   /** When it was finished, for "sumir sozinho"; null keeps it. */
   fadeFrom: number | null;
+  /** When it was finished; unset while it is being drawn. */
+  doneAt?: number;
 };
 
 const shapes: Shape[] = [];
@@ -93,6 +105,14 @@ const textInput = document.getElementById("text-input") as HTMLInputElement;
 let textAt: Point | null = null;
 
 const textSize = (width: number) => 14 + width * 3.4;
+
+/** Dashed arrows march this long after they are drawn, then rest. */
+const DASH_MARCH = 4000;
+/** Finished shapes that no longer change, painted once into this layer and copied each frame. */
+const still = document.createElement("canvas");
+const stillContext = still.getContext("2d")!;
+let stillShapes: Shape[] = [];
+let stillDirty = true;
 
 /** Lines snap to 45° steps, and boxes to squares and circles, while Shift is held. */
 function constrain(tool: Shape["tool"], from: Point, to: Point): Point {
@@ -108,7 +128,7 @@ function constrain(tool: Shape["tool"], from: Point, to: Point): Point {
   return { x: from.x + Math.cos(angle) * length, y: from.y + Math.sin(angle) * length };
 }
 
-function arrowHead(from: Point, to: Point, width: number) {
+function arrowHead(context: CanvasRenderingContext2D, from: Point, to: Point, width: number) {
   const angle = Math.atan2(to.y - from.y, to.x - from.x);
   const head = 10 + width * 2.6;
   context.beginPath();
@@ -120,7 +140,7 @@ function arrowHead(from: Point, to: Point, width: number) {
   return { x: to.x - Math.cos(angle) * head * 0.7, y: to.y - Math.sin(angle) * head * 0.7 };
 }
 
-function paintShape(shape: Shape, now: number) {
+function paintShape(context: CanvasRenderingContext2D, shape: Shape, now: number) {
   const points = shape.points;
   const first = points[0];
   const last = points[points.length - 1];
@@ -159,11 +179,13 @@ function paintShape(shape: Shape, now: number) {
       context.lineTo(last.x, last.y);
       context.stroke();
     } else if (shape.tool === "arrow" || shape.tool === "dashed") {
-      const neck = arrowHead(first, last, shape.width);
+      const neck = arrowHead(context, first, last, shape.width);
       if (shape.tool === "dashed") {
         context.setLineDash([shape.width * 2.4, shape.width * 2]);
         // The dashes march toward the tip, so the eye follows where it points.
-        if (!reducedMotion) context.lineDashOffset = -((now / 30) % (shape.width * 4.4));
+        // They stop where the march ended, so the still layer matches the last moving frame.
+        const time = shape.doneAt === undefined ? now : Math.min(now, shape.doneAt + DASH_MARCH);
+        if (!reducedMotion) context.lineDashOffset = -((time / 30) % (shape.width * 4.4));
       }
       context.beginPath();
       context.moveTo(first.x, first.y);
@@ -191,12 +213,33 @@ function drawShapes() {
     const fadeFrom = shapes[index].fadeFrom;
     if (fadeFrom !== null && now - fadeFrom > FADE_AFTER + FADE_OUT) shapes.splice(index, 1);
   }
+  // Repaint the still layer only when the set of still shapes changes.
+  const settled = shapes.filter((shape) => !isLive(shape, now));
+  if (stillDirty || settled.length !== stillShapes.length || settled.some((shape, index) => shape !== stillShapes[index])) {
+    stillContext.clearRect(0, 0, innerWidth, innerHeight);
+    for (const shape of settled) paintShape(stillContext, shape, now);
+    stillShapes = settled;
+    stillDirty = false;
+  }
   context.clearRect(0, 0, innerWidth, innerHeight);
-  for (const shape of shapes) paintShape(shape, now);
-  if (current) paintShape(current, now);
-  // Keep animating only while something moves: fading shapes or marching dashes.
-  const moving = shapes.some((shape) => shape.fadeFrom !== null || (shape.tool === "dashed" && !reducedMotion));
+  context.save();
+  context.setTransform(1, 0, 0, 1, 0, 0);
+  context.drawImage(still, 0, 0);
+  context.restore();
+  for (const shape of shapes) if (isLive(shape, now)) paintShape(context, shape, now);
+  if (current) paintShape(context, current, now);
+  // Keep animating only while something moves or will move: fading shapes or marching dashes.
+  const moving = shapes.some((shape) => shape.fadeFrom !== null || marching(shape, now));
   if (moving) requestFrame();
+}
+
+function marching(shape: Shape, now: number) {
+  return shape.tool === "dashed" && !reducedMotion && (shape.doneAt === undefined || now - shape.doneAt < DASH_MARCH);
+}
+
+/** A shape that changes from frame to frame: marching, or fading out. */
+function isLive(shape: Shape, now: number) {
+  return marching(shape, now) || (shape.fadeFrom !== null && now - shape.fadeFrom >= FADE_AFTER);
 }
 
 function requestFrame() {
@@ -214,7 +257,8 @@ function draw() {
 }
 
 function finish(shape: Shape) {
-  shape.fadeFrom = config.fade ? performance.now() : null;
+  shape.doneAt = performance.now();
+  shape.fadeFrom = config.fade ? shape.doneAt : null;
   shapes.push(shape);
 }
 
@@ -268,6 +312,7 @@ canvas.addEventListener("pointerdown", (event) => {
   if (mode === "area") {
     canvas.setPointerCapture(event.pointerId);
     dragFrom = at;
+    areaBefore = area;
     area = { ...at, width: 0, height: 0 };
   } else if (config.tool === "text") {
     startText(at);
@@ -277,7 +322,7 @@ canvas.addEventListener("pointerdown", (event) => {
     canvas.setPointerCapture(event.pointerId);
     current = { tool: config.tool, color: config.color, width: config.width, points: [at], fadeFrom: null };
   }
-  draw();
+  requestFrame();
 });
 canvas.addEventListener("pointermove", (event) => {
   const at = { x: event.clientX, y: event.clientY };
@@ -289,9 +334,12 @@ canvas.addEventListener("pointermove", (event) => {
   } else {
     return;
   }
-  draw();
+  // One paint per frame, however fast the pointer reports.
+  requestFrame();
 });
 canvas.addEventListener("pointerup", () => {
+  // A click or a tiny drag keeps the area chosen before, instead of an area too small to record.
+  if (mode === "area" && dragFrom && area && (area.width < MIN_AREA || area.height < MIN_AREA)) area = areaBefore;
   dragFrom = null;
   if (current) {
     const [first, last] = [current.points[0], current.points[current.points.length - 1]];
@@ -299,7 +347,7 @@ canvas.addEventListener("pointerup", () => {
     if (current.points.length > 1 && Math.hypot(last.x - first.x, last.y - first.y) > 3) finish(current);
     current = null;
   }
-  draw();
+  requestFrame();
 });
 canvas.addEventListener("dblclick", () => {
   if (mode === "area") void confirmArea(false);

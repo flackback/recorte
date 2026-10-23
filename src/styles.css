@@ -67,6 +67,14 @@
     --fast: 0ms;
     --base: 0ms;
   }
+
+  /* Endless loops ignore the timing tokens; stop them outright. */
+  .rec-dot,
+  .record.active .dot,
+  .spinner,
+  .progress.indeterminate .progress-bar {
+    animation: none;
+  }
 }
 
 * {
@@ -835,7 +843,15 @@ input[type="range"]:focus-visible::-webkit-slider-thumb {
   width: 64px;
   height: 40px;
   border-radius: 5px;
-  background: var(--surface-3) center / cover no-repeat;
+  background: var(--surface-3);
+}
+
+.take .thumb img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border-radius: inherit;
+  object-fit: cover;
 }
 
 .take strong {

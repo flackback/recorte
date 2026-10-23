@@ -179,7 +179,9 @@ export function outputSize(
     return w / h;
   })();
   const even = (value: number) => Math.round(value / 2) * 2;
-  return ratio >= 1 ? { width: longSide, height: even(longSide / ratio) } : { width: even(longSide * ratio), height: longSide };
+  // H.264 needs even sizes, so an odd long side (1279) is rounded too.
+  const side = even(longSide);
+  return ratio >= 1 ? { width: side, height: even(side / ratio) } : { width: even(side * ratio), height: side };
 }
 
 let nextId = 0;

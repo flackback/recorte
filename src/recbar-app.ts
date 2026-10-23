@@ -37,6 +37,8 @@ const reducedMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
 const EXIT_MS = reducedMotion ? 0 : 130;
 
 let paused = false;
+/** What the pause button shows now; null until the first state arrives. */
+let shownPaused: boolean | null = null;
 /** While set, the time shows "Marca n" instead of the elapsed time. */
 let flashUntil = 0;
 
@@ -246,10 +248,13 @@ makeDraggable(document.querySelector<HTMLElement>(".grip")!);
 makeDraggable(ui.status);
 
 void listen<{ elapsedMs: number; paused: boolean }>("recbar-state", (event) => {
-  paused = event.payload.paused;
-  ui.status.classList.toggle("paused", paused);
-  ui.pause.querySelector("span")!.textContent = paused ? "Continuar" : "Pausar";
-  ui.pause.querySelector("svg")!.innerHTML = paused ? '<path d="M8 5.5v13l10.5-6.5z" />' : '<path d="M9 6v12M15 6v12" />';
+  // The state arrives every 200 ms; touch the button only when it changes.
+  if (event.payload.paused !== shownPaused) {
+    paused = shownPaused = event.payload.paused;
+    ui.status.classList.toggle("paused", paused);
+    ui.pause.querySelector("span")!.textContent = paused ? "Continuar" : "Pausar";
+    ui.pause.querySelector("svg")!.innerHTML = paused ? '<path d="M8 5.5v13l10.5-6.5z" />' : '<path d="M9 6v12M15 6v12" />';
+  }
   if (performance.now() < flashUntil) return;
   ui.time.classList.remove("flash");
   ui.time.textContent = paused ? `Pausado · ${format(event.payload.elapsedMs)}` : format(event.payload.elapsedMs);

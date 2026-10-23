@@ -9,7 +9,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 
 use serde::Serialize;
 use tauri::ipc::{InvokeBody, Request};
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Manager, State};
 
 pub const EXPORT_DIR: &str = "Exportados";
 
@@ -88,10 +88,15 @@ fn remove_leftovers(dir: &std::path::Path, exports: &Exports) {
     }
 }
 
+/// Runs file work on a blocking thread, so a slow disk never stalls the main thread.
+async fn on_disk<T: Send + 'static>(app: AppHandle, work: impl FnOnce(&Exports) -> Result<T, String> + Send + 'static) -> Result<T, String> {
+    tauri::async_runtime::spawn_blocking(move || work(&app.state::<Exports>())).await.map_err(|error| error.to_string())?
+}
+
 /// Writes the raw request body at the byte offset in `x-position`. The muxer seeks back once at
 /// the end to patch sizes, so writes are positioned rather than appended.
 #[tauri::command]
-pub fn export_write(exports: State<'_, Exports>, request: Request<'_>) -> Result<(), String> {
+pub async fn export_write(app: AppHandle, request: Request<'_>) -> Result<(), String> {
     let InvokeBody::Raw(data) = request.body() else {
         return Err("corpo da requisição deveria ser binário".into());
     };
@@ -105,22 +110,30 @@ pub fn export_write(exports: State<'_, Exports>, request: Request<'_>) -> Result
     };
     let id = header("x-export-id")? as u32;
     let position = header("x-position")?;
+    // The body belongs to the request; the blocking thread needs its own copy.
+    let data = data.clone();
 
-    let mut open = exports.open.lock().unwrap();
-    let export = open.get_mut(&id).ok_or("exportação desconhecida")?;
-    export.file.seek(SeekFrom::Start(position)).map_err(|error| error.to_string())?;
-    export.file.write_all(data).map_err(|error| error.to_string())
+    on_disk(app, move |exports| {
+        let mut open = exports.open.lock().unwrap();
+        let export = open.get_mut(&id).ok_or("exportação desconhecida")?;
+        export.file.seek(SeekFrom::Start(position)).map_err(|error| error.to_string())?;
+        export.file.write_all(&data).map_err(|error| error.to_string())
+    })
+    .await
 }
 
 /// Closes the file and gives it its final name.
 #[tauri::command]
-pub fn export_finish(exports: State<'_, Exports>, id: u32) -> Result<String, String> {
-    let export = exports.open.lock().unwrap().remove(&id).ok_or("exportação desconhecida")?;
-    export.file.sync_all().map_err(|error| error.to_string())?;
-    drop(export.file);
-    let _ = fs::remove_file(&export.target);
-    fs::rename(&export.partial, &export.target).map_err(|error| error.to_string())?;
-    Ok(export.target.to_string_lossy().into_owned())
+pub async fn export_finish(app: AppHandle, id: u32) -> Result<String, String> {
+    on_disk(app, move |exports| {
+        let export = exports.open.lock().unwrap().remove(&id).ok_or("exportação desconhecida")?;
+        export.file.sync_all().map_err(|error| error.to_string())?;
+        drop(export.file);
+        let _ = fs::remove_file(&export.target);
+        fs::rename(&export.partial, &export.target).map_err(|error| error.to_string())?;
+        Ok(export.target.to_string_lossy().into_owned())
+    })
+    .await
 }
 
 /// Drops an unfinished export and its partial file.

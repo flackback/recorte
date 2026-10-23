@@ -1,6 +1,6 @@
 import type { CursorEvent, KeyEvent, Take, Word } from "../types";
 import { cameraPath, cursorPath, RawPath, SpringPath, zoomAt } from "./motion";
-import { BACKGROUNDS, cardLength, sourceSize, type Note, type Project, type TitleCard, type ZoomSegment } from "./project";
+import { BACKGROUNDS, cardLength, sourceSize, type Cut, type Note, type Project, type TitleCard, type TransitionKind, type ZoomSegment } from "./project";
 import type { CursorKind, FrameState } from "./renderer";
 import { TimeMap, type Span } from "./timemap";
 
@@ -33,7 +33,54 @@ export type Scene = {
   time: TimeMap;
   /** Shape changes left after skipping quick ones, for the delay they were computed with. */
   stable?: { delay: number; shapes: CursorEvent[] };
+  /** Times of left clicks, for the clicks they were taken from. */
+  left?: { clicks: CursorEvent[]; times: number[] };
+  /** Cut seams with a transition, for the time map and cuts they were computed with. */
+  seams?: { time: TimeMap; cuts: Cut[]; list: Seam[] };
+  /** Caption lines, for the words and deleted words they were split from. */
+  lines?: { words: Word[]; deleted: number[]; count: number; lines: Word[][]; reach: number[] };
 };
+
+/** A cut's seam on the output timeline and the half-length of its transition. */
+type Seam = { at: number; half: number; kind: TransitionKind };
+
+/** Index of the last item at or before `t` (items sorted by time), or -1. */
+function lastAt(items: ArrayLike<{ t: number }>, t: number) {
+  let low = 0;
+  let high = items.length - 1;
+  let last = -1;
+  while (low <= high) {
+    const middle = (low + high) >> 1;
+    if (items[middle].t <= t) {
+      last = middle;
+      low = middle + 1;
+    } else high = middle - 1;
+  }
+  return last;
+}
+
+/** Index of the last time at or before `t` in a sorted list, or -1. */
+function lastTimeAt(times: ArrayLike<number>, t: number) {
+  let low = 0;
+  let high = times.length - 1;
+  let last = -1;
+  while (low <= high) {
+    const middle = (low + high) >> 1;
+    if (times[middle] <= t) {
+      last = middle;
+      low = middle + 1;
+    } else high = middle - 1;
+  }
+  return last;
+}
+
+/** Times of the left clicks, in order; built once per scene. */
+export function leftClicks(scene: Pick<Scene, "clicks" | "left">): number[] {
+  if (scene.left?.clicks === scene.clicks) return scene.left.times;
+  const times = scene.clicks.filter((click) => click.b === "l").map((click) => click.t);
+  scene.left = { clicks: scene.clicks, times };
+  return times;
+}
 
 export function createScene(take: Take, project: Project, events: CursorEvent[], keys: KeyEvent[] = [], words: Word[] = []): Scene {
   const moves = events.filter((event) => event.k !== "s");
@@ -77,16 +124,7 @@ function stableShapes(scene: Scene): CursorEvent[] {
 /** 1 while the mouse moves; fades to 0 once it has rested `after` ms, and back just before it moves. */
 function idleOpacity(events: CursorEvent[], t: number, after: number) {
   if (after <= 0 || !events.length) return 1;
-  let low = 0;
-  let high = events.length - 1;
-  let last = -1;
-  while (low <= high) {
-    const middle = (low + high) >> 1;
-    if (events[middle].t <= t) {
-      last = middle;
-      low = middle + 1;
-    } else high = middle - 1;
-  }
+  const last = lastAt(events, t);
   const resting = last < 0 ? t : t - events[last].t;
   let opacity = resting <= after ? 1 : Math.max(0, 1 - (resting - after) / IDLE_FADE);
   const next = events[last + 1];
@@ -97,44 +135,62 @@ function idleOpacity(events: CursorEvent[], t: number, after: number) {
 const smooth = (x: number) => x * x * (3 - 2 * x);
 
 /** The transition playing at source time `t`, if a cut's seam is near. */
-function transitionAt(scene: Scene, t: number): FrameState["transition"] {
+/**
+ * Seams of the cuts that carry a transition, in cut order. Every edit rebuilds the time map, so
+ * the list is recomputed only when the map or the cuts change.
+ */
+function seams(scene: Scene): Seam[] {
   const { time, project } = scene;
-  const output = time.toOutput(t);
+  if (scene.seams?.time === time && scene.seams.cuts === project.cuts) return scene.seams.list;
+  const list: Seam[] = [];
   for (const cut of project.cuts) {
     if (!cut.transition) continue;
-    const seam = time.toOutput(cut.start);
-    if (seam <= 0 || seam >= time.duration) continue;
-    const half = Math.min(cut.transition.durationMs / 2, seam, time.duration - seam);
-    const offset = output - seam;
-    if (half <= 0 || Math.abs(offset) >= half) continue;
-    return { kind: cut.transition.kind, amount: smooth(1 - Math.abs(offset) / half), phase: offset < 0 ? -1 : 1 };
+    const at = time.toOutput(cut.start);
+    if (at <= 0 || at >= time.duration) continue;
+    const half = Math.min(cut.transition.durationMs / 2, at, time.duration - at);
+    if (half > 0) list.push({ at, half, kind: cut.transition.kind });
+  }
+  scene.seams = { time, cuts: project.cuts, list };
+  return list;
+}
+
+/** The transition playing at source time `t`, if a cut's seam is near. */
+function transitionAt(scene: Scene, t: number): FrameState["transition"] {
+  const list = seams(scene);
+  if (!list.length) return null;
+  const output = scene.time.toOutput(t);
+  for (const seam of list) {
+    const offset = output - seam.at;
+    if (Math.abs(offset) >= seam.half) continue;
+    return { kind: seam.kind, amount: smooth(1 - Math.abs(offset) / seam.half), phase: offset < 0 ? -1 : 1 };
   }
   return null;
 }
 
 function cursorKindAt(shapes: CursorEvent[], t: number): CursorKind {
-  let kind: CursorEvent["c"] = "arrow";
-  for (const shape of shapes) {
-    if (shape.t > t) break;
-    kind = shape.c;
-  }
+  const kind = shapes[lastAt(shapes, t)]?.c ?? "arrow";
   return kind === "hand" || kind === "text" ? kind : "arrow";
 }
 
 const lensSegments = (segments: ZoomSegment[]) => segments.filter((segment) => segment.mode === "lens");
 
 /** 0–1 strength of the click spotlight: rises on a click, holds, then fades. */
-function spotlightAt(clicks: CursorEvent[], t: number) {
-  let last: CursorEvent | null = null;
-  for (const click of clicks) {
-    if (click.t > t) break;
-    if (click.b === "l") last = click;
-  }
-  if (!last) return 0;
-  const age = t - last.t;
+function spotlightAt(left: number[], t: number) {
+  const index = lastTimeAt(left, t);
+  if (index < 0) return 0;
+  const age = t - left[index];
   if (age < 150) return age / 150;
   if (age < SPOTLIGHT_HOLD) return 1;
   return Math.max(0, 1 - (age - SPOTLIGHT_HOLD) / SPOTLIGHT_FADE);
+}
+
+/** Clicks whose effect is still playing at `t`, oldest first. */
+function recentClicks(clicks: CursorEvent[], t: number): FrameState["clicks"] {
+  let first = lastAt(clicks, t) + 1;
+  while (first > 0 && t - clicks[first - 1].t < CLICK_EFFECT) first--;
+  const result: FrameState["clicks"] = [];
+  for (let i = first; i < clicks.length && clicks[i].t <= t; i++) result.push({ x: clicks[i].x, y: clicks[i].y, age: t - clicks[i].t });
+  return result;
 }
 
 /** Everything the renderer needs for the frame at source time `t` (ms). */
@@ -177,7 +233,9 @@ export function frameState(scene: Scene, t: number, output: FrameState["output"]
     const inside = rawX >= bounds.x - 4 && rawY >= bounds.y - 4 && rawX <= bounds.x + bounds.width + 4 && rawY <= bounds.y + bounds.height + 4;
     const opacity = returning ? 1 : idleOpacity(scene.events, t, project.cursor.hideIdle);
     if (inside && opacity > 0) {
-      const press = clicks.find((click) => t - click.t >= 0 && t - click.t < PRESS);
+      // The earliest click still pressing: walk back from the last one at or before `t`.
+      let press: CursorEvent | undefined;
+      for (let i = lastAt(clicks, t); i >= 0 && t - clicks[i].t < PRESS; i--) press = clicks[i];
       const squeeze = press ? 1 - 0.18 * Math.sin((Math.PI * (t - press.t)) / PRESS) : 1;
       cursorState = {
         x: tip[0],
@@ -226,13 +284,11 @@ export function frameState(scene: Scene, t: number, output: FrameState["output"]
     zoom,
     focus,
     cursor: cursorState,
-    clicks: project.cursor.clickEffect
-      ? clicks.map((click) => ({ x: click.x, y: click.y, age: t - click.t })).filter((click) => click.age >= 0 && click.age < CLICK_EFFECT)
-      : [],
+    clicks: project.cursor.clickEffect ? recentClicks(clicks, t) : [],
     clickStyle: project.cursor.clickStyle,
     clickSize: project.cursor.clickSize,
     transition: transitionAt(scene, t),
-    spotlight: project.cursor.spotlight && !raw.empty ? spotlightAt(clicks, t) * 0.85 : 0,
+    spotlight: project.cursor.spotlight && !raw.empty ? spotlightAt(leftClicks(scene), t) * 0.85 : 0,
     lens:
       lensSegment && tip
         ? { x: tip[0], y: tip[1], magnification: lensSegment.scale, amount: (lensLevel - 1) / Math.max(0.001, lensSegment.scale - 1) }
@@ -286,7 +342,10 @@ export function overlayText(scene: Scene, t: number): OverlayContent {
     .map((note) => ({ note, opacity: Math.max(0, Math.min(1, (t - note.start) / NOTE_FADE, (note.end - t) / NOTE_FADE)) }));
   let keys: string | null = null;
   if (project.keys.visible && scene.keys.length) {
-    const recent = scene.keys.filter((key) => key.t <= t && t - key.t < KEY_HOLD);
+    const last = lastAt(scene.keys, t);
+    let first = last + 1;
+    while (first > 0 && t - scene.keys[first - 1].t < KEY_HOLD) first--;
+    const recent = scene.keys.slice(first, last + 1);
     if (project.keys.mode === "shortcuts") {
       const shortcut = [...recent].reverse().find((key) => key.m.length > 0);
       if (shortcut) keys = [...shortcut.m, shortcut.n].join(" + ");
@@ -301,23 +360,55 @@ export function overlayText(scene: Scene, t: number): OverlayContent {
 
   let caption: { words: Word[]; current: number } | null = null;
   if (project.captions.visible && scene.words.length) {
-    const deleted = new Set(project.deletedWords);
-    const words = scene.words.filter((word) => !deleted.has(word.i));
-    // Lines: up to CAPTION_WORDS words, broken at pauses.
-    let line: Word[] = [];
-    for (const word of words) {
-      const previous = line[line.length - 1];
-      if (line.length && (line.length >= CAPTION_WORDS || word.t0 - previous.t1 > CAPTION_GAP)) {
-        if (t >= line[0].t0 && t <= previous.t1 + 400) break;
-        line = [];
-      }
-      line.push(word);
+    // The first line showing at `t`: lines before `index` all ended (with their linger) earlier.
+    const { lines, reach } = captionLines(scene);
+    let low = 0;
+    let high = lines.length;
+    while (low < high) {
+      const middle = (low + high) >> 1;
+      if (t <= reach[middle]) high = middle;
+      else low = middle + 1;
     }
-    if (line.length && t >= line[0].t0 && t <= line[line.length - 1].t1 + 400) {
+    const line = lines[low];
+    if (line && t >= line[0].t0 && t <= line[line.length - 1].t1 + CAPTION_LINGER) {
       caption = { words: line, current: line.findIndex((word) => t >= word.t0 && t <= word.t1) };
     }
   }
   return { keys, caption, notes };
+}
+
+/** A caption line stays up this long after its last word. */
+const CAPTION_LINGER = 400;
+
+/**
+ * Caption lines of the words left after deleting: up to CAPTION_WORDS words, broken at pauses.
+ * `reach[i]` is the latest moment any of the first i + 1 lines is still showing, for searching.
+ * Deleting or restoring words replaces the list, so the lines are rebuilt only then.
+ */
+function captionLines(scene: Scene) {
+  const deletedWords = scene.project.deletedWords;
+  const cached = scene.lines;
+  if (cached && cached.words === scene.words && cached.deleted === deletedWords && cached.count === deletedWords.length) return cached;
+  const deleted = new Set(deletedWords);
+  const lines: Word[][] = [];
+  const reach: number[] = [];
+  let line: Word[] = [];
+  const close = () => {
+    lines.push(line);
+    reach.push(Math.max(reach[reach.length - 1] ?? -Infinity, line[line.length - 1].t1 + CAPTION_LINGER));
+  };
+  for (const word of scene.words) {
+    if (deleted.has(word.i)) continue;
+    const previous = line[line.length - 1];
+    if (line.length && (line.length >= CAPTION_WORDS || word.t0 - previous.t1 > CAPTION_GAP)) {
+      close();
+      line = [];
+    }
+    line.push(word);
+  }
+  if (line.length) close();
+  scene.lines = { words: scene.words, deleted: deletedWords, count: deletedWords.length, lines, reach };
+  return scene.lines;
 }
 
 /** Output size helper that accounts for the crop. */

@@ -62,6 +62,18 @@ export function keySounds(context: BaseAudioContext, variants = 4): AudioBuffer[
   });
 }
 
+/** Index of the first time after `from` in a sorted list; the list's length if none. */
+function firstAfter(times: ArrayLike<number>, from: number) {
+  let low = 0;
+  let high = times.length;
+  while (low < high) {
+    const middle = (low + high) >> 1;
+    if (times[middle] > from) high = middle;
+    else low = middle + 1;
+  }
+  return low;
+}
+
 /** Plays sounds live during preview playback, once per event as the playhead passes it. */
 export class SoundPreview {
   private context: AudioContext | null = null;
@@ -98,18 +110,17 @@ export class SoundPreview {
     source.start();
   }
 
-  /** Call every frame while playing; plays events between the previous and current time. */
-  update(t: number, clicks: number[], keys: number[], options: { click: boolean; tone: ClickTone; key: boolean }) {
+  /**
+   * Call every frame while playing; plays events between the previous and current time. `clicks`
+   * and `keys` are sorted times; only the stretch since the last call is looked at.
+   */
+  update(t: number, clicks: ArrayLike<number>, keys: ArrayLike<number>, options: { click: boolean; tone: ClickTone; key: boolean }) {
     const from = this.last;
     this.last = t;
     if (from < 0 || t < from || t - from > 250 || !(options.click || options.key)) return;
     this.ensure();
-    if (options.click) for (const time of clicks) if (time > from && time <= t) this.play(this.click(options.tone), 0.6);
-    if (options.key) {
-      keys.forEach((time, index) => {
-        if (time > from && time <= t) this.play(this.keys[index % this.keys.length], 0.5);
-      });
-    }
+    if (options.click) for (let i = firstAfter(clicks, from); i < clicks.length && clicks[i] <= t; i++) this.play(this.click(options.tone), 0.6);
+    if (options.key) for (let i = firstAfter(keys, from); i < keys.length && keys[i] <= t; i++) this.play(this.keys[i % this.keys.length], 0.5);
   }
 
   reset() {

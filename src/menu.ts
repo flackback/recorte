@@ -162,12 +162,18 @@ export function confirmDialog(options: { title: string; message: string; confirm
       if (restore instanceof HTMLElement) restore.focus({ preventScroll: true });
       resolve(result);
     };
+    const buttons = [cancel, confirm];
     const onKey = (event: KeyboardEvent) => {
+      // The dialog is modal: no shortcut behind it reacts while it is open.
+      event.stopPropagation();
+      const index = buttons.indexOf(document.activeElement as HTMLButtonElement);
       if (event.key === "Escape") finish(false);
-      else if (event.key === "Enter") finish(true);
+      // Enter acts on the focused button only, so Enter on Cancelar never confirms.
+      else if (event.key === "Enter") buttons[index]?.click();
+      // Tab stays inside the dialog.
+      else if (event.key === "Tab") buttons[(index + (event.shiftKey ? -1 : 1) + buttons.length) % buttons.length].focus();
       else return;
       event.preventDefault();
-      event.stopPropagation();
     };
     window.addEventListener("keydown", onKey, true);
     cancel.addEventListener("click", () => finish(false));

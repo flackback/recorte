@@ -15,9 +15,9 @@ pub async fn overlay_open(app: AppHandle, mode: String, monitor: usize, area: Op
     if !matches!(mode.as_str(), "area" | "draw" | "countdown") {
         return Err("modo inválido".into());
     }
-    if let Some(existing) = app.get_webview_window(LABEL) {
+    if app.get_webview_window(LABEL).is_some() {
         crate::cursor::set_drawing_layer(0);
-        let _ = existing.close();
+        close_and_wait(&app, LABEL).await;
     }
     sources::use_physical_pixels();
     let monitor = Monitor::from_index(monitor).map_err(|error| error.to_string())?;
@@ -66,6 +66,28 @@ pub async fn overlay_open(app: AppHandle, mode: String, monitor: usize, area: Op
     Ok(())
 }
 
+/// Closes the window `label` and waits until it is gone, so a new window can take its label.
+/// Destroys it if closing takes too long.
+async fn close_and_wait(app: &AppHandle, label: &'static str) {
+    let Some(existing) = app.get_webview_window(label) else {
+        return;
+    };
+    let _ = existing.close();
+    let app = app.clone();
+    let _ = tauri::async_runtime::spawn_blocking(move || {
+        for attempt in 0..100 {
+            if app.get_webview_window(label).is_none() {
+                return;
+            }
+            if attempt == 50 {
+                let _ = existing.destroy();
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    })
+    .await;
+}
+
 /// Makes `owner` own `owned`: Windows always keeps an owned window above its owner. The owned
 /// window closes with the owner, which here happens only when the recording stops.
 fn keep_above(owner: &tauri::WebviewWindow, owned: &tauri::WebviewWindow) {
@@ -99,9 +121,7 @@ const RECBAR_SIZE: (u32, u32) = (576, 68);
 /// recorded monitor. It is kept out of the recording.
 #[tauri::command]
 pub async fn recbar_open(app: AppHandle, monitor: usize) -> Result<(), String> {
-    if let Some(existing) = app.get_webview_window(RECBAR) {
-        let _ = existing.close();
-    }
+    close_and_wait(&app, RECBAR).await;
     sources::use_physical_pixels();
     let monitor = Monitor::from_index(monitor).map_err(|error| error.to_string())?;
     let (rect, _) = sources::monitor_rect(&monitor).ok_or("monitor não encontrado")?;

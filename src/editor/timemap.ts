@@ -50,30 +50,36 @@ export class TimeMap {
   toSource(output: number): number {
     const spans = this.spans;
     if (!spans.length) return 0;
-    for (const span of spans) {
-      if (output < span.output + (span.end - span.start) / span.rate) return span.start + Math.max(0, output - span.output) * span.rate;
+    // First span that ends (on the output timeline) after `output`; spans are in output order.
+    let low = 0;
+    let high = spans.length;
+    while (low < high) {
+      const middle = (low + high) >> 1;
+      const span = spans[middle];
+      if (output < span.output + (span.end - span.start) / span.rate) high = middle;
+      else low = middle + 1;
     }
-    return spans[spans.length - 1].end;
+    if (low === spans.length) return spans[spans.length - 1].end;
+    const span = spans[low];
+    return span.start + Math.max(0, output - span.output) * span.rate;
   }
 
   /** Output time for a source time; a time inside a cut maps to where the cut was. */
   toOutput(source: number): number {
-    let result = 0;
-    for (const span of this.spans) {
-      if (source < span.start) return span.output;
-      if (source <= span.end) return span.output + (source - span.start) / span.rate;
-      result = span.output + (span.end - span.start) / span.rate;
+    const spans = this.spans;
+    const index = this.firstEnding(source, true);
+    if (index === spans.length) {
+      const last = spans[spans.length - 1];
+      return last ? last.output + (last.end - last.start) / last.rate : 0;
     }
-    return result;
+    const span = spans[index];
+    return source < span.start ? span.output : span.output + (source - span.start) / span.rate;
   }
 
   /** Playback rate at a source time: 1 unless it is in a sped-up stretch. */
   rateAt(source: number): number {
-    for (const span of this.spans) {
-      if (source < span.start) break;
-      if (source < span.end) return span.rate;
-    }
-    return 1;
+    const span = this.spans[this.firstEnding(source, false)];
+    return span && source >= span.start ? span.rate : 1;
   }
 
   /**
@@ -81,10 +87,22 @@ export class TimeMap {
    * kept span, or null past the end.
    */
   playable(source: number): number | null {
-    for (const span of this.spans) {
-      if (source < span.start) return span.start;
-      if (source < span.end) return source;
+    const span = this.spans[this.firstEnding(source, false)];
+    if (!span) return null;
+    return source < span.start ? span.start : source;
+  }
+
+  /** Index of the first span ending after `source` (or at it, if `inclusive`); spans.length if none. */
+  private firstEnding(source: number, inclusive: boolean) {
+    const spans = this.spans;
+    let low = 0;
+    let high = spans.length;
+    while (low < high) {
+      const middle = (low + high) >> 1;
+      const end = spans[middle].end;
+      if (inclusive ? source <= end : source < end) high = middle;
+      else low = middle + 1;
     }
-    return null;
+    return low;
   }
 }

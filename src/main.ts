@@ -1,5 +1,5 @@
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
-import { emit, listen } from "@tauri-apps/api/event";
+import { emit, listen, TauriEvent, type UnlistenFn } from "@tauri-apps/api/event";
 import { getVersion } from "@tauri-apps/api/app";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
@@ -17,7 +17,8 @@ import { joinPath, takeName, type Take } from "./types";
 type MonitorInfo = { index: number; name: string; width: number; height: number; primary: boolean; x: number; y: number; refreshRate: number };
 type WindowInfo = { hwnd: string; title: string; process: string; width: number; height: number };
 type Sources = { monitors: MonitorInfo[]; windows: WindowInfo[] };
-type Status = { recording: boolean; elapsedMs: number; frames: number; closed: boolean; paused: boolean };
+/** `error` is set when the capture failed (disk full, encoder error, monitor unplugged). */
+type Status = { recording: boolean; elapsedMs: number; frames: number; closed: boolean; paused: boolean; error?: string | null };
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 
@@ -72,6 +73,10 @@ let pickAnchor: string | null = null;
 let camera: WebcamRecorder | null = null;
 /** Monitor being recorded (one-based), for the drawing overlay. */
 let recordedMonitor = 1;
+/** What is being recorded, so an ended capture can say what went away. */
+let recordedKind: "monitor" | "window" = "monitor";
+/** Why the recording stopped on its own; shown with the take's warnings. */
+let stopNotice: string | null = null;
 let drawing = false;
 
 // ---------- helpers ----------
@@ -223,12 +228,16 @@ function renderMonitors() {
 
   ui.monitorMap.classList.toggle("area-mode", picker.kind === "a");
   const pending = picker.kind === "a" && picker.areaPending;
+  // Rebuilding drops focus; give it back to the same monitor afterwards.
+  const focused = focusedKey(ui.monitorMap);
   // Says how to choose the area, since clicking a monitor is not obvious.
   ui.areaHint.hidden = picker.kind !== "a";
   ui.monitorMap.replaceChildren(
-    ...monitors.map((monitor) => {
+    // Left to right, so the arrow keys follow the desktop layout.
+    ...ordered.map((monitor) => {
       const button = document.createElement("button");
       button.className = "monitor";
+      button.dataset.key = String(monitor.index);
       button.classList.toggle("primary", monitor.primary);
       button.setAttribute("role", "radio");
       button.setAttribute("aria-checked", String(!pending && monitor.index === picker.monitor));
@@ -276,6 +285,8 @@ function renderMonitors() {
       return button;
     }),
   );
+  // Area mode only moves focus with the arrows: choosing a monitor there opens the area picker.
+  rove(ui.monitorMap, String(picker.monitor), focused, picker.kind !== "a");
   const selected = monitors.find((monitor) => monitor.index === picker.monitor);
   const place = selected ? `${places.get(selected.index)}${selected.primary ? " (principal)" : ""}` : "";
   const area = picker.area?.monitor === picker.monitor ? picker.area : null;
@@ -324,12 +335,43 @@ async function chooseArea() {
   saveSettings();
 }
 
+/** The data-key of the item focused inside a list, if any. */
+function focusedKey(list: HTMLElement) {
+  const active = document.activeElement;
+  return active instanceof HTMLElement && list.contains(active) ? (active.dataset.key ?? null) : null;
+}
+
+/**
+ * Roving focus for a list rebuilt on every choice: one Tab stop (the chosen item), arrows move
+ * between items, and focus returns to the item that had it before the rebuild.
+ */
+function rove(list: HTMLElement, chosen: string, focused: string | null, arrowsChoose: boolean) {
+  const items = [...list.querySelectorAll<HTMLButtonElement>("button[data-key]")];
+  const stop = items.find((item) => item.dataset.key === chosen) ?? items[0];
+  for (const item of items) item.tabIndex = item === stop ? 0 : -1;
+  if (focused !== null) items.find((item) => item.dataset.key === focused)?.focus();
+  list.onkeydown = (event) => {
+    const index = items.indexOf(document.activeElement as HTMLButtonElement);
+    if (index < 0) return;
+    const step = { ArrowDown: 1, ArrowRight: 1, ArrowUp: -1, ArrowLeft: -1 }[event.key];
+    const target = step ? items[(index + step + items.length) % items.length] : event.key === "Home" ? items[0] : event.key === "End" ? items[items.length - 1] : null;
+    if (!target) return;
+    event.preventDefault();
+    if (target.disabled) return;
+    for (const item of items) item.tabIndex = item === target ? 0 : -1;
+    target.focus();
+    if (arrowsChoose) target.click();
+  };
+}
+
 function renderWindows() {
   const { windows } = picker.sources;
+  const focused = focusedKey(ui.windowList);
   ui.windowList.replaceChildren(
     ...windows.map((window) => {
       const button = document.createElement("button");
       button.className = "window-item";
+      button.dataset.key = window.hwnd;
       button.setAttribute("role", "option");
       button.setAttribute("aria-selected", String(window.hwnd === picker.window));
       button.disabled = recording;
@@ -366,6 +408,7 @@ function renderWindows() {
     none.textContent = "Nenhuma janela aberta para gravar.";
     ui.windowList.append(none);
   }
+  rove(ui.windowList, picker.window, focused, true);
   ui.sourceCaption.textContent = windows.find((window) => window.hwnd === picker.window)?.title ?? "";
 }
 
@@ -501,7 +544,7 @@ function setRecordingUi(active: boolean) {
   renderPicker();
   if (!active) {
     void checkDevices();
-    void invoke("main_window_capture", { hidden: false });
+    invoke("main_window_capture", { hidden: false }).catch((error) => console.error("main_window_capture", error));
   }
   ui.recordHint.textContent = active
     ? "Gravando… Ctrl+Shift+D desenha na tela · Ctrl+Shift+X para"
@@ -514,6 +557,13 @@ async function startRecording() {
     ui.areaHint.classList.remove("flash");
     void ui.areaHint.offsetWidth;
     ui.areaHint.classList.add("flash");
+    return;
+  }
+  // Screens and windows may have changed since the list was drawn.
+  const chosenBefore = sourceValue();
+  await refreshSources();
+  if (sourceValue() !== chosenBefore) {
+    showWarnings(["A tela ou janela escolhida não está mais disponível. Confira a escolha e grave de novo."]);
     return;
   }
   const source = selectedSource();
@@ -563,6 +613,7 @@ async function startRecording() {
     fps: selectedFps(),
   };
   recordedMonitor = source.kind === "monitor" ? (source as { index: number }).index : picker.monitor || 1;
+  recordedKind = source.kind === "window" ? "window" : "monitor";
 
   // 3-2-1 on the monitor about to be recorded, so the click on Gravar isn't in the video.
   if (ui.countdown.checked && !(await countdown(recordedMonitor))) {
@@ -571,15 +622,15 @@ async function startRecording() {
     return;
   }
 
-  // Hidden from captures only while recording, so it stays visible over remote access.
-  await invoke("main_window_capture", { hidden: true });
   let started: { warnings: string[]; dir: string };
   try {
+    // Hidden from captures only while recording, so it stays visible over remote access.
+    await invoke("main_window_capture", { hidden: true });
     started = await invoke<{ warnings: string[]; dir: string }>("start_recording", { options });
   } catch (error) {
     camera?.close();
     camera = null;
-    void invoke("main_window_capture", { hidden: false });
+    invoke("main_window_capture", { hidden: false }).catch(() => undefined);
     throw error;
   }
   if (camera) {
@@ -592,8 +643,9 @@ async function startRecording() {
     }
   }
   showWarnings([...started.warnings, ...warnings]);
+  stopNotice = null;
   setRecordingUi(true);
-  statusTimer = window.setInterval(pollStatus, 200);
+  statusTimer = window.setInterval(() => void pollStatus(), 200);
   // Out of the way while recording: the floating bar takes over (and stays out of the video).
   try {
     await invoke("recbar_open", { monitor: recordedMonitor });
@@ -618,15 +670,37 @@ function countdown(monitor: number): Promise<boolean> {
 }
 
 async function pollStatus() {
-  const status = await invoke<Status>("recording_status");
+  let status: Status;
+  try {
+    status = await invoke<Status>("recording_status");
+  } catch (error) {
+    // One missed tick only delays the clock; the next one tries again.
+    console.error("recording_status", error);
+    return;
+  }
+  // A tick that arrives after the stop must not start a new recording through toggleRecording.
+  if (!recording) return;
+  // The capture ended on its own: stop the normal way, so what was recorded is saved.
+  const ended = status.error
+    ? `A gravação parou por um erro: ${status.error}. O que já foi gravado fica salvo.`
+    : status.closed
+      ? recordedKind === "window"
+        ? "A janela gravada foi fechada. A gravação foi encerrada."
+        : "A tela gravada foi desconectada. A gravação foi encerrada."
+      : null;
+  if (ended) {
+    // Already stopping or starting: the next tick tries again.
+    if (busy) return;
+    stopNotice = ended;
+    showWarnings([ended]);
+    toast(ended);
+    await toggleRecording();
+    return;
+  }
   if (!status.recording) return;
   ui.recordLabel.textContent = `Parar · ${formatClock(status.elapsedMs)}`;
   ui.titlebarTime.textContent = `${status.paused ? "Pausado" : "Gravando"} · ${formatDuration(status.elapsedMs)}`;
   void emit("recbar-state", { elapsedMs: status.elapsedMs, paused: status.paused });
-  if (status.closed) {
-    showWarnings(["A janela gravada foi fechada; a gravação foi encerrada."]);
-    await toggleRecording();
-  }
 }
 
 /** Opens the area picker over a monitor; resolves with the area, null for the whole screen, or "cancelled". */
@@ -656,9 +730,10 @@ async function stopRecording() {
     await invoke("overlay_close").catch(() => undefined);
   }
   ui.recordLabel.textContent = "Finalizando…";
+  let take: Take;
   try {
     const webcamSaved = camera ? await camera.stop() : false;
-    let take = await invoke<Take>("stop_recording");
+    take = await invoke<Take>("stop_recording");
     if (camera && webcamSaved) {
       take = await invoke<Take>("take_set_webcam", { dir: take.dir, file: WEBCAM_FILE, startedHns: camera.startedHns });
     }
@@ -667,20 +742,27 @@ async function stopRecording() {
       try {
         take = await joinSegments(take, (fraction) => (ui.recordLabel.textContent = `Finalizando… ${Math.floor(fraction * 100)}%`));
       } catch (error) {
-        showWarnings([`Não foi possível finalizar o vídeo: ${error}. A gravação continua salva; o app tenta de novo ao abrir a lista.`]);
+        showWarnings([`Não foi possível finalizar o vídeo: ${error}. A gravação continua salva. O app tenta de novo em instantes.`]);
       }
     }
     camera = null;
-    if (take.warnings.length) showWarnings(take.warnings);
-    await refreshTakes();
-    await openTake(take.id);
+    const notices = [...(stopNotice ? [stopNotice] : []), ...take.warnings];
+    if (notices.length) showWarnings(notices);
   } finally {
+    stopNotice = null;
     setRecordingUi(false);
   }
+  // Only now, with the recording over, can the list join takes still in pieces.
+  await refreshTakes();
+  await openTake(take.id);
 }
 
 async function toggleRecording() {
-  if (busy) return;
+  if (busy) {
+    // A countdown, the area picker or the stop is still running.
+    toast("Aguarde…");
+    return;
+  }
   busy = true;
   ui.record.disabled = true;
   try {
@@ -730,48 +812,102 @@ function clearPicked() {
   markSelected();
 }
 
+/** One row of the list, kept across refreshes so focus and an open rename survive them. */
+type TakeRow = { item: HTMLLIElement; button: HTMLButtonElement; thumb: HTMLSpanElement; name: HTMLElement; meta: HTMLSpanElement };
+const takeRows = new Map<string, TakeRow>();
+const noTakes = document.createElement("li");
+noTakes.className = "none";
+noTakes.setAttribute("role", "option");
+noTakes.setAttribute("aria-disabled", "true");
+noTakes.textContent = "Nenhuma gravação ainda.";
+
+const takeById = (id: string) => takes.find((take) => take.id === id);
+
+function createTakeRow(id: string): TakeRow {
+  const item = document.createElement("li");
+  item.setAttribute("role", "none");
+  const button = document.createElement("button");
+  button.className = "take";
+  button.dataset.id = id;
+  button.setAttribute("role", "option");
+  const thumb = document.createElement("span");
+  thumb.className = "thumb";
+  const name = document.createElement("strong");
+  const meta = document.createElement("span");
+  button.append(thumb, name, meta);
+  // Handlers look the take up when they run, so they always see the latest version.
+  button.addEventListener("click", (event) => {
+    if (event.ctrlKey || event.shiftKey) {
+      pickTake(id, event);
+      return;
+    }
+    clearPicked();
+    pickAnchor = id;
+    void openTake(id);
+  });
+  button.addEventListener("dblclick", () => {
+    const take = takeById(id);
+    if (take) startRename(button, take);
+  });
+  onContextMenu(button, () => {
+    const take = takeById(id);
+    if (!take) return null;
+    return picked.size > 1 && picked.has(id) ? pickedMenu() : takeMenu(button, take);
+  });
+  item.append(button);
+  return { item, button, thumb, name, meta };
+}
+
+function updateTakeRow(row: TakeRow, take: Take) {
+  row.name.textContent = takeName(take);
+  row.meta.textContent = take.segments?.length ? "Finalizando a gravação…" : `${formatDate(take.createdAt)} · ${formatDuration(take.durationMs)}`;
+  const thumbnail = (take as Take & { thumbnail?: string | null }).thumbnail;
+  const src = thumbnail ? convertFileSrc(joinPath(take.dir, thumbnail)) : "";
+  const image = row.thumb.querySelector("img");
+  if (!src) {
+    image?.remove();
+  } else if (!image) {
+    const created = document.createElement("img");
+    created.alt = "";
+    created.loading = "lazy";
+    created.decoding = "async";
+    // A missing file leaves the plain placeholder.
+    created.addEventListener("error", () => created.remove());
+    created.src = src;
+    row.thumb.append(created);
+  } else if (image.getAttribute("src") !== src) {
+    image.src = src;
+  }
+}
+
+function focusTake(id: string) {
+  takeRows.get(id)?.button.focus();
+}
+
 async function refreshTakes() {
   takes = await invoke<Take[]>("list_takes");
   ui.emptyOpen.hidden = takes.length === 0;
   for (const id of [...picked]) if (!takes.some((take) => take.id === id)) picked.delete(id);
   void joinPending();
-  ui.takes.replaceChildren(
-    ...takes.map((take) => {
-      const item = document.createElement("li");
-      const button = document.createElement("button");
-      button.className = "take";
-      button.dataset.id = take.id;
-
-      const thumb = document.createElement("span");
-      thumb.className = "thumb";
-      const thumbnail = (take as Take & { thumbnail?: string | null }).thumbnail;
-      if (thumbnail) thumb.style.backgroundImage = `url("${convertFileSrc(joinPath(take.dir, thumbnail))}")`;
-      const name = document.createElement("strong");
-      name.textContent = takeName(take);
-      const meta = document.createElement("span");
-      meta.textContent = take.segments?.length ? "Finalizando a gravação…" : `${formatDate(take.createdAt)} · ${formatDuration(take.durationMs)}`;
-      button.append(thumb, name, meta);
-      button.addEventListener("click", (event) => {
-        if (event.ctrlKey || event.shiftKey) {
-          pickTake(take.id, event);
-          return;
-        }
-        clearPicked();
-        pickAnchor = take.id;
-        void openTake(take.id);
-      });
-      button.addEventListener("dblclick", () => startRename(button, take));
-      onContextMenu(button, () => (picked.size > 1 && picked.has(take.id) ? pickedMenu() : takeMenu(button, take)));
-      item.append(button);
-      return item;
-    }),
-  );
-  if (!takes.length) {
-    const item = document.createElement("li");
-    item.className = "none";
-    item.textContent = "Nenhuma gravação ainda.";
-    ui.takes.append(item);
+  // Reconcile by id: rows are reused and only moved when out of place, so focus stays put.
+  const ids = new Set(takes.map((take) => take.id));
+  for (const [id, row] of takeRows) {
+    if (ids.has(id)) continue;
+    row.item.remove();
+    takeRows.delete(id);
   }
+  if (takes.length) noTakes.remove();
+  takes.forEach((take, index) => {
+    let row = takeRows.get(take.id);
+    if (!row) {
+      row = createTakeRow(take.id);
+      takeRows.set(take.id, row);
+    }
+    updateTakeRow(row, take);
+    const here = ui.takes.children[index];
+    if (here !== row.item) ui.takes.insertBefore(row.item, here ?? null);
+  });
+  if (!takes.length) ui.takes.append(noTakes);
   markSelected();
 }
 
@@ -802,6 +938,8 @@ function takeMenu(button: HTMLButtonElement, take: Take): MenuItem[] {
 }
 
 let joining = false;
+/** A take the user tried to open while it was still in pieces; it opens once joined. */
+let openWhenJoined: string | null = null;
 /** Takes that failed to join this session; not retried until the app opens again. */
 const joinFailed = new Set<string>();
 
@@ -829,6 +967,14 @@ async function joinPending() {
     joining = false;
   }
   await refreshTakes();
+  // Keeps the promise of "Ela abre em instantes"; a failed join shows a warning instead.
+  const waiting = openWhenJoined ? takeById(openWhenJoined) : undefined;
+  if (waiting && !waiting.segments?.length) {
+    openWhenJoined = null;
+    await openTake(waiting.id);
+  } else if (waiting && joinFailed.has(waiting.id)) {
+    openWhenJoined = null;
+  }
 }
 
 /** Menu for several picked takes. */
@@ -871,6 +1017,9 @@ function startRename(button: HTMLButtonElement, take: Take) {
   const finish = async (save: boolean) => {
     if (done) return;
     done = true;
+    const hadFocus = document.activeElement === input;
+    input.replaceWith(name);
+    if (hadFocus) button.focus({ preventScroll: true });
     if (save && input.value.trim() !== takeName(take)) {
       try {
         await invoke("take_rename", { dir: take.dir, title: input.value });
@@ -898,6 +1047,9 @@ async function trashTake(take: Take) {
 async function trashTakes(chosen: Take[]) {
   if (!chosen.length || recording) return;
   const one = chosen.length === 1;
+  // From the list (or its selection bar), focus moves on to the next take afterwards.
+  const fromList = ui.takes.contains(document.activeElement) || ui.takeSelection.contains(document.activeElement);
+  const firstIndex = Math.min(...chosen.map((take) => takes.findIndex((candidate) => candidate.id === take.id)).filter((index) => index >= 0));
   const confirmed = await confirmDialog({
     title: one ? "Mover para a Lixeira?" : `Mover ${chosen.length} gravações para a Lixeira?`,
     message: one
@@ -924,13 +1076,21 @@ async function trashTakes(chosen: Take[]) {
   if (failures.length) showWarnings(failures);
   clearPicked();
   await refreshTakes();
+  const next = takes[Math.min(firstIndex, takes.length - 1)];
+  if (fromList && next) focusTake(next.id);
 }
 
 async function openTake(id: string) {
   const take = takes.find((candidate) => candidate.id === id);
   if (!take) return;
   if (take.segments?.length) {
+    if (joinFailed.has(take.id)) {
+      toast("Não foi possível finalizar esta gravação. Abra o app de novo para tentar outra vez.");
+      return;
+    }
+    openWhenJoined = take.id;
     toast("Esta gravação ainda está sendo finalizada. Ela abre em instantes.");
+    void joinPending();
     return;
   }
   ui.empty.hidden = true;
@@ -960,13 +1120,20 @@ async function updateMaximizeButton() {
 
 ui.minimize.addEventListener("click", () => void appWindow.minimize());
 ui.maximize.addEventListener("click", () => void appWindow.toggleMaximize());
-ui.close.addEventListener("click", () => {
-  // Closing mid-recording would lose the take; ask to stop first.
-  if (recording) {
-    toast("Pare a gravação antes de fechar (Ctrl+Shift+X ou o botão Parar).");
+ui.close.addEventListener("click", () => void appWindow.close());
+/**
+ * Every close (this button, Alt+F4, the taskbar) passes here. Closing mid-recording would lose the
+ * take and leave the floating bar and the overlay behind, so it asks to stop first. A listener makes
+ * Tauri hold the close; to let it through, the guard steps aside and closes again (the capability
+ * has close, not destroy).
+ */
+const closeGuard: Promise<UnlistenFn> = appWindow.listen(TauriEvent.WINDOW_CLOSE_REQUESTED, async () => {
+  if (recording || busy) {
+    toast("Pare a gravação antes de fechar o Recorte.");
     return;
   }
-  void appWindow.close();
+  (await closeGuard)();
+  await appWindow.close();
 });
 void appWindow.onResized(() => void updateMaximizeButton());
 
@@ -1022,7 +1189,13 @@ ui.takes.addEventListener("keydown", (event) => {
   else if (event.key === "Delete") void (picked.size ? trashTakes(takes.filter((candidate) => picked.has(candidate.id))) : trashTake(take));
   else if (event.key === "Escape" && picked.size) clearPicked();
   else if (event.ctrlKey && event.key.toLowerCase() === "a") pickAll();
-  else return;
+  else if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+    const next = takes[takes.indexOf(take) + (event.key === "ArrowDown" ? 1 : -1)];
+    if (next) focusTake(next.id);
+  } else if (event.key === "Home" || event.key === "End") {
+    const edge = event.key === "Home" ? takes[0] : takes[takes.length - 1];
+    if (edge) focusTake(edge.id);
+  } else return;
   event.preventDefault();
   // Keeps the editor's own Delete and Ctrl+A from acting on the timeline too.
   event.stopPropagation();
@@ -1109,6 +1282,14 @@ void listen<string>("recbar-action", async (event) => {
 });
 
 navigator.mediaDevices?.addEventListener("devicechange", () => void checkDevices());
+
+// Screens come and go (a monitor plugged in, a window opened); look again when the app is back in front.
+let sourcesCheckedAt = 0;
+window.addEventListener("focus", () => {
+  if (recording || busy || performance.now() - sourcesCheckedAt < 2000) return;
+  sourcesCheckedAt = performance.now();
+  void refreshSources();
+});
 
 /** Lets the entry animation finish, then dissolves it into the app. */
 function hideSplash() {

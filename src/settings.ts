@@ -71,7 +71,13 @@ export class Settings {
     });
 
     ui.aiEnabled.addEventListener("change", async () => {
-      await invoke("ai_set_enabled", { on: ui.aiEnabled.checked }).catch((error) => toast(String(error)));
+      try {
+        await invoke("ai_set_enabled", { on: ui.aiEnabled.checked });
+      } catch (error) {
+        ui.aiEnabled.checked = !ui.aiEnabled.checked;
+        toast(String(error));
+        return;
+      }
       toast(ui.aiEnabled.checked ? "A IA pode usar o Recorte" : "A IA não pode mais usar o Recorte");
       void this.refreshAi();
     });
@@ -156,12 +162,7 @@ export class Settings {
   private async refreshAi() {
     const ui = this.ui;
     ui.checks.innerHTML = '<li class="loading"><span class="state"></span><div><strong>Verificando…</strong></div></li>';
-    const status = await invoke<AiStatus>("ai_status");
-    ui.aiEnabled.checked = status.enabled;
-    ui.command.textContent = status.command;
-    ui.config.textContent = status.config;
-
-    const row = (state: "ok" | "warn" | "off", title: string, detail: string, action?: HTMLElement) => {
+    const row =(state: "ok" | "warn" | "off", title: string, detail: string, action?: HTMLElement) => {
       const item = document.createElement("li");
       item.className = state;
       const dot = document.createElement("span");
@@ -203,6 +204,18 @@ export class Settings {
         toast(`${name} conectado. ${restartNote}`);
       }, true));
     };
+
+    let status: AiStatus;
+    try {
+      status = await invoke<AiStatus>("ai_status");
+    } catch (error) {
+      // Without the status there is nothing to list; offer to ask again.
+      ui.checks.replaceChildren(row("warn", "Não foi possível verificar a IA", String(error), button("Tentar de novo", async () => undefined)));
+      return;
+    }
+    ui.aiEnabled.checked = status.enabled;
+    ui.command.textContent = status.command;
+    ui.config.textContent = status.config;
 
     ui.checks.replaceChildren(
       row(status.enabled ? "ok" : "off", "Canal local", status.enabled ? `Ligado, só neste computador (porta ${status.port ?? "?"})` : "Desligado: a IA não consegue usar o app"),

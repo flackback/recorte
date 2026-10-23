@@ -9,7 +9,7 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, anyhow};
-use wasapi::{DeviceEnumerator, Direction, SampleType, StreamMode, WaveFormat, initialize_mta};
+use wasapi::{AudioCaptureClient, AudioClient, DeviceEnumerator, Direction, SampleType, StreamMode, WasapiError, WaveFormat, initialize_mta};
 
 use crate::clock::{HNS_PER_SEC, now_hns};
 use crate::recorder::Shared;
@@ -115,9 +115,18 @@ pub fn spawn(source: Source, shared: Arc<Shared>, mut sink: Box<dyn Sink>) -> an
     }
 }
 
-fn run(source: Source, shared: &Shared, sink: &mut dyn Sink, ready: &mpsc::Sender<Result<(), String>>) -> anyhow::Result<()> {
-    initialize_mta().ok().context("inicializar COM")?;
+/// `AUDCLNT_E_DEVICE_INVALIDATED`: the device went away, or stopped being the default one.
+const DEVICE_INVALIDATED: u32 = 0x8889_0004;
+/// How often a vanished device is looked for again.
+const REOPEN_EVERY: Duration = Duration::from_millis(500);
 
+/// An open capture stream on the default device.
+struct Stream {
+    client: AudioClient,
+    capture: AudioCaptureClient,
+}
+
+fn open(source: Source) -> anyhow::Result<Stream> {
     let enumerator = DeviceEnumerator::new()?;
     // Loopback opens the output device in capture direction.
     let device_direction = match source {
@@ -131,7 +140,33 @@ fn run(source: Source, shared: &Shared, sink: &mut dyn Sink, ready: &mpsc::Sende
     client.initialize_client(&format, &Direction::Capture, &mode)?;
     let capture = client.get_audiocaptureclient()?;
     client.start_stream()?;
+    Ok(Stream { client, capture })
+}
+
+/// Moves every packet waiting on the device into `pending`.
+fn read_packets(capture: &AudioCaptureClient, queue: &mut VecDeque<u8>, pending: &mut Vec<(i64, Vec<u8>)>) -> Result<(), WasapiError> {
+    while let Some(frames) = capture.get_next_packet_size()? {
+        if frames == 0 {
+            break;
+        }
+        queue.clear();
+        let info = capture.read_from_device_to_deque(queue)?;
+        let mut bytes: Vec<u8> = queue.drain(..).collect();
+        if info.flags.silent {
+            bytes.fill(0);
+        }
+        pending.push((info.timestamp as i64, bytes));
+    }
+    Ok(())
+}
+
+fn run(source: Source, shared: &Shared, sink: &mut dyn Sink, ready: &mpsc::Sender<Result<(), String>>) -> anyhow::Result<()> {
+    initialize_mta().ok().context("inicializar COM")?;
+
+    // `None` while the device is gone; the track is kept filled with silence meanwhile.
+    let mut stream = Some(open(source)?);
     let _ = ready.send(Ok(()));
+    let mut reopen_at = Instant::now();
 
     let mut aligner = Aligner::default();
     let mut queue = VecDeque::new();
@@ -141,17 +176,21 @@ fn run(source: Source, shared: &Shared, sink: &mut dyn Sink, ready: &mpsc::Sende
     loop {
         let stopping = shared.stop.load(Ordering::Acquire);
 
-        while let Some(frames) = capture.get_next_packet_size()? {
-            if frames == 0 {
-                break;
+        if stream.is_none() && Instant::now() >= reopen_at {
+            reopen_at = Instant::now() + REOPEN_EVERY;
+            stream = open(source).ok();
+        }
+        if let Some(current) = &stream {
+            match read_packets(&current.capture, &mut queue, &mut pending) {
+                Ok(()) => {}
+                // The default device changed (headset plugged in, output switched): the same
+                // track goes on from the new default, the gap filled with silence.
+                Err(WasapiError::Windows(error)) if error.code().0 as u32 == DEVICE_INVALIDATED => {
+                    stream = None;
+                    reopen_at = Instant::now();
+                }
+                Err(error) => return Err(error.into()),
             }
-            queue.clear();
-            let info = capture.read_from_device_to_deque(&mut queue)?;
-            let mut bytes: Vec<u8> = queue.drain(..).collect();
-            if info.flags.silent {
-                bytes.fill(0);
-            }
-            pending.push((info.timestamp as i64, bytes));
         }
 
         let t0 = shared.t0.load(Ordering::Acquire);
@@ -170,7 +209,9 @@ fn run(source: Source, shared: &Shared, sink: &mut dyn Sink, ready: &mpsc::Sende
         thread::sleep(Duration::from_millis(10));
     }
 
-    client.stop_stream()?;
+    if let Some(stream) = stream {
+        stream.client.stop_stream()?;
+    }
     Ok(())
 }
 
