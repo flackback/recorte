@@ -6,46 +6,92 @@
     <link rel="icon" href="/icon.svg" type="image/svg+xml" />
     <title>Recorte · gravando</title>
     <style>
+      :root {
+        --surface: rgb(24 24 27 / 0.95);
+        --line: rgb(255 255 255 / 0.1);
+        --hover: rgb(255 255 255 / 0.1);
+        --pressed: rgb(255 255 255 / 0.18);
+        --text: #f2f2f4;
+        --muted: #a1a1aa;
+        --record: #ff3b30;
+        --accent: #0a84ff;
+        --ease: cubic-bezier(0.2, 0.8, 0.2, 1);
+        --enter: 200ms;
+        --exit: 130ms;
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        :root {
+          --enter: 0ms;
+          --exit: 0ms;
+        }
+      }
+
       html,
       body {
         margin: 0;
         height: 100%;
         overflow: hidden;
         background: transparent;
+        color: var(--text);
         font: 13px/1 "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
         user-select: none;
       }
 
-      .bar {
+      /* The window is sized to this, so nothing transparent catches clicks around it. */
+      .shell {
+        display: inline-flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 6px;
+        padding: 4px;
+      }
+
+      .bar,
+      .tray {
         display: flex;
         align-items: center;
-        gap: 4px;
+        gap: 2px;
         height: 44px;
-        margin: 4px;
-        padding: 0 5px 0 14px;
-        border: 1px solid rgb(255 255 255 / 0.1);
+        padding: 0 5px;
+        border: 1px solid var(--line);
         border-radius: 999px;
-        background: rgb(24 24 27 / 0.94);
-        color: #f2f2f4;
-        box-shadow: 0 6px 20px rgb(0 0 0 / 0.35);
+        background: var(--surface);
+        box-shadow: 0 8px 24px rgb(0 0 0 / 0.35), 0 1px 0 rgb(255 255 255 / 0.06) inset;
+      }
+
+      .grip {
+        display: grid;
+        place-items: center;
+        width: 18px;
+        height: 30px;
+        color: rgb(255 255 255 / 0.35);
         cursor: grab;
+      }
+
+      .grip:active {
+        cursor: grabbing;
       }
 
       .status {
         display: flex;
         align-items: center;
         gap: 8px;
-        min-width: 96px;
+        min-width: 92px;
+        padding: 0 8px 0 4px;
         font-weight: 600;
         font-variant-numeric: tabular-nums;
+        cursor: grab;
       }
 
       .dot {
         width: 9px;
         height: 9px;
+        flex: none;
         border-radius: 50%;
-        background: #ff3b30;
+        background: var(--record);
         animation: pulse 1.2s ease-in-out infinite;
+        transition: background var(--enter) var(--ease);
       }
 
       .paused .dot {
@@ -59,38 +105,56 @@
         }
       }
 
-      @media (prefers-reduced-motion: reduce) {
-        .dot {
-          animation: none;
-        }
+      #time {
+        transition: color var(--enter) var(--ease);
+      }
+
+      #time.flash {
+        color: #ffd60a;
       }
 
       button {
+        position: relative;
         display: inline-flex;
         align-items: center;
+        justify-content: center;
         gap: 6px;
         height: 34px;
-        padding: 0 12px;
+        min-width: 34px;
+        padding: 0 11px;
         border: 0;
         border-radius: 999px;
         background: transparent;
         color: inherit;
         font: inherit;
         cursor: pointer;
-        transition: background 120ms;
+        transition: background var(--exit) var(--ease), transform var(--exit) var(--ease), color var(--exit) var(--ease);
       }
 
       button:hover {
-        background: rgb(255 255 255 / 0.12);
+        background: var(--hover);
       }
 
       button:active {
-        transform: scale(0.96);
+        transform: scale(0.94);
+      }
+
+      button:focus-visible {
+        outline: 2px solid var(--accent);
+        outline-offset: 1px;
+      }
+
+      button[aria-pressed="true"] {
+        background: var(--pressed);
+      }
+
+      button.icon {
+        padding: 0;
       }
 
       button.stop {
-        margin-left: auto;
-        background: #ff3b30;
+        margin-left: 4px;
+        background: var(--record);
         font-weight: 600;
       }
 
@@ -98,9 +162,35 @@
         background: #ff5a50;
       }
 
+      /* The mark button rings once when a moment is marked. */
+      #mark::after {
+        content: "";
+        position: absolute;
+        inset: 0;
+        border-radius: inherit;
+        box-shadow: 0 0 0 0 rgb(255 214 10 / 0.6);
+        opacity: 0;
+      }
+
+      #mark.ring::after {
+        animation: ring 600ms var(--ease);
+      }
+
+      @keyframes ring {
+        from {
+          opacity: 1;
+          box-shadow: 0 0 0 0 rgb(255 214 10 / 0.6);
+        }
+        to {
+          opacity: 0;
+          box-shadow: 0 0 0 10px rgb(255 214 10 / 0);
+        }
+      }
+
       svg {
-        width: 15px;
-        height: 15px;
+        width: 16px;
+        height: 16px;
+        flex: none;
         fill: none;
         stroke: currentColor;
         stroke-width: 2;
@@ -112,24 +202,193 @@
         fill: currentColor;
         stroke: none;
       }
+
+      .sep {
+        width: 1px;
+        height: 20px;
+        margin: 0 5px;
+        background: var(--line);
+      }
+
+      /* ---------- drawing tray ---------- */
+
+      .tray {
+        transform-origin: top center;
+        animation: tray-in var(--enter) var(--ease) both;
+      }
+
+      .tray.leaving {
+        animation: tray-out var(--exit) ease-in both;
+      }
+
+      .tray[hidden] {
+        display: none;
+      }
+
+      @keyframes tray-in {
+        from {
+          opacity: 0;
+          transform: translateY(-8px) scale(0.97);
+        }
+      }
+
+      @keyframes tray-out {
+        to {
+          opacity: 0;
+          transform: translateY(-6px) scale(0.98);
+        }
+      }
+
+      /* Tools come in one after another. */
+      .tray .tools button {
+        animation: tool-in var(--enter) var(--ease) both;
+        animation-delay: calc(var(--i, 0) * 14ms);
+      }
+
+      @keyframes tool-in {
+        from {
+          opacity: 0;
+          transform: translateY(-4px);
+        }
+      }
+
+      .tools {
+        position: relative;
+        display: flex;
+        gap: 2px;
+      }
+
+      .tools button {
+        width: 34px;
+        padding: 0;
+        z-index: 1;
+      }
+
+      .tools button[aria-checked="true"] {
+        color: #fff;
+      }
+
+      .tools button[aria-checked="true"]:hover {
+        background: transparent;
+      }
+
+      /* Slides behind the chosen tool. */
+      .indicator {
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 34px;
+        height: 34px;
+        border-radius: 999px;
+        background: var(--accent);
+        box-shadow: 0 2px 10px rgb(10 132 255 / 0.45);
+        transition: transform 240ms var(--ease), background var(--enter) var(--ease);
+      }
+
+      .indicator.mouse {
+        background: var(--pressed);
+        box-shadow: none;
+      }
+
+      .colors,
+      .widths {
+        display: flex;
+        align-items: center;
+        gap: 2px;
+      }
+
+      .swatch {
+        width: 28px;
+        min-width: 28px;
+        padding: 0;
+      }
+
+      .swatch span {
+        width: 16px;
+        height: 16px;
+        border-radius: 50%;
+        background: var(--color);
+        box-shadow: inset 0 0 0 1px rgb(0 0 0 / 0.25);
+        transition: transform var(--enter) var(--ease), box-shadow var(--enter) var(--ease);
+      }
+
+      .swatch[aria-checked="true"] span {
+        transform: scale(1.12);
+        box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px var(--color);
+      }
+
+      .swatch[aria-checked="true"] {
+        background: transparent;
+      }
+
+      .width {
+        width: 28px;
+        min-width: 28px;
+        padding: 0;
+      }
+
+      .width span {
+        width: var(--size);
+        height: var(--size);
+        border-radius: 50%;
+        background: var(--muted);
+        transition: background var(--enter) var(--ease);
+      }
+
+      .width[aria-checked="true"] span {
+        background: #fff;
+      }
+
+      .width[aria-checked="true"] {
+        background: var(--pressed);
+      }
+
+      #fade[aria-pressed="true"] {
+        color: #ffd60a;
+      }
     </style>
     <script type="module" src="/src/recbar-app.ts" defer></script>
   </head>
   <body>
-    <div class="bar" data-tauri-drag-region>
-      <span class="status" id="status" data-tauri-drag-region><span class="dot" data-tauri-drag-region></span><span id="time" data-tauri-drag-region>0:00</span></span>
-      <button id="pause" title="Pausar: o trecho pausado sai cortado no editor">
-        <svg viewBox="0 0 24 24"><path d="M9 6v12M15 6v12" /></svg><span>Pausar</span>
-      </button>
-      <button id="draw" title="Desenhar na tela (Ctrl+Shift+D)">
-        <svg viewBox="0 0 24 24"><path d="m4 20 4-1 11-11-3-3L5 16Z" /></svg><span>Desenhar</span>
-      </button>
-      <button id="mark" title="Marcar este momento para achar no editor (Alt+Shift+M)">
-        <svg viewBox="0 0 24 24"><path d="M6 21V4m0 0h11l-2 4 2 4H6" /></svg><span>Marcar</span>
-      </button>
-      <button class="stop" id="stop" title="Parar e abrir no editor (Ctrl+Shift+X)">
-        <svg viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2" /></svg><span>Parar</span>
-      </button>
+    <div class="shell" id="shell">
+      <div class="bar" id="bar">
+        <span class="grip" data-tauri-drag-region title="Arraste para mover a barra">
+          <svg viewBox="0 0 24 24" data-tauri-drag-region><path d="M9 6h.01M9 12h.01M9 18h.01M15 6h.01M15 12h.01M15 18h.01" stroke-width="3" /></svg>
+        </span>
+        <span class="status" id="status" data-tauri-drag-region><span class="dot" data-tauri-drag-region></span><span id="time" data-tauri-drag-region>0:00</span></span>
+        <button id="pause" title="Pausar: o trecho pausado sai cortado no editor">
+          <svg viewBox="0 0 24 24"><path d="M9 6v12M15 6v12" /></svg><span>Pausar</span>
+        </button>
+        <button id="mark" title="Marcar este momento para achar no editor (Alt+Shift+M)">
+          <svg viewBox="0 0 24 24"><path d="M6 21V4m0 0h11l-2 4 2 4H6" /></svg><span>Marcar</span>
+        </button>
+        <button id="draw" aria-pressed="false" title="Ferramentas de desenho (Ctrl+Shift+D)">
+          <svg viewBox="0 0 24 24" id="draw-icon"><path d="m4 20 4-1 11-11-3-3L5 16Z" /></svg><span id="draw-label">Desenhar</span>
+        </button>
+        <button class="stop" id="stop" title="Parar e abrir no editor (Alt+Shift+R ou Ctrl+Shift+X)">
+          <svg viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2" /></svg><span>Parar</span>
+        </button>
+      </div>
+
+      <div class="tray" id="tray" hidden>
+        <div class="tools" id="tools" role="radiogroup" aria-label="Ferramenta">
+          <span class="indicator" id="indicator"></span>
+        </div>
+        <span class="sep"></span>
+        <div class="colors" id="colors" role="radiogroup" aria-label="Cor"></div>
+        <span class="sep"></span>
+        <div class="widths" id="widths" role="radiogroup" aria-label="Espessura"></div>
+        <span class="sep"></span>
+        <button class="icon" id="fade" aria-pressed="false" title="Sumir sozinho: cada desenho some 3 s depois de feito">
+          <svg viewBox="0 0 24 24"><circle cx="12" cy="13" r="8" /><path d="M12 9v4l2.5 2M9.5 2.5h5" /></svg>
+        </button>
+        <button class="icon" id="undo" title="Desfazer o último desenho (Ctrl+Z)">
+          <svg viewBox="0 0 24 24"><path d="M9 14 4 9l5-5M4 9h10.5a5.5 5.5 0 0 1 0 11H11" /></svg>
+        </button>
+        <button class="icon" id="clear" title="Apagar todos os desenhos (Delete)">
+          <svg viewBox="0 0 24 24"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3" /></svg>
+        </button>
+      </div>
     </div>
   </body>
 </html>

@@ -911,7 +911,7 @@ tool(
     const take = await store.findTake(ref);
     await store.renameTake(take, title);
     await tryApp("reload", { takeId: take.id });
-    return { take: take.id, name: title.trim() || take.sourceName };
+    return { take: take.id, name: store.takeName({ ...take, title: title.trim() || null }) };
   },
 );
 

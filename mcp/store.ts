@@ -6,7 +6,7 @@ import path from "node:path";
 
 import { defaultProject, normalizeProject, type Project } from "../src/editor/project";
 import { TimeMap } from "../src/editor/timemap";
-import type { CursorEvent, KeyEvent, Take, Word } from "../src/types";
+import { takeName, type CursorEvent, type KeyEvent, type Take, type Word } from "../src/types";
 
 /** Reads and writes takes on disk, the same files the app uses. */
 
@@ -77,7 +77,7 @@ export async function listTakes(): Promise<Take[]> {
   return takes.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
 }
 
-export const takeName = (take: Take) => take.title || take.sourceName || take.id;
+export { takeName };
 
 /** Finds a take by id, by "latest", or by a unique part of its name. */
 export async function findTake(ref: string): Promise<Take> {

@@ -10,7 +10,7 @@ import { ExportCancelled, exportVideo, type ExportOptions } from "./editor/expor
 import { defaultProject, normalizeProject } from "./editor/project";
 import { LANGUAGES, preferredLanguage, SAMPLE_RATE, speech, transcribe } from "./editor/transcribe";
 import { toast } from "./toast";
-import { joinPath, type CursorEvent, type KeyEvent, type Take, type Word } from "./types";
+import { joinPath, takeName, type CursorEvent, type KeyEvent, type Take, type Word } from "./types";
 
 /**
  * Answers requests from the MCP server, relayed by the app's local control channel: reload an
@@ -93,7 +93,6 @@ export function startAgent(host: AgentHost) {
     if (!take) throw new Error(`gravação não encontrada: ${String(id)}`);
     return take;
   };
-  const takeName = (take: Take) => take.title || take.sourceName || "Gravação";
 
   async function exportJob(take: Take, options: ExportOptions) {
     if (running("export")) throw new Error("já existe uma exportação em andamento");

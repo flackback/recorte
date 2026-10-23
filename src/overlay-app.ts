@@ -1,9 +1,12 @@
 import { emit, listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
+import { DEFAULT_DRAW, DRAW_TOOLS, FADE_AFTER, FADE_OUT, type DrawConfig, type DrawTool } from "./draw";
+
 /**
  * The transparent overlay window. In "area" mode the user drags the region to record; in "draw"
- * mode they annotate the screen while recording (the drawings are captured with it).
+ * mode it shows what is drawn on the screen while recording (and is captured with it). The tools
+ * live in the floating bar, which stays out of the video; this window only draws.
  */
 
 const mode = new URLSearchParams(location.search).get("mode") === "draw" ? "draw" : "area";
@@ -11,6 +14,7 @@ const canvas = document.getElementById("canvas") as HTMLCanvasElement;
 const context = canvas.getContext("2d")!;
 const ratio = window.devicePixelRatio || 1;
 const appWindow = getCurrentWindow();
+const reducedMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
 
 function resize() {
   canvas.width = Math.round(innerWidth * ratio);
@@ -61,65 +65,141 @@ async function cancelArea() {
   await appWindow.close();
 }
 
-/** Tells the main window the overlay went away, then closes it. */
-async function closeOverlay() {
-  await emit("overlay-closed", null);
-  await appWindow.close();
-}
-
 // ---------- drawing ----------
 
-type Tool = "pen" | "arrow" | "rect" | "marker";
-type Shape = { tool: Tool; color: string; points: { x: number; y: number }[] };
+type Point = { x: number; y: number };
+type Shape = {
+  tool: Exclude<DrawTool, "mouse">;
+  color: string;
+  width: number;
+  points: Point[];
+  text?: string;
+  /** When it was finished, for "sumir sozinho"; null keeps it. */
+  fadeFrom: number | null;
+};
+
 const shapes: Shape[] = [];
 let current: Shape | null = null;
-let tool: Tool = "pen";
-let color = "#ff3b30";
-let passThrough = false;
+let config: DrawConfig = { ...DEFAULT_DRAW };
+let shift = false;
+let frameRequested = false;
+const textInput = document.getElementById("text-input") as HTMLInputElement;
+let textAt: Point | null = null;
 
-function strokeShape(shape: Shape) {
+const textSize = (width: number) => 14 + width * 3.4;
+
+/** Lines snap to 45° steps, and boxes to squares and circles, while Shift is held. */
+function constrain(tool: Shape["tool"], from: Point, to: Point): Point {
+  if (!shift) return to;
+  const dx = to.x - from.x;
+  const dy = to.y - from.y;
+  if (tool === "rect" || tool === "ellipse") {
+    const side = Math.max(Math.abs(dx), Math.abs(dy));
+    return { x: from.x + Math.sign(dx || 1) * side, y: from.y + Math.sign(dy || 1) * side };
+  }
+  const angle = Math.round(Math.atan2(dy, dx) / (Math.PI / 4)) * (Math.PI / 4);
+  const length = Math.hypot(dx, dy);
+  return { x: from.x + Math.cos(angle) * length, y: from.y + Math.sin(angle) * length };
+}
+
+function arrowHead(from: Point, to: Point, width: number) {
+  const angle = Math.atan2(to.y - from.y, to.x - from.x);
+  const head = 10 + width * 2.6;
+  context.beginPath();
+  context.moveTo(to.x, to.y);
+  context.lineTo(to.x - head * Math.cos(angle - 0.42), to.y - head * Math.sin(angle - 0.42));
+  context.lineTo(to.x - head * Math.cos(angle + 0.42), to.y - head * Math.sin(angle + 0.42));
+  context.closePath();
+  context.fill();
+  return { x: to.x - Math.cos(angle) * head * 0.7, y: to.y - Math.sin(angle) * head * 0.7 };
+}
+
+function paintShape(shape: Shape, now: number) {
   const points = shape.points;
-  if (points.length < 2) return;
+  const first = points[0];
+  const last = points[points.length - 1];
+  let alpha = shape.tool === "marker" ? 0.35 : 1;
+  if (shape.fadeFrom !== null) alpha *= Math.max(0, Math.min(1, 1 - (now - shape.fadeFrom - FADE_AFTER) / FADE_OUT));
+  if (alpha <= 0) return;
+
+  context.save();
+  context.globalAlpha = alpha;
   context.lineCap = "round";
   context.lineJoin = "round";
   context.strokeStyle = shape.color;
-  context.globalAlpha = shape.tool === "marker" ? 0.35 : 1;
-  context.lineWidth = shape.tool === "marker" ? 22 : 5;
+  context.fillStyle = shape.color;
+  context.lineWidth = shape.tool === "marker" ? shape.width * 4.5 : shape.width;
+  // A soft shadow keeps strokes readable on any background.
   context.shadowColor = "rgba(0, 0, 0, 0.35)";
   context.shadowBlur = shape.tool === "marker" ? 0 : 6;
-  const first = points[0];
-  const last = points[points.length - 1];
-  context.beginPath();
-  if (shape.tool === "rect") {
-    context.roundRect(Math.min(first.x, last.x), Math.min(first.y, last.y), Math.abs(last.x - first.x), Math.abs(last.y - first.y), 8);
-  } else if (shape.tool === "arrow") {
-    const angle = Math.atan2(last.y - first.y, last.x - first.x);
-    const head = 18;
-    context.moveTo(first.x, first.y);
-    context.lineTo(last.x, last.y);
-    context.moveTo(last.x - head * Math.cos(angle - 0.45), last.y - head * Math.sin(angle - 0.45));
-    context.lineTo(last.x, last.y);
-    context.lineTo(last.x - head * Math.cos(angle + 0.45), last.y - head * Math.sin(angle + 0.45));
-  } else {
-    context.moveTo(first.x, first.y);
-    for (const point of points.slice(1)) context.lineTo(point.x, point.y);
+
+  if (shape.tool === "text") {
+    context.font = `700 ${textSize(shape.width)}px "Segoe UI Variable Display", "Segoe UI", system-ui, sans-serif`;
+    context.textBaseline = "top";
+    context.shadowBlur = 8;
+    context.fillText(shape.text ?? "", first.x, first.y);
+  } else if (points.length >= 2) {
+    if (shape.tool === "rect") {
+      context.beginPath();
+      context.roundRect(Math.min(first.x, last.x), Math.min(first.y, last.y), Math.abs(last.x - first.x), Math.abs(last.y - first.y), 8);
+      context.stroke();
+    } else if (shape.tool === "ellipse") {
+      context.beginPath();
+      context.ellipse((first.x + last.x) / 2, (first.y + last.y) / 2, Math.abs(last.x - first.x) / 2, Math.abs(last.y - first.y) / 2, 0, 0, Math.PI * 2);
+      context.stroke();
+    } else if (shape.tool === "line") {
+      context.beginPath();
+      context.moveTo(first.x, first.y);
+      context.lineTo(last.x, last.y);
+      context.stroke();
+    } else if (shape.tool === "arrow" || shape.tool === "dashed") {
+      const neck = arrowHead(first, last, shape.width);
+      if (shape.tool === "dashed") {
+        context.setLineDash([shape.width * 2.4, shape.width * 2]);
+        // The dashes march toward the tip, so the eye follows where it points.
+        if (!reducedMotion) context.lineDashOffset = -((now / 30) % (shape.width * 4.4));
+      }
+      context.beginPath();
+      context.moveTo(first.x, first.y);
+      context.lineTo(neck.x, neck.y);
+      context.stroke();
+    } else {
+      // Pen and marker: smoothed through the midpoints between samples.
+      context.beginPath();
+      context.moveTo(first.x, first.y);
+      for (let index = 1; index < points.length - 1; index++) {
+        const middle = { x: (points[index].x + points[index + 1].x) / 2, y: (points[index].y + points[index + 1].y) / 2 };
+        context.quadraticCurveTo(points[index].x, points[index].y, middle.x, middle.y);
+      }
+      context.lineTo(last.x, last.y);
+      context.stroke();
+    }
   }
-  context.stroke();
-  context.globalAlpha = 1;
-  context.shadowBlur = 0;
+  context.restore();
 }
 
 function drawShapes() {
+  const now = performance.now();
+  // Drawings that have faded out are gone for good.
+  for (let index = shapes.length - 1; index >= 0; index--) {
+    const fadeFrom = shapes[index].fadeFrom;
+    if (fadeFrom !== null && now - fadeFrom > FADE_AFTER + FADE_OUT) shapes.splice(index, 1);
+  }
   context.clearRect(0, 0, innerWidth, innerHeight);
-  for (const shape of shapes) strokeShape(shape);
-  if (current) strokeShape(current);
+  for (const shape of shapes) paintShape(shape, now);
+  if (current) paintShape(current, now);
+  // Keep animating only while something moves: fading shapes or marching dashes.
+  const moving = shapes.some((shape) => shape.fadeFrom !== null || (shape.tool === "dashed" && !reducedMotion));
+  if (moving) requestFrame();
 }
 
-async function setPassThrough(on: boolean) {
-  passThrough = on;
-  await appWindow.setIgnoreCursorEvents(on);
-  document.getElementById("draw-panel")!.hidden = on;
-  if (!on) await appWindow.setFocus();
+function requestFrame() {
+  if (frameRequested) return;
+  frameRequested = true;
+  requestAnimationFrame(() => {
+    frameRequested = false;
+    draw();
+  });
 }
 
 function draw() {
@@ -127,35 +207,79 @@ function draw() {
   else drawShapes();
 }
 
+function finish(shape: Shape) {
+  shape.fadeFrom = config.fade ? performance.now() : null;
+  shapes.push(shape);
+}
+
+/** Applies the bar's choices: the mouse passes clicks through to the apps below. */
+async function applyConfig(next: DrawConfig) {
+  const wasMouse = config.tool === "mouse";
+  config = next;
+  if (config.tool !== "text") commitText();
+  document.body.dataset.tool = config.tool;
+  await appWindow.setIgnoreCursorEvents(config.tool === "mouse");
+  if (config.tool !== "mouse" && wasMouse) await appWindow.setFocus();
+}
+
+// ---------- text ----------
+
+function startText(at: Point) {
+  commitText();
+  textAt = at;
+  textInput.value = "";
+  textInput.style.left = `${at.x}px`;
+  textInput.style.top = `${at.y}px`;
+  textInput.style.color = config.color;
+  textInput.style.fontSize = `${textSize(config.width)}px`;
+  textInput.hidden = false;
+  textInput.focus();
+}
+
+function commitText() {
+  if (!textAt) return;
+  const text = textInput.value.trim();
+  if (text) finish({ tool: "text", color: config.color, width: config.width, points: [textAt], text, fadeFrom: null });
+  textAt = null;
+  textInput.hidden = true;
+  draw();
+}
+
+function cancelText() {
+  textAt = null;
+  textInput.hidden = true;
+}
+
 // ---------- wiring ----------
 
 document.body.classList.add(mode);
-document.getElementById(mode === "area" ? "area-panel" : "draw-panel")!.hidden = false;
+if (mode === "area") document.getElementById("area-panel")!.hidden = false;
 window.addEventListener("resize", resize);
 resize();
 
 canvas.addEventListener("pointerdown", (event) => {
-  canvas.setPointerCapture(event.pointerId);
+  const at = { x: event.clientX, y: event.clientY };
   if (mode === "area") {
-    dragFrom = { x: event.clientX, y: event.clientY };
-    area = { x: event.clientX, y: event.clientY, width: 0, height: 0 };
-  } else {
-    current = { tool, color, points: [{ x: event.clientX, y: event.clientY }] };
+    canvas.setPointerCapture(event.pointerId);
+    dragFrom = at;
+    area = { ...at, width: 0, height: 0 };
+  } else if (config.tool === "text") {
+    startText(at);
+    event.preventDefault();
+    return;
+  } else if (config.tool !== "mouse") {
+    canvas.setPointerCapture(event.pointerId);
+    current = { tool: config.tool, color: config.color, width: config.width, points: [at], fadeFrom: null };
   }
   draw();
 });
 canvas.addEventListener("pointermove", (event) => {
+  const at = { x: event.clientX, y: event.clientY };
   if (mode === "area" && dragFrom) {
-    area = {
-      x: Math.min(dragFrom.x, event.clientX),
-      y: Math.min(dragFrom.y, event.clientY),
-      width: Math.abs(event.clientX - dragFrom.x),
-      height: Math.abs(event.clientY - dragFrom.y),
-    };
+    area = { x: Math.min(dragFrom.x, at.x), y: Math.min(dragFrom.y, at.y), width: Math.abs(at.x - dragFrom.x), height: Math.abs(at.y - dragFrom.y) };
   } else if (current) {
-    const point = { x: event.clientX, y: event.clientY };
-    if (current.tool === "pen" || current.tool === "marker") current.points.push(point);
-    else current.points = [current.points[0], point];
+    if (current.tool === "pen" || current.tool === "marker") current.points.push(at);
+    else current.points = [current.points[0], constrain(current.tool, current.points[0], at)];
   } else {
     return;
   }
@@ -164,7 +288,9 @@ canvas.addEventListener("pointermove", (event) => {
 canvas.addEventListener("pointerup", () => {
   dragFrom = null;
   if (current) {
-    if (current.points.length > 1) shapes.push(current);
+    const [first, last] = [current.points[0], current.points[current.points.length - 1]];
+    // A click without dragging leaves nothing behind.
+    if (current.points.length > 1 && Math.hypot(last.x - first.x, last.y - first.y) > 3) finish(current);
     current = null;
   }
   draw();
@@ -173,51 +299,52 @@ canvas.addEventListener("dblclick", () => {
   if (mode === "area") void confirmArea(false);
 });
 
+textInput.addEventListener("keydown", (event) => {
+  event.stopPropagation();
+  if (event.key === "Enter") commitText();
+  else if (event.key === "Escape") cancelText();
+});
+textInput.addEventListener("blur", () => commitText());
+
 window.addEventListener("keydown", (event) => {
+  shift = event.shiftKey;
   if (mode === "area") {
     if (event.key === "Enter") void confirmArea(false);
     if (event.key === "Escape") void cancelArea();
     return;
   }
-  if (event.key === "Escape") void closeOverlay();
-  else if (event.ctrlKey && event.key.toLowerCase() === "z") {
+  if (event.ctrlKey && event.key.toLowerCase() === "z") {
     shapes.pop();
     draw();
-  } else if (event.key === "Delete") {
+    return;
+  }
+  if (event.key === "Delete") {
     shapes.length = 0;
     draw();
-  } else {
-    const keys: Record<string, Tool> = { p: "pen", a: "arrow", r: "rect", m: "marker" };
-    const picked = keys[event.key.toLowerCase()];
-    if (picked) selectTool(picked);
+    return;
   }
+  // Tool keys go through the bar, which owns the choice and shows it.
+  const key = event.key === "Escape" ? "Esc" : event.key.toUpperCase();
+  const tool = DRAW_TOOLS.find((candidate) => candidate.key === key);
+  if (tool) void emit("draw-request", { tool: tool.id });
 });
+window.addEventListener("keyup", (event) => (shift = event.shiftKey));
 
-function selectTool(next: Tool) {
-  tool = next;
-  for (const button of document.querySelectorAll<HTMLButtonElement>("[data-tool]")) button.setAttribute("aria-pressed", String(button.dataset.tool === next));
-}
-
-for (const button of document.querySelectorAll<HTMLButtonElement>("[data-tool]")) button.addEventListener("click", () => selectTool(button.dataset.tool as Tool));
-for (const button of document.querySelectorAll<HTMLButtonElement>("[data-color]")) {
-  button.addEventListener("click", () => {
-    color = button.dataset.color!;
-    for (const other of document.querySelectorAll<HTMLButtonElement>("[data-color]")) other.setAttribute("aria-pressed", String(other === button));
+if (mode === "draw") {
+  void listen<DrawConfig>("draw-config", (event) => void applyConfig(event.payload));
+  void listen("draw-undo", () => {
+    shapes.pop();
+    draw();
   });
+  void listen("draw-clear", () => {
+    shapes.length = 0;
+    draw();
+  });
+  // Starts passing clicks through until the bar says which tool is on.
+  void appWindow.setIgnoreCursorEvents(true);
+  void emit("overlay-ready", null);
+} else {
+  document.getElementById("area-ok")!.addEventListener("click", () => void confirmArea(false));
+  document.getElementById("area-full")!.addEventListener("click", () => void confirmArea(true));
+  void appWindow.setFocus();
 }
-document.getElementById("area-ok")!.addEventListener("click", () => void confirmArea(false));
-document.getElementById("area-full")!.addEventListener("click", () => void confirmArea(true));
-document.getElementById("draw-undo")!.addEventListener("click", () => {
-  shapes.pop();
-  draw();
-});
-document.getElementById("draw-clear")!.addEventListener("click", () => {
-  shapes.length = 0;
-  draw();
-});
-document.getElementById("draw-pass")!.addEventListener("click", () => void setPassThrough(true));
-document.getElementById("draw-close")!.addEventListener("click", () => void closeOverlay());
-
-// The global Ctrl+Shift+D toggles between drawing and clicking through to the apps below.
-void listen("overlay-toggle", () => void setPassThrough(!passThrough));
-void appWindow.setFocus();

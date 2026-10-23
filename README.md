@@ -10,12 +10,16 @@ Gravador de tela e editor para Windows, feito com Tauri 2 (Rust + TypeScript, We
 - **Webcam:** gravada pelo WebView em `webcam.mp4`, alinhada à tela pelo mesmo relógio.
 - **Mouse:** posição, cliques e formato do cursor (seta, mão, texto) em `cursor.json`.
 - **Teclas:** opcional, em `keys.json`. Atenção: grava tudo o que for digitado, inclusive senhas.
-- **Desenhar na tela durante a gravação:** caneta, seta, retângulo e marca-texto (atalho global **Ctrl+Shift+D**). O desenho entra no vídeo.
+- **Desenhar na tela durante a gravação:** as ferramentas ficam na própria barra flutuante, que não aparece no vídeo. Só os desenhos entram.
+  - Ferramentas: mouse, caneta, linha, seta, seta tracejada (com tracejado animado), retângulo, círculo, marca-texto e texto.
+  - 5 cores, 3 espessuras, desfazer (Ctrl+Z), apagar tudo (Delete) e "sumir sozinho" (cada desenho some 3 s depois de feito).
+  - Atalhos enquanto desenha: P, L, A, D, R, E, M, T; **Esc** volta ao mouse e os desenhos ficam. Shift deixa linhas em 45° e formas quadradas ou redondas.
+  - **Ctrl+Shift+D** abre e fecha a bandeja de ferramentas de qualquer programa. A barra pode ser arrastada pela alça à esquerda.
 - **Gravar e parar de qualquer programa:** atalho global **Alt+Shift+R** (usa a fonte escolhida no app). **Ctrl+Shift+X** também para. O atalho não é Ctrl+Shift+R porque esse recarrega páginas nos navegadores.
 - **Marcar momentos:** **Alt+Shift+M** ou o botão "Marcar" da barra flutuante. As marcas aparecem como bandeiras na régua da timeline; clicar perto de uma vai até ela.
 - **Janela do app:** fica fora da gravação. Fora da gravação, ela aparece normalmente em compartilhamento de tela e acesso remoto (AnyDesk, Meet).
 - **Contagem 3-2-1** na tela escolhida antes de começar (chip "Contagem"; Esc cancela, clique começa na hora).
-- **Barra flutuante** durante a gravação, fora do vídeo: tempo, Pausar/Continuar, Desenhar, Marcar e Parar. O app se minimiza e volta sozinho ao parar.
+- **Barra flutuante** durante a gravação, fora do vídeo: tempo, Pausar/Continuar, Marcar, Desenhar (abre a bandeja de ferramentas) e Parar. O app se minimiza e volta sozinho ao parar.
 - **Pausar:** a gravação continua por baixo e o trecho pausado já abre cortado no editor.
 
 ## Editor
@@ -66,6 +70,13 @@ Gravador de tela e editor para Windows, feito com Tauri 2 (Rust + TypeScript, We
 - **Prévia:** reproduzir/pausar, zoom, lente, desfoque, corte, recortar área, exportar.
 - **Palavra na transcrição:** ir até ela, cortar ou restaurar a seleção, restaurar todas.
 - **Barra de título:** minimizar, maximizar/restaurar, procurar atualizações (com a versão atual), fechar.
+
+## Janela
+
+- Sem a barra do Windows: título, minimizar, maximizar e fechar são do próprio app.
+- Cantos arredondados e borda fina; ao maximizar, os cantos ficam retos.
+- Gravações sem nome aparecem como "Tela inteira", "Área da tela" ou o título da janela gravada, com data e duração.
+- Sem gravação aberta, o editor mostra "Gravar agora" e "Abrir a última gravação".
 
 ## Primeiro uso
 
@@ -213,4 +224,4 @@ Para capturas de tela ou automação da interface durante o desenvolvimento, def
 - **Molduras:** são desenhadas em 2D (janela e notebook), sem os modelos 3D do Slice.
 - **Borda amarela:** no Windows 10 aparece em volta da tela durante a gravação (aviso de captura do sistema); o Windows 11 permite escondê-la.
 - **Janela movida:** na gravação de janela, a área é lida só no início.
-- **Barra de desenho:** aparece no vídeo enquanto o desenho está aberto; "Clicar através" esconde a barra e mantém os desenhos.
+- **Desenhos da gravação:** entram fixos no vídeo; ainda não dá para editá-los depois no editor (os textos, setas e destaques do editor dão).

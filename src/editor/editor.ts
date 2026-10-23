@@ -3,7 +3,7 @@ import { revealItemInDir } from "@tauri-apps/plugin-opener";
 
 import { showTour } from "../tips";
 import { toast } from "../toast";
-import { joinPath, type CursorEvent, type KeyEvent, type Take, type Word } from "../types";
+import { joinPath, takeName, type CursorEvent, type KeyEvent, type Take, type Word } from "../types";
 import { CARD_FADE, cardLength, createScene, frameState, overlayText, refreshTime, sceneSource, wordCuts, type CardView, type Scene } from "./composition";
 import { confirmDialog, onContextMenu, type MenuItem } from "../menu";
 import { ExportDialog } from "./export-dialog";
@@ -304,7 +304,7 @@ export class Editor {
     ui.root.hidden = false;
     ui.status.hidden = false;
     ui.error.hidden = true;
-    ui.title.textContent = take.title || take.sourceName || "Gravação";
+    ui.title.textContent = takeName(take);
     ui.video.src = convertFileSrc(joinPath(take.dir, take.video));
     this.loadMic();
     if (take.webcam) ui.webcam.src = convertFileSrc(joinPath(take.dir, take.webcam));

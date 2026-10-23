@@ -65,29 +65,6 @@
         background: rgb(255 255 255 / 0.12);
       }
 
-      .panel button[aria-pressed="true"] {
-        background: rgb(255 255 255 / 0.22);
-      }
-
-      .panel .color {
-        width: 22px;
-        min-width: 22px;
-        height: 22px;
-        padding: 0;
-        border: 2px solid transparent;
-      }
-
-      .panel .color[aria-pressed="true"] {
-        border-color: #fff;
-      }
-
-      .panel .sep {
-        width: 1px;
-        height: 20px;
-        margin: 0 4px;
-        background: rgb(255 255 255 / 0.2);
-      }
-
       .panel .primary {
         background: #0a84ff;
         font-weight: 600;
@@ -102,6 +79,30 @@
         font-size: 12px;
         font-variant-numeric: tabular-nums;
         pointer-events: none;
+      }
+
+      body.draw {
+        cursor: crosshair;
+      }
+
+      body.draw[data-tool="text"] {
+        cursor: text;
+      }
+
+      .text-input {
+        position: fixed;
+        min-width: 40px;
+        margin: 0;
+        padding: 0;
+        border: 0;
+        border-bottom: 2px dashed currentColor;
+        outline: none;
+        background: transparent;
+        font-weight: 700;
+        font-family: "Segoe UI Variable Display", "Segoe UI", system-ui, sans-serif;
+        line-height: 1;
+        text-shadow: 0 1px 8px rgb(0 0 0 / 0.45);
+        field-sizing: content;
       }
 
       [hidden] {
@@ -120,22 +121,6 @@
     </div>
     <span class="size" id="size" hidden></span>
 
-    <div class="panel" id="draw-panel" hidden>
-      <button data-tool="pen" aria-pressed="true" title="Caneta (P)">✎</button>
-      <button data-tool="arrow" title="Seta (A)">➚</button>
-      <button data-tool="rect" title="Retângulo (R)">▭</button>
-      <button data-tool="marker" title="Marca-texto (M)">▬</button>
-      <span class="sep"></span>
-      <button class="color" data-color="#ff3b30" aria-pressed="true" style="background: #ff3b30" title="Vermelho"></button>
-      <button class="color" data-color="#ffd60a" style="background: #ffd60a" title="Amarelo"></button>
-      <button class="color" data-color="#30d158" style="background: #30d158" title="Verde"></button>
-      <button class="color" data-color="#0a84ff" style="background: #0a84ff" title="Azul"></button>
-      <button class="color" data-color="#ffffff" style="background: #ffffff" title="Branco"></button>
-      <span class="sep"></span>
-      <button id="draw-undo" title="Desfazer (Ctrl+Z)">↶</button>
-      <button id="draw-clear" title="Apagar tudo (Delete)">Limpar</button>
-      <button id="draw-pass" title="Usar o computador sem fechar os desenhos (Ctrl+Shift+D)">Clicar através</button>
-      <button class="primary" id="draw-close" title="Fechar (Esc)">Fechar</button>
-    </div>
+    <input class="text-input" id="text-input" hidden maxlength="120" spellcheck="false" aria-label="Texto na tela" />
   </body>
 </html>

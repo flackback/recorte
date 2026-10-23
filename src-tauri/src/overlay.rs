@@ -38,14 +38,36 @@ pub async fn overlay_open(app: AppHandle, mode: String, monitor: usize) -> Resul
         .set_size(PhysicalSize::new((rect.right - rect.left) as u32, (rect.bottom - rect.top) as u32))
         .map_err(|error| error.to_string())?;
     window.show().map_err(|error| error.to_string())?;
-    let _ = window.set_focus();
+    if mode == "draw" {
+        // The drawing layer covers the whole monitor; the floating bar must stay above it to be
+        // clickable, even when the layer takes the focus to draw.
+        if let Some(recbar) = app.get_webview_window(RECBAR) {
+            keep_above(&window, &recbar);
+        }
+    } else {
+        let _ = window.set_focus();
+    }
     Ok(())
 }
 
-pub const RECBAR: &str = "recbar";
-const RECBAR_SIZE: (u32, u32) = (530, 52);
+/// Makes `owner` own `owned`: Windows always keeps an owned window above its owner. The owned
+/// window closes with the owner, which here happens only when the recording stops.
+fn keep_above(owner: &tauri::WebviewWindow, owned: &tauri::WebviewWindow) {
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::UI::WindowsAndMessaging::{SetWindowLongPtrW, GWLP_HWNDPARENT};
 
-/// The small floating bar shown while recording (time, pause, draw, stop), at the top of the
+    if let (Ok(owner), Ok(owned)) = (owner.hwnd(), owned.hwnd()) {
+        unsafe {
+            SetWindowLongPtrW(HWND(owned.0 as _), GWLP_HWNDPARENT, owner.0 as isize);
+        }
+    }
+}
+
+pub const RECBAR: &str = "recbar";
+/// Starting size; the bar then fits itself to its content (and to the drawing tray).
+const RECBAR_SIZE: (u32, u32) = (560, 52);
+
+/// The small floating bar shown while recording (time, pause, mark, drawing tools, stop), at the top of the
 /// recorded monitor. It is kept out of the recording.
 #[tauri::command]
 pub async fn recbar_open(app: AppHandle, monitor: usize) -> Result<(), String> {

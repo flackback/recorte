@@ -10,7 +10,7 @@ import { confirmDialog, onContextMenu, type MenuItem } from "./menu";
 import { resetTips, showTour } from "./tips";
 import { toast } from "./toast";
 import { Updates } from "./updates";
-import { joinPath, type Take } from "./types";
+import { joinPath, takeName, type Take } from "./types";
 
 type MonitorInfo = { index: number; name: string; width: number; height: number; primary: boolean; x: number; y: number; refreshRate: number };
 type WindowInfo = { hwnd: string; title: string; process: string; width: number; height: number };
@@ -39,6 +39,8 @@ const ui = {
   takes: $<HTMLUListElement>("takes"),
   openFolder: $<HTMLButtonElement>("open-folder"),
   empty: $("empty"),
+  emptyRecord: $<HTMLButtonElement>("empty-record"),
+  emptyOpen: $<HTMLButtonElement>("empty-open"),
   titlebarStatus: $("titlebar-status"),
   titlebarTime: $("titlebar-time"),
   minimize: $<HTMLButtonElement>("win-min"),
@@ -597,6 +599,7 @@ function markSelected() {
 
 async function refreshTakes() {
   takes = await invoke<Take[]>("list_takes");
+  ui.emptyOpen.hidden = takes.length === 0;
   ui.takes.replaceChildren(
     ...takes.map((take) => {
       const item = document.createElement("li");
@@ -627,10 +630,6 @@ async function refreshTakes() {
     ui.takes.append(item);
   }
   markSelected();
-}
-
-function takeName(take: Take) {
-  return take.title || take.sourceName || (take.sourceKind === "monitor" ? "Tela" : "Janela");
 }
 
 function takeMenu(button: HTMLButtonElement, take: Take): MenuItem[] {
@@ -735,6 +734,8 @@ const appWindow = getCurrentWindow();
 
 async function updateMaximizeButton() {
   const maximized = await appWindow.isMaximized();
+  // Square corners when the window fills the screen.
+  document.documentElement.classList.toggle("maximized", maximized);
   ui.maximize.querySelector("use")!.setAttribute("href", maximized ? "#i-win-restore" : "#i-win-max");
   ui.maximize.title = maximized ? "Restaurar" : "Maximizar";
   ui.maximize.setAttribute("aria-label", ui.maximize.title);
@@ -792,6 +793,10 @@ ui.takes.addEventListener("keydown", (event) => {
 void updateMaximizeButton();
 
 ui.record.addEventListener("click", toggleRecording);
+ui.emptyRecord.addEventListener("click", toggleRecording);
+ui.emptyOpen.addEventListener("click", () => {
+  if (takes[0]) void openTake(takes[0].id);
+});
 ui.refresh.addEventListener("click", () => refreshSources());
 ui.sourceKind.addEventListener("change", (event) => {
   picker.kind = (event.target as HTMLInputElement).value as typeof picker.kind;
@@ -835,23 +840,19 @@ void listen<string>("hotkey", async (event) => {
     if (recording) await toggleRecording();
   } else if (event.payload === "draw") {
     if (!recording) toast("Desenhar na tela funciona durante a gravação.");
-    else await toggleDrawing();
+    else await emit("draw-toggle", null);
   }
 });
 
-/** Opens the drawing overlay, or switches it between drawing and clicking through. */
-async function toggleDrawing() {
-  if (drawing) {
-    await emit("overlay-toggle", null);
-    return;
-  }
+/** Opens the drawing layer over the recorded monitor, once; the floating bar drives it after that. */
+async function openDrawing() {
+  if (drawing) return;
   drawing = true;
   await invoke("overlay_open", { mode: "draw", monitor: recordedMonitor }).catch((error) => {
     drawing = false;
     showWarnings([`Não foi possível abrir o desenho: ${error}`]);
   });
 }
-void listen("overlay-closed", () => (drawing = false));
 document.getElementById("tips-reset")!.addEventListener("click", () => {
   resetTips();
   document.getElementById("shortcuts-modal")!.hidden = true;
@@ -862,8 +863,8 @@ void listen<string>("recbar-action", async (event) => {
   if (event.payload === "pause" || event.payload === "resume") {
     await invoke("recording_pause", { paused: event.payload === "pause" }).catch((error) => toast(String(error)));
     void pollStatus();
-  } else if (event.payload === "draw") {
-    await toggleDrawing();
+  } else if (event.payload === "draw-open") {
+    await openDrawing();
   } else if (event.payload === "mark") {
     await markMoment();
   } else if (event.payload === "stop") {

@@ -18,7 +18,7 @@ export default defineConfig(() => ({
   },
   // Transcription loads this only inside a worker; bundling it up front avoids a full page reload
   // in development the first time it runs.
-  optimizeDeps: { include: ["@huggingface/transformers"] },
+  optimizeDeps: { include: ["@huggingface/transformers", "@tauri-apps/api/dpi"] },
   // 2. tauri expects a fixed port, fail if that port is not available
   server: {
     port: 1420,

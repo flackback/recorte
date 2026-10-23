@@ -54,4 +54,14 @@ export type KeyEvent = { t: number; n: string; m: string[] };
 /** A recognized word from `transcript.json`, times in ms on the take's timeline. */
 export type Word = { i: number; t0: number; t1: number; text: string };
 
+/**
+ * The name shown for a take: the title the user gave it, the recorded window's title, or the kind
+ * of capture. A monitor's own name ("22BN550Y") means nothing to people, so it is not used.
+ */
+export function takeName(take: Pick<Take, "title" | "sourceKind" | "sourceName" | "crop">) {
+  if (take.title) return take.title;
+  if (take.sourceKind === "window") return take.sourceName || "Janela";
+  return take.crop ? "Área da tela" : "Tela inteira";
+}
+
 export const joinPath = (dir: string, file: string) => `${dir}\\${file}`;

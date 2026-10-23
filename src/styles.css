@@ -6,6 +6,8 @@
   --surface-2: #ececf0;
   --surface-3: #e2e2e8;
   --border: #dcdce3;
+  --window-radius: 10px;
+  --window-edge: rgb(0 0 0 / 0.16);
   --text: #1c1c1e;
   --muted: #6e6e73;
   --faint: #a1a1a8;
@@ -47,6 +49,7 @@
     --surface-2: #26262a;
     --surface-3: #303035;
     --border: #2f2f35;
+    --window-edge: rgb(255 255 255 / 0.09);
     --text: #f2f2f4;
     --muted: #9c9ca5;
     --faint: #66666e;
@@ -79,6 +82,24 @@ body {
   color: var(--text);
   font: 13px/1.4 "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
   -webkit-font-smoothing: antialiased;
+}
+
+/* The window itself is transparent, so the app can round its corners (Windows 10 has no native
+   rounding for windows without a title bar). `contain: paint` makes fixed layers (splash, sheets,
+   menus) clip to the same shape. */
+html {
+  background: transparent;
+}
+
+body {
+  border: 1px solid var(--window-edge);
+  border-radius: var(--window-radius);
+  contain: paint;
+}
+
+html.maximized body {
+  border: 0;
+  border-radius: 0;
 }
 
 button,
@@ -841,6 +862,19 @@ input[type="range"]:focus-visible::-webkit-slider-thumb {
 
 .empty p {
   margin: 0;
+}
+
+.empty-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.empty .rec-mark {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: #fff;
 }
 
 .editor {
