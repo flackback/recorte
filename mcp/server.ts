@@ -14,6 +14,7 @@ import {
   defaultProject,
   isSplit,
   mergeCuts,
+  mergeRange,
   newId,
   newNote,
   NOTE_COLORS,
@@ -22,6 +23,7 @@ import {
   SPEEDS,
   STYLES,
   type BlurRegion,
+  type MediaKey,
   type Note,
   type Project,
   type Range,
@@ -57,6 +59,7 @@ Regras:
 - Trechos lentos (digitação, carregamento) podem ser acelerados com add_speed, sem cortar.
 - Textos, setas e destaques: add_note. Posição em frações (0 a 1) do quadro final.
 - Abertura e encerramento: set_title_cards.
+- Webcam ou som fora de sincronia, ou para tirar só a webcam ou só um som num trecho: set_media_track.
 - Marcas feitas durante a gravação (Alt+Shift+M) aparecem em get_take, campo markers.
 - Para tirar palavras (por exemplo "é", "hã", "tipo", repetições): chame get_transcript e depois cut_words com os índices.
 - Sem transcrição, chame transcribe antes.`;
@@ -186,7 +189,7 @@ tool(
 
 tool(
   "get_take",
-  "Mostra uma gravação e a edição completa dela (project.json): cortes, divisões (campo splits; em project.cuts têm start igual a end), palavras cortadas, zooms, lentes, desfoques, fundo, cursor, áudio e legendas, com os ids dos itens. Mostra também os estilos, fundos e proporções disponíveis.",
+  "Mostra uma gravação e a edição completa dela (project.json): cortes, divisões (campo splits; em project.cuts têm start igual a end), palavras cortadas, zooms, lentes, desfoques, fundo, cursor, áudio e legendas, com os ids dos itens. O campo project.media tem o deslocamento (shift, em ms) e os cortes próprios (cuts) da webcam, do som do sistema e do microfone. Mostra também os estilos, fundos e proporções disponíveis.",
   { take: takeArg },
   async ({ take: ref }) => {
     const take = await store.findTake(ref);
@@ -398,6 +401,48 @@ tool(
       // A new stretch replaces the ones it overlaps.
       project.cameras = [...project.cameras.filter((other) => other.end <= range.start || other.start >= range.end), { id: newId(), ...range, layout }].sort((a, b) => a.start - b.start);
       return `câmera ${layout} de ${seconds(range.start)} a ${seconds(range.end)}`;
+    }),
+);
+
+const MEDIA_NAMES: Record<MediaKey, string> = { webcam: "webcam", system: "som do sistema", mic: "microfone" };
+
+tool(
+  "set_media_track",
+  "Ajusta uma faixa gravada sem mexer na tela: a webcam (webcam), o som do sistema (system) ou o microfone (mic). shiftMs move a faixa no tempo para acertar o sincronismo: positivo toca depois, negativo toca antes, 0 volta ao original. cut tira só essa faixa nos trechos dados: a webcam some e o som fica mudo; a tela continua. restore tira esses cortes pelo id (de get_take, campo project.media); restoreAll tira todos. Os trechos que se tocam viram um só.",
+  {
+    take: takeArg,
+    track: z.enum(["webcam", "system", "mic"]).describe("Faixa: webcam, system (som do sistema) ou mic (microfone)."),
+    shiftMs: z.number().optional().describe("Deslocamento em ms. Positivo: a faixa toca depois. 0: sincronismo original."),
+    cut: z.array(z.object({ start: ms("Início do trecho"), end: ms("Fim do trecho") })).optional().describe("Trechos em que só esta faixa sai."),
+    restore: z.array(z.string()).optional().describe("Ids de cortes desta faixa a desfazer."),
+    restoreAll: z.boolean().optional().describe("true desfaz todos os cortes desta faixa."),
+  },
+  ({ take, track, shiftMs, cut, restore, restoreAll }) =>
+    edit(take, (project, { take: meta }) => {
+      const recorded = track === "webcam" ? Boolean(meta.webcam) : track === "mic" ? Boolean(meta.mic) : Boolean(meta.systemFile || meta.systemAudio);
+      if (!recorded) throw new Error(`Esta gravação não tem ${MEDIA_NAMES[track]}.`);
+      const media = project.media[track];
+      const done: string[] = [];
+      if (restoreAll) {
+        if (media.cuts.length) done.push(plural(media.cuts.length, "corte desfeito", "cortes desfeitos"));
+        media.cuts = [];
+      } else if (restore?.length) {
+        const missing = restore.filter((id) => !media.cuts.some((range) => range.id === id));
+        if (missing.length) throw new Error(`Cortes não encontrados nesta faixa: ${missing.join(", ")}.`);
+        media.cuts = media.cuts.filter((range) => !restore.includes(range.id));
+        done.push(plural(restore.length, "corte desfeito", "cortes desfeitos"));
+      }
+      for (const range of cut ?? []) media.cuts = mergeRange(media.cuts, span(meta, range.start, range.end)).ranges;
+      if (cut?.length) done.push(plural(cut.length, "trecho cortado", "trechos cortados"));
+      if (shiftMs !== undefined) {
+        // Older takes keep the system sound inside the video file; it plays with the screen.
+        if (track === "system" && !meta.systemFile && round(shiftMs) !== 0) throw new Error("Nesta gravação o som do sistema está dentro do vídeo e não pode ser movido. Ele ainda pode ser cortado.");
+        if (Math.abs(shiftMs) > meta.durationMs) throw new Error(`O deslocamento passa da duração da gravação (${meta.durationMs} ms).`);
+        media.shift = round(shiftMs);
+        done.push(media.shift ? `deslocado ${media.shift > 0 ? "+" : ""}${seconds(media.shift)}` : "sincronismo original");
+      }
+      if (!done.length) throw new Error("Informe shiftMs, cut, restore ou restoreAll.");
+      return `${MEDIA_NAMES[track]}: ${done.join(", ")}`;
     }),
 );
 

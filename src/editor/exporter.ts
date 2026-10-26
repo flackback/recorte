@@ -12,7 +12,7 @@ import { joinPath, type Take } from "../types";
 import { openAudio, type AudioSource } from "./audio-source";
 import { cardLength, frameState, outputMoment, overlayText, sceneSource, totalDuration, type CardView, type Scene } from "./composition";
 import { OverlayPainter } from "./overlay";
-import { outputSize, type Aspect } from "./project";
+import { defaultMedia, outputSize, type Aspect, type MediaEdit, type Range } from "./project";
 import { Renderer } from "./renderer";
 import { clickSound, keySounds } from "./sounds";
 import { readMp4, readSamples, urlSource, type ByteSource, type Mp4Track } from "./mp4";
@@ -190,6 +190,28 @@ async function openTrack(open: () => Promise<AudioSource | null>, name: string):
 
 type Mixer = { blocks: number; block(index: number): Promise<AudioBuffer> };
 
+/** Fade at the edges of a sound track's own cut, so silencing it doesn't click (ms). */
+const CUT_RAMP = 10;
+
+/** Silences `buffer`, which starts at take time `startMs`, inside `cuts`, ramping at their edges. */
+function silenceCuts(buffer: AudioBuffer, startMs: number, cuts: Range[]) {
+  const rate = buffer.sampleRate;
+  const endMs = startMs + (buffer.length / rate) * 1000;
+  for (const cut of cuts) {
+    if (cut.end <= startMs || cut.start >= endMs) continue;
+    const from = Math.max(0, Math.floor(((cut.start - startMs) / 1000) * rate));
+    const to = Math.min(buffer.length, Math.ceil(((cut.end - startMs) / 1000) * rate));
+    for (let channel = 0; channel < buffer.numberOfChannels; channel++) {
+      const data = buffer.getChannelData(channel);
+      for (let i = from; i < to; i++) {
+        const t = startMs + (i / rate) * 1000;
+        const k = Math.max(0, Math.min(1, (t - cut.start) / CUT_RAMP, (cut.end - t) / CUT_RAMP));
+        data[i] *= 1 - k;
+      }
+    }
+  }
+}
+
 /**
  * The output's sound track at 48 kHz stereo, a block at a time: every kept span of system audio
  * and microphone with their volumes, background music looped and faded out, and click and key
@@ -202,14 +224,16 @@ async function createMixer(scene: Scene): Promise<Mixer | null> {
   const offset = cardLength(project.cards.intro) / 1000;
   const total = totalDuration(scene) / 1000;
 
-  const tracks: { audio: AudioSource; volume: number }[] = [];
+  // Each sound track plays moved by its own shift and silent inside its own cuts.
+  const tracks: { audio: AudioSource; volume: number; edit: MediaEdit }[] = [];
+  const media = project.media ?? defaultMedia();
   if (project.audio.system > 0) {
     const audio = await openTrack(() => systemAudio(take), "o som do sistema");
-    if (audio) tracks.push({ audio, volume: project.audio.system });
+    if (audio) tracks.push({ audio, volume: project.audio.system, edit: media.system });
   }
   if (project.audio.mic > 0) {
     const audio = await openTrack(() => micAudio(take, project.audio.enhance), "o microfone");
-    if (audio) tracks.push({ audio, volume: project.audio.mic });
+    if (audio) tracks.push({ audio, volume: project.audio.mic, edit: media.mic });
   }
   // Music is a short file the user picked; it is decoded whole, once.
   let music: AudioBuffer | null = null;
@@ -244,7 +268,10 @@ async function createMixer(scene: Scene): Promise<Mixer | null> {
           const to = Math.min(end, spanEnd);
           if (to <= from) continue;
           const sourceStart = span.start + (from - spanStart) * 1000;
-          const buffer = await track.audio.read(sourceStart, sourceStart + (to - from) * 1000);
+          // The file's clock is `shift` behind the take's; reads past either end come back silent.
+          const fileStart = sourceStart - track.edit.shift;
+          const buffer = await track.audio.read(fileStart, fileStart + (to - from) * 1000);
+          silenceCuts(buffer, sourceStart, track.edit.cuts);
           const node = mixer.createBufferSource();
           node.buffer = buffer;
           node.connect(gain);
@@ -546,8 +573,13 @@ class FrameRenderer {
     this.screen = new FrameSource(screen.source, screen.track, first * 1000);
     if (take.webcam && project.webcam.visible) {
       const camera = await abortable(openVideo(fileUrl(take, take.webcam)), signal);
-      this.webcam = new FrameSource(camera.source, camera.track, Math.max(0, first - (take.webcamOffsetMs ?? 0)) * 1000);
+      this.webcam = new FrameSource(camera.source, camera.track, Math.max(0, first - this.webcamLag()) * 1000);
     }
+  }
+
+  /** How far the webcam's clock runs behind the take's: its recorded offset plus the user's shift. */
+  private webcamLag() {
+    return (this.scene.take.webcamOffsetMs ?? 0) + (this.scene.project.media?.webcam.shift ?? 0);
   }
 
   /** Draws the output frame for source time `t` (ms) into the canvas. */
@@ -556,7 +588,7 @@ class FrameRenderer {
     const screen = await abortable(this.screen!.frameAt(t * 1000), signal);
     let camera: VideoFrame | null = null;
     if (this.webcam) {
-      const cameraTime = Math.max(0, t - (scene.take.webcamOffsetMs ?? 0));
+      const cameraTime = Math.max(0, t - this.webcamLag());
       camera = await abortable(this.webcam.frameAt(cameraTime * 1000), signal);
     }
     if (this.overlay.paint(overlayText(scene, t), scene.project, card)) this.renderer!.setOverlay(this.overlay.canvas);

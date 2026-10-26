@@ -124,6 +124,32 @@ export const CAMERA_LAYOUTS: { id: CameraLayout; name: string }[] = [
   { id: "hidden", name: "Oculta" },
 ];
 
+/** Recorded tracks that can be moved in time and cut on their own, without touching the screen. */
+export type MediaKey = "webcam" | "system" | "mic";
+export const MEDIA_KEYS: MediaKey[] = ["webcam", "system", "mic"];
+/**
+ * How one recorded track sits against the screen: `shift` ms later (negative: earlier), and the
+ * stretches of the take where only that track is removed (the webcam hides, the sound goes silent).
+ */
+export type MediaEdit = { shift: number; cuts: Range[] };
+
+export const defaultMedia = (): Record<MediaKey, MediaEdit> => ({
+  webcam: { shift: 0, cuts: [] },
+  system: { shift: 0, cuts: [] },
+  mic: { shift: 0, cuts: [] },
+});
+
+/** Adds a stretch to a track's own cuts, merged with the ones it touches (the first keeps its id). */
+export function mergeRange(ranges: Range[], added: { start: number; end: number }): { ranges: Range[]; id: string } {
+  const touching = ranges.filter((range) => range.start <= added.end && range.end >= added.start);
+  const merged = {
+    id: touching[0]?.id ?? newId(),
+    start: Math.min(added.start, ...touching.map((range) => range.start)),
+    end: Math.max(added.end, ...touching.map((range) => range.end)),
+  };
+  return { ranges: [...ranges.filter((range) => !touching.includes(range)), merged].sort((a, b) => a.start - b.start), id: merged.id };
+}
+
 /** Everything the user changed about a take, saved as `project.json` next to it. */
 export type Project = {
   version: 2;
@@ -183,6 +209,8 @@ export type Project = {
   };
   /** Stretches where the webcam leaves its bubble. */
   cameras: CameraRange[];
+  /** Sync and own cuts of the webcam and of each sound track. */
+  media: Record<MediaKey, MediaEdit>;
   audio: {
     system: number;
     mic: number;
@@ -347,6 +375,7 @@ export function defaultProject(take: Take, events: CursorEvent[]): Project {
     keys: { visible: Boolean(take.keys), mode: "shortcuts" },
     webcam: { visible: Boolean(take.webcam), size: 0.22, corner: "br", shape: "circle", position: null, mirror: true, border: 0.012, borderColor: "#ffffff", shadow: 0.35, zoom: 1 },
     cameras: [],
+    media: defaultMedia(),
     audio: { system: 1, mic: 1, music: null, musicVolume: 0.25, clickSound: false, clickTone: "tick", keySound: false, enhance: false },
     captions: { visible: false, size: 1, position: "bottom" },
     zoom: { defaultScale, segments: autoZooms(events, take.durationMs, defaultScale) },
@@ -358,6 +387,18 @@ export function defaultProject(take: Take, events: CursorEvent[]): Project {
       outro: { enabled: false, title: "Obrigado por assistir", subtitle: "", durationMs: 2500 },
     },
   };
+}
+
+/** Older projects have no `media`: every track in sync, nothing cut on its own. */
+function normalizeMedia(raw: unknown): Record<MediaKey, MediaEdit> {
+  const media = defaultMedia();
+  if (!raw || typeof raw !== "object") return media;
+  for (const key of MEDIA_KEYS) {
+    const edit = (raw as Partial<Record<MediaKey, Partial<MediaEdit>>>)[key];
+    if (!edit || typeof edit !== "object") continue;
+    media[key] = { shift: Number.isFinite(edit.shift) ? edit.shift! : 0, cuts: Array.isArray(edit.cuts) ? edit.cuts : [] };
+  }
+  return media;
 }
 
 /** Fills in anything an older or hand-edited `project.json` lacks. */
@@ -391,6 +432,7 @@ export function normalizeProject(raw: unknown, fallback: Project): Project {
     },
     blurs: list(value.blurs, []),
     cameras: list(value.cameras, []),
+    media: normalizeMedia(value.media),
     speed: list(value.speed, []),
     notes: list(value.notes, []),
     cards: {

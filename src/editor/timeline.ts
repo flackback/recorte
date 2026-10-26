@@ -1,8 +1,17 @@
-import type { Range } from "./project";
+import type { MediaKey, Range } from "./project";
 import type { Span } from "./timemap";
 
 export type TrackKey = "cuts" | "speed" | "zoom" | "notes" | "blurs" | "camera";
-export type Selection = { track: TrackKey; id: string } | null;
+/** The cuts drawn on a media lane, selectable and editable like a track's items. */
+export type LaneCutKey = `${MediaKey}Cuts`;
+/** Anything with items that can be selected: an edit track or a lane's own cuts. */
+export type ItemKey = TrackKey | LaneCutKey;
+export type Selection = { track: ItemKey; id: string } | null;
+
+export const laneCutKey = (key: MediaKey): LaneCutKey => `${key}Cuts`;
+/** The media lane whose cuts `key` names, or null for an edit track. */
+export const laneOfCut = (key: ItemKey): MediaKey | null =>
+  key === "webcamCuts" ? "webcam" : key === "systemCuts" ? "system" : key === "micCuts" ? "mic" : null;
 
 export type Track = {
   key: TrackKey;
@@ -49,6 +58,14 @@ export type MediaLane = {
   wave?: Float32Array | null;
   /** The source plays silent: drawn faded, with a hint. */
   muted?: boolean;
+  /** Set on lanes that can be moved and cut on their own. */
+  key?: MediaKey;
+  /** How far the lane is moved, in ms (positive plays later); its content is drawn moved. */
+  shift?: number;
+  /** Stretches of the take where only this lane is removed. */
+  cuts?: Range[];
+  /** The lane can be cut but not moved (its sound plays from the screen's own file). */
+  fixed?: boolean;
 };
 
 export type TimelineEvents = {
@@ -59,9 +76,18 @@ export type TimelineEvents = {
   /** A stretch was selected by dragging over the clip (null clears it). */
   range(range: Span | null): void;
   add(track: TrackKey, time: number): void;
+  /** A media lane was dragged to `shift` ms; `done` once the drag ends. */
+  shiftLane(key: MediaKey, shift: number, done: boolean): void;
+  /** A lane's own cuts were moved or resized. */
+  laneCuts(key: MediaKey, cuts: Range[]): void;
   /** A drag finished; a good moment to save. */
   commit(): void;
 };
+
+/** "+0,25 s" or "−1,10 s": how far a lane is moved. */
+export function shiftLabel(shift: number) {
+  return `${shift < 0 ? "−" : "+"}${(Math.abs(shift) / 1000).toFixed(2).replace(".", ",")} s`;
+}
 
 const LEFT = 88;
 const RIGHT = 16;
@@ -79,13 +105,21 @@ const HANDLE = 9;
 const EDGE = 7;
 const MIN_TRIM = 500;
 const MIN_ITEM = 200;
+/** A lane moves only once the pointer travels this far (px); less is a click that seeks. */
+const LANE_DRAG = 4;
+/** A moved lane snaps back to its original sync within this (ms). */
+const SNAP_ZERO = 80;
+/** The grabbed point of a lane snaps to the playhead within this (px). */
+const SNAP_PLAYHEAD = 6;
 
 type Drag =
   | { kind: "seek" }
   | { kind: "range"; anchor: number; x0: number; moved: boolean }
   | { kind: "trim"; side: "start" | "end" }
-  | { kind: "move"; track: TrackKey; id: string; offset: number; length: number }
-  | { kind: "edge"; track: TrackKey; id: string; side: "start" | "end" };
+  | { kind: "move"; track: ItemKey; id: string; offset: number; length: number }
+  | { kind: "edge"; track: ItemKey; id: string; side: "start" | "end" }
+  /** Moving a media lane in time: `time0` is the take time grabbed, `x` the pointer now. */
+  | { kind: "lane"; key: MediaKey; x0: number; x: number; time0: number; shift0: number; shift: number; moved: boolean };
 
 /** Reads theme colors; one style lookup serves every color of a draw. */
 const palette = () => {
@@ -134,6 +168,21 @@ function withAlpha(hex: string, alpha: number) {
   if (value.length !== 6) return hex;
   const n = parseInt(value, 16);
   return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${alpha})`;
+}
+
+/** A removed stretch: dimmed, with diagonal hatching. */
+function hatch(context: CanvasRenderingContext2D, x0: number, x1: number, top: number, height: number, color: string) {
+  context.fillStyle = "rgba(0, 0, 0, 0.6)";
+  context.fillRect(x0, top, x1 - x0, height);
+  context.strokeStyle = color;
+  context.lineWidth = 1.5;
+  context.beginPath();
+  for (let x = x0 - height; x < x1; x += 8) {
+    context.moveTo(Math.max(x, x0), top + height - Math.max(0, x0 - x));
+    context.lineTo(Math.min(x + height, x1), top + Math.max(0, x + height - x1));
+  }
+  context.stroke();
+  context.lineWidth = 1;
 }
 
 /** The timeline below the preview: ruler, clip with thumbnails and waveform, and edit tracks. */
@@ -212,7 +261,12 @@ export class Timeline {
 
   private toTime(x: number) {
     const duration = this.state?.duration || 1;
-    return Math.min(duration, Math.max(0, this.view.start + ((x - LEFT) / (this.width - LEFT - RIGHT)) * this.span));
+    return Math.min(duration, Math.max(0, this.rawTime(x)));
+  }
+
+  /** Like `toTime`, without keeping the result inside the take. */
+  private rawTime(x: number) {
+    return this.view.start + ((x - LEFT) / (this.width - LEFT - RIGHT)) * this.span;
   }
 
   private trackHeight(index: number) {
@@ -291,6 +345,7 @@ export class Timeline {
     | { kind: "range"; time: number }
     | { kind: "item"; track: TrackKey; id: string; time: number }
     | { kind: "track"; track: TrackKey; time: number }
+    | { kind: "lane"; key: MediaKey; time: number; cut?: string }
     | { kind: "clip"; time: number }
     | null {
     const state = this.state;
@@ -298,7 +353,13 @@ export class Timeline {
     const time = this.toTime(x);
     if (state.range && time >= state.range.start && time <= state.range.end && y >= CLIP.top && y <= CLIP.top + CLIP.height) return { kind: "range", time };
     const hit = this.hit(x, y);
-    if (hit && (hit.kind === "move" || hit.kind === "edge")) return { kind: "item", track: hit.track, id: hit.id, time };
+    if (hit && (hit.kind === "move" || hit.kind === "edge")) {
+      const lane = laneOfCut(hit.track);
+      if (lane) return { kind: "lane", key: lane, time, cut: hit.id };
+      return { kind: "item", track: hit.track as TrackKey, id: hit.id, time };
+    }
+    const key = this.media[this.mediaAt(y)]?.key;
+    if (key) return { kind: "lane", key, time };
     const index = this.trackAt(y);
     if (index >= 0) return { kind: "track", track: state.tracks[index].key, time };
     return { kind: "clip", time };
@@ -313,31 +374,46 @@ export class Timeline {
       // Click to go there; drag to select a stretch.
       return { kind: "range", anchor: this.toTime(x), x0: x, moved: false };
     }
+    const laneIndex = this.mediaAt(y);
+    if (laneIndex >= 0) {
+      const lane = this.media[laneIndex];
+      // A lane without a key can't be edited: clicking it goes there, like the ruler.
+      if (!lane.key) return { kind: "seek" };
+      // Its own cuts come first; the rest of the lane moves it in time (a click still seeks).
+      const cut = this.itemHit(laneCutKey(lane.key), lane.cuts ?? [], x);
+      if (cut) return cut;
+      if (lane.fixed) return { kind: "seek" };
+      const shift = lane.shift ?? 0;
+      return { kind: "lane", key: lane.key, x0: x, x, time0: this.rawTime(x), shift0: shift, shift, moved: false };
+    }
     const index = this.trackAt(y);
     if (index >= 0) {
       const track = state.tracks[index];
-      const selectedId = state.selected?.track === track.key ? state.selected.id : null;
-      // Selected item first, so overlapping items stay reachable; only the row under the pointer.
-      const ordered = [...track.items]
-        .filter((item) => {
-          const box = this.itemBox(index, item);
-          return y >= box.top - 2 && y <= box.top + box.height + 2;
-        })
-        .sort((a, b) => Number(b.id === selectedId) - Number(a.id === selectedId));
-      for (const item of ordered) {
-        const start = this.toX(item.start);
-        const end = this.toX(item.end);
-        if (x < start - EDGE || x > end + EDGE) continue;
-        // A split has no length to resize: its handle only moves.
-        if (item.end <= item.start) return { kind: "move", track: track.key, id: item.id, offset: this.toTime(x) - item.start, length: 0 };
-        if (Math.abs(x - start) <= EDGE) return { kind: "edge", track: track.key, id: item.id, side: "start" };
-        if (Math.abs(x - end) <= EDGE) return { kind: "edge", track: track.key, id: item.id, side: "end" };
-        if (x >= start && x <= end) return { kind: "move", track: track.key, id: item.id, offset: this.toTime(x) - item.start, length: item.end - item.start };
-      }
-      return null;
+      // Only the row under the pointer.
+      return this.itemHit(track.key, track.items.filter((item) => {
+        const box = this.itemBox(index, item);
+        return y >= box.top - 2 && y <= box.top + box.height + 2;
+      }), x);
     }
-    // Media lanes can't be edited: clicking one goes there, like the ruler.
-    return y < CLIP.top || this.mediaAt(y) >= 0 ? { kind: "seek" } : null;
+    return y < CLIP.top ? { kind: "seek" } : null;
+  }
+
+  /** The item edge or body under `x` among `items`, the selected one first so overlaps stay reachable. */
+  private itemHit(track: ItemKey, items: Range[], x: number): Drag | null {
+    const selected = this.state?.selected;
+    const selectedId = selected?.track === track ? selected.id : null;
+    const ordered = [...items].sort((a, b) => Number(b.id === selectedId) - Number(a.id === selectedId));
+    for (const item of ordered) {
+      const start = this.toX(item.start);
+      const end = this.toX(item.end);
+      if (x < start - EDGE || x > end + EDGE) continue;
+      // A split has no length to resize: its handle only moves.
+      if (item.end <= item.start) return { kind: "move", track, id: item.id, offset: this.toTime(x) - item.start, length: 0 };
+      if (Math.abs(x - start) <= EDGE) return { kind: "edge", track, id: item.id, side: "start" };
+      if (Math.abs(x - end) <= EDGE) return { kind: "edge", track, id: item.id, side: "end" };
+      if (x >= start && x <= end) return { kind: "move", track, id: item.id, offset: this.toTime(x) - item.start, length: item.end - item.start };
+    }
+    return null;
   }
 
   private pointerDown(event: PointerEvent) {
@@ -361,13 +437,21 @@ export class Timeline {
     }
     const hit = this.hit(event.offsetX, event.offsetY);
     this.canvas.style.cursor =
-      hit?.kind === "trim" || hit?.kind === "edge" ? "ew-resize" : hit?.kind === "move" ? "grab" : hit?.kind === "range" ? "text" : hit ? "pointer" : "default";
+      hit?.kind === "trim" || hit?.kind === "edge" ? "ew-resize" : hit?.kind === "move" || hit?.kind === "lane" ? "grab" : hit?.kind === "range" ? "text" : hit ? "pointer" : "default";
   }
 
   private pointerUp(event: PointerEvent) {
-    if (!this.drag) return;
+    const drag = this.drag;
+    if (!drag) return;
     this.drag = null;
     if (this.canvas.hasPointerCapture(event.pointerId)) this.canvas.releasePointerCapture(event.pointerId);
+    if (drag.kind === "lane" && this.state) {
+      // The badge goes with the drag.
+      this.layerDirty = true;
+      if (drag.moved) this.events.shiftLane(drag.key, drag.shift, true);
+      else this.events.seek(Math.min(this.state.trim.end, Math.max(this.state.trim.start, this.toTime(drag.x0))));
+      this.draw();
+    }
     this.events.commit();
   }
 
@@ -395,10 +479,28 @@ export class Timeline {
       else trim.end = Math.min(state.duration, Math.max(t, trim.start + MIN_TRIM));
       this.events.trim(trim);
       this.events.seek(drag.side === "start" ? trim.start : trim.end);
+    } else if (drag.kind === "lane") {
+      drag.x = x;
+      if (!drag.moved && Math.abs(x - drag.x0) < LANE_DRAG) return;
+      drag.moved = true;
+      // The grabbed moment follows the pointer; it lands on the playhead when close to it.
+      const at = Math.abs(x - this.toX(state.time)) <= SNAP_PLAYHEAD ? state.time : this.rawTime(x);
+      let shift = drag.shift0 + at - drag.time0;
+      if (Math.abs(shift) <= SNAP_ZERO) shift = 0;
+      shift = Math.round(Math.max(-state.duration, Math.min(state.duration, shift)));
+      if (shift === drag.shift) {
+        // Nothing moved, but the badge follows the pointer.
+        this.layerDirty = true;
+        this.draw();
+        return;
+      }
+      drag.shift = shift;
+      this.events.shiftLane(drag.key, shift, false);
     } else {
-      const track = state.tracks.find((candidate) => candidate.key === drag.track);
-      if (!track) return;
-      const items = track.items.map((item) => {
+      const lane = laneOfCut(drag.track);
+      const current = lane ? this.media.find((candidate) => candidate.key === lane)?.cuts : state.tracks.find((candidate) => candidate.key === drag.track)?.items;
+      if (!current) return;
+      const items = current.map((item) => {
         if (item.id !== drag.id) return item;
         if (drag.kind === "move") {
           const start = Math.min(Math.max(0, t - drag.offset), state.duration - drag.length);
@@ -407,7 +509,8 @@ export class Timeline {
         if (drag.side === "start") return { ...item, start: Math.max(0, Math.min(t, item.end - MIN_ITEM)) };
         return { ...item, end: Math.min(state.duration, Math.max(t, item.start + MIN_ITEM)) };
       });
-      this.events.change(track.key, items);
+      if (lane) this.events.laneCuts(lane, items);
+      else this.events.change(drag.track as TrackKey, items);
       if (drag.kind === "edge") this.events.seek(drag.side === "start" ? items.find((i) => i.id === drag.id)!.start : items.find((i) => i.id === drag.id)!.end);
     }
   }
@@ -565,19 +668,7 @@ export class Timeline {
     const cutTrack = state.tracks.find((track) => track.key === "cuts");
     for (const cut of [...(cutTrack?.items ?? []), ...state.wordCuts]) {
       if (cut.end <= cut.start) continue;
-      const x0 = this.toX(cut.start);
-      const x1 = this.toX(cut.end);
-      context.fillStyle = "rgba(0, 0, 0, 0.6)";
-      context.fillRect(x0, CLIP.top, x1 - x0, CLIP.height);
-      context.strokeStyle = withAlpha(cutColor, 0.7);
-      context.lineWidth = 1.5;
-      context.beginPath();
-      for (let x = x0 - CLIP.height; x < x1; x += 8) {
-        context.moveTo(Math.max(x, x0), CLIP.top + CLIP.height - Math.max(0, x0 - x));
-        context.lineTo(Math.min(x + CLIP.height, x1), CLIP.top + Math.max(0, x + CLIP.height - x1));
-      }
-      context.stroke();
-      context.lineWidth = 1;
+      hatch(context, this.toX(cut.start), this.toX(cut.end), CLIP.top, CLIP.height, withAlpha(cutColor, 0.7));
     }
     // Splits: a white line across the clip, outlined so it shows on light frames too.
     for (const split of cutTrack?.items ?? []) {
@@ -647,8 +738,9 @@ export class Timeline {
       context.fillStyle = withAlpha(surface, 0.6) || surface;
       context.fillRect(clipLeft, top, clipRight - clipLeft, laneHeight);
       const frames = lane.frames ?? [];
+      const shift = lane.shift ?? 0;
       if (lane.kind === "frames" && frames.length && frames[0].image.width && frames[0].image.height) {
-        const offset = lane.offset ?? 0;
+        const offset = (lane.offset ?? 0) + shift;
         const span = lane.span ?? { start: frames[0].t, end: frames[frames.length - 1].t };
         const left = Math.max(clipLeft, this.toX(span.start + offset));
         const right = Math.min(clipRight, this.toX(span.end + offset));
@@ -668,7 +760,10 @@ export class Timeline {
         const middle = top + laneHeight / 2;
         context.fillStyle = withAlpha(lane.color ?? accent, lane.muted ? 0.3 : 0.9);
         for (let x = Math.max(clipLeft, LEFT); x < Math.min(clipRight, width); x += 2) {
-          const level = wave[Math.floor((this.toTime(x) / state.duration) * (wave.length - 1))] ?? 0;
+          // The waveform is on the source's own clock; a moved lane draws it moved.
+          const at = this.rawTime(x) - shift;
+          if (at < 0 || at > state.duration) continue;
+          const level = wave[Math.floor((at / state.duration) * (wave.length - 1))] ?? 0;
           const h = Math.max(1, level * (laneHeight - 6));
           context.fillRect(x, middle - h / 2, 1.5, h);
         }
@@ -678,17 +773,41 @@ export class Timeline {
       context.fillRect(clipLeft, top, keepLeft - clipLeft, laneHeight);
       context.fillRect(keepRight, top, clipRight - keepRight, laneHeight);
       for (const cut of cuts) context.fillRect(this.toX(cut.start), top, this.toX(cut.end) - this.toX(cut.start), laneHeight);
+      // The lane's own cuts: hatched gaps, outlined when selected.
+      const cutKey = lane.key ? laneCutKey(lane.key) : null;
+      for (const cut of lane.cuts ?? []) {
+        const x0 = this.toX(cut.start);
+        const x1 = Math.max(x0 + 2, this.toX(cut.end));
+        hatch(context, x0, x1, top, laneHeight, withAlpha(lane.color ?? cutColor, 0.8));
+        if (state.selected?.track === cutKey && state.selected.id === cut.id) {
+          context.strokeStyle = text;
+          context.lineWidth = 1.5;
+          context.strokeRect(x0 + 0.75, top + 0.75, x1 - x0 - 1.5, laneHeight - 1.5);
+          context.lineWidth = 1;
+        }
+      }
       context.restore();
-      if (lane.muted) {
-        const x = Math.max(clipLeft, LEFT) + 8;
-        const hint = "mudo";
-        const hintWidth = context.measureText(hint).width + 10;
-        context.fillStyle = surface;
+      const pill = (label: string, x: number, fill: string, ink: string) => {
+        const pillWidth = context.measureText(label).width + 10;
+        context.fillStyle = fill;
         context.beginPath();
-        context.roundRect(x, top + laneHeight / 2 - 7, hintWidth, 14, 7);
+        context.roundRect(x, top + laneHeight / 2 - 7, pillWidth, 14, 7);
         context.fill();
-        context.fillStyle = muted;
-        context.fillText(hint, x + 5, top + laneHeight / 2);
+        context.fillStyle = ink;
+        context.fillText(label, x + 5, top + laneHeight / 2);
+        return pillWidth;
+      };
+      let hintRight = Math.max(clipLeft, LEFT) + 8;
+      if (lane.muted) hintRight += pill("mudo", hintRight, surface, muted) + 6;
+      const drag = this.drag;
+      if (drag?.kind === "lane" && drag.key === lane.key && drag.moved) {
+        // While dragging: how far, next to the pointer.
+        const label = shiftLabel(drag.shift);
+        const pillWidth = context.measureText(label).width + 10;
+        pill(label, Math.min(width - RIGHT - pillWidth, Math.max(LEFT, drag.x + 10)), accent, "#ffffff");
+      } else if (shift) {
+        // A moved lane says so, so an accidental drag doesn't go unnoticed.
+        pill(shiftLabel(shift), hintRight, surface, text);
       }
     });
 

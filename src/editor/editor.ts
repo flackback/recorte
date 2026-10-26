@@ -24,6 +24,7 @@ import {
   insertRange,
   isSplit,
   mergeCuts,
+  mergeRange,
   newId,
   newNote,
   NOTE_COLORS,
@@ -41,6 +42,7 @@ import {
   type Corner,
   type Cut,
   type Frame,
+  type MediaKey,
   type TransitionKind,
   type Note,
   type NoteKind,
@@ -54,7 +56,7 @@ import { DirectEdit, type DirectTarget } from "./direct-edit";
 import { RectEditor } from "./rect-editor";
 import { cursorPreview, Renderer } from "./renderer";
 import { SoundPreview } from "./sounds";
-import { Timeline, type MediaLane, type Selection, type Track, type TrackKey } from "./timeline";
+import { laneCutKey, laneOfCut, shiftLabel, Timeline, type ItemKey, type MediaLane, type Selection, type Track, type TrackKey } from "./timeline";
 import type { Span } from "./timemap";
 import { LANGUAGES, preferredLanguage, rememberLanguage, SAMPLE_RATE, speech, transcribe } from "./transcribe";
 import { fillerWords, findSilences } from "./cleanup";
@@ -65,6 +67,35 @@ const UNDO_LIMIT = 100;
 /** Default lengths of items added at the playhead, in ms. */
 const LENGTHS: Record<TrackKey, number> = { cuts: 1000, speed: 3000, zoom: 2000, notes: 3000, blurs: 3000, camera: 4000 };
 const NOTE_NAMES: Record<NoteKind, string> = { text: "Texto", arrow: "Seta", box: "Destaque" };
+/** Words for cutting a media lane on its own: the webcam hides, a sound goes silent. */
+const LANE_WORDS: Record<MediaKey, { here: string; range: string; done: string; title: string; restored: string; icon: string }> = {
+  webcam: {
+    here: "Cortar a webcam aqui",
+    range: "Cortar só a webcam neste trecho",
+    done: "Webcam cortada neste trecho",
+    title: "Webcam cortada",
+    restored: "Webcam restaurada neste trecho",
+    icon: "camera",
+  },
+  system: {
+    here: "Silenciar o som do sistema aqui",
+    range: "Silenciar só o som do sistema neste trecho",
+    done: "Som do sistema silenciado neste trecho",
+    title: "Som do sistema silenciado",
+    restored: "Som do sistema restaurado neste trecho",
+    icon: "audio",
+  },
+  mic: {
+    here: "Silenciar o microfone aqui",
+    range: "Silenciar só o microfone neste trecho",
+    done: "Microfone silenciado neste trecho",
+    title: "Microfone silenciado",
+    restored: "Microfone restaurado neste trecho",
+    icon: "mic",
+  },
+};
+/** Length of a lane cut added at a point, in ms. */
+const LANE_CUT = 1000;
 /** Rate of a new sped-up stretch. */
 const DEFAULT_SPEED = 2;
 const speedLabel = (rate: number) => `${String(rate).replace(".", ",")}×`;
@@ -327,6 +358,8 @@ export class Editor {
       select: (selection) => this.select(selection),
       range: (range) => this.setRange(range),
       add: (track, time) => this.addAt(track, time),
+      shiftLane: (key, shift, done) => this.shiftLane(key, shift, done),
+      laneCuts: (key, cuts) => this.change((project) => (project.media[key].cuts = cuts), false),
       commit: () => {
         // A split dragged onto or into a cut joins it once the drag ends.
         const cuts = this.scene?.project.cuts;
@@ -563,8 +596,10 @@ export class Editor {
     if (save) this.save();
   }
 
-  private setTrack(project: Project, track: TrackKey, items: Range[]) {
-    if (track === "cuts") project.cuts = items;
+  private setTrack(project: Project, track: ItemKey, items: Range[]) {
+    const lane = laneOfCut(track);
+    if (lane) project.media[lane].cuts = items;
+    else if (track === "cuts") project.cuts = items;
     else if (track === "speed") project.speed = items as SpeedRange[];
     else if (track === "notes") project.notes = items as Note[];
     else if (track === "zoom") project.zoom.segments = items as ZoomSegment[];
@@ -572,7 +607,9 @@ export class Editor {
     else project.blurs = items as BlurRegion[];
   }
 
-  private trackItems(project: Project, track: TrackKey): Range[] {
+  private trackItems(project: Project, track: ItemKey): Range[] {
+    const lane = laneOfCut(track);
+    if (lane) return project.media[lane].cuts;
     if (track === "notes") return project.notes;
     if (track === "camera") return project.cameras;
     return track === "cuts" ? project.cuts : track === "speed" ? project.speed : track === "zoom" ? project.zoom.segments : project.blurs;
@@ -593,6 +630,8 @@ export class Editor {
     this.renderTranscript();
     this.loadMusic();
     this.loadMic();
+    // Undo may move a lane back; the companions follow.
+    this.syncCompanions(false);
     void this.loadBackground();
     if (write) this.writeProject();
     else this.updateUndoButtons();
@@ -840,6 +879,10 @@ export class Editor {
       { label: "Acelerar este trecho", icon: "speed", shortcut: "S", action: () => this.useTool("speed") },
       { label: "Texto neste trecho", icon: "text", shortcut: "T", action: () => this.useTool("notes") },
       { label: "Desfocar uma área neste trecho", icon: "blur", shortcut: "B", action: () => this.useTool("blurs") },
+      ...this.laneKeys().flatMap((key, index): MenuItem[] => [
+        ...(index === 0 ? ["separator" as const] : []),
+        { label: LANE_WORDS[key].range, icon: LANE_WORDS[key].icon, action: () => this.cutLane(key, range) },
+      ]),
       "separator",
       { label: "Reproduzir o trecho", icon: "play", action: () => { this.seek(range.start); if (this.ui.video.paused) this.togglePlay(); } },
       { label: "Tirar a seleção", icon: "close", shortcut: "Esc", action: () => this.setRange(null) },
@@ -853,13 +896,20 @@ export class Editor {
     const removed = this.selectedKind(selection);
     this.change((project) => this.setTrack(project, selection.track, this.trackItems(project, selection.track).filter((item) => item.id !== selection.id)));
     this.flushSave();
-    const names = { camera: "A webcam voltou à bolha", cut: "Corte removido", split: "Divisão removida", zoom: "Zoom removido", lens: "Lente removida", blur: "Desfoque removido", speed: "Trecho voltou à velocidade normal", text: "Texto removido", arrow: "Seta removida", box: "Destaque removido" };
+    const names = {
+      webcamCut: LANE_WORDS.webcam.restored,
+      systemCut: LANE_WORDS.system.restored,
+      micCut: LANE_WORDS.mic.restored,
+      camera: "A webcam voltou à bolha",
+      cut: "Corte removido", split: "Divisão removida", zoom: "Zoom removido", lens: "Lente removida", blur: "Desfoque removido", speed: "Trecho voltou à velocidade normal", text: "Texto removido", arrow: "Seta removida", box: "Destaque removido" };
     toast(names[removed], { label: "Desfazer", run: () => this.undo() });
   }
 
-  /** The kind of a selected item, for labels: cut, split, speed, zoom, lens, blur or a note kind. */
-  private selectedKind(selection: Selection): "cut" | "split" | "speed" | "zoom" | "lens" | "blur" | "camera" | NoteKind {
+  /** The kind of a selected item, for labels: cut, split, speed, zoom, lens, blur, a note kind or a lane cut. */
+  private selectedKind(selection: Selection): "cut" | "split" | "speed" | "zoom" | "lens" | "blur" | "camera" | NoteKind | `${MediaKey}Cut` {
     if (!selection) return "cut";
+    const lane = laneOfCut(selection.track);
+    if (lane) return `${lane}Cut`;
     if (selection.track === "camera") return "camera";
     if (selection.track === "cuts") {
       const cut = this.scene?.project.cuts.find((candidate) => candidate.id === selection.id);
@@ -889,6 +939,7 @@ export class Editor {
       if (at.kind === "range") return this.rangeMenu();
       if (at.kind === "item") return this.itemMenu(at.track, at.id);
       if (at.kind === "track") return this.trackMenu(at.track, at.time);
+      if (at.kind === "lane") return this.laneMenu(at.key, at.time, at.cut);
       return this.clipMenu(at.time);
     });
     onContextMenu(this.ui.canvas, () => (this.scene && !this.rectEditor.isOpen ? this.previewMenu() : null));
@@ -1028,6 +1079,76 @@ export class Editor {
       { label: "Cortar um trecho aqui", icon: "cut", shortcut: "X", action: () => this.addAt("cuts", time) },
       { label: "Adicionar zoom aqui", icon: "zoom", shortcut: "Z", action: () => this.addAt("zoom", time) },
     ];
+  }
+
+  /** The media lanes this take has, in timeline order. */
+  private laneKeys(): MediaKey[] {
+    const take = this.scene?.take;
+    if (!take) return [];
+    const keys: MediaKey[] = [];
+    if (take.webcam) keys.push("webcam");
+    if (take.systemFile || take.systemAudio) keys.push("system");
+    if (take.mic) keys.push("mic");
+    return keys;
+  }
+
+  private laneMenu(key: MediaKey, time: number, cutId?: string): MenuItem[] {
+    const scene = this.scene!;
+    const edit = scene.project.media[key];
+    const words = LANE_WORDS[key];
+    const cut = cutId ? edit.cuts.find((candidate) => candidate.id === cutId) : undefined;
+    const items: MenuItem[] = [];
+    if (cut) {
+      this.select({ track: laneCutKey(key), id: cut.id });
+      items.push(
+        { label: "Ir para o início", icon: "play", action: () => this.seek(cut.start) },
+        { label: "Ir para o fim", icon: "play", action: () => this.seek(Math.max(cut.start, cut.end - 1)) },
+        "separator",
+        { label: "Restaurar este trecho", icon: "undo", shortcut: "Delete", action: () => this.deleteSelected() },
+      );
+    } else {
+      // The dragged stretch if there is one, otherwise a second around the point.
+      const range = this.range ?? { start: time - LANE_CUT / 2, end: time + LANE_CUT / 2 };
+      items.push({ label: words.here, icon: words.icon, danger: true, action: () => this.cutLane(key, range) });
+    }
+    if (edit.shift) {
+      items.push("separator", {
+        label: `Voltar ao sincronismo original (${shiftLabel(edit.shift)})`,
+        icon: "undo",
+        action: () => {
+          this.shiftLane(key, 0, true);
+          toast("Sincronismo original restaurado", { label: "Desfazer", run: () => this.undo() });
+        },
+      });
+    }
+    items.push("separator", { label: "Ir para este ponto", icon: "play", action: () => this.seek(time) });
+    return items;
+  }
+
+  /** Removes only one media track over `range`: the webcam hides, a sound goes silent. */
+  private cutLane(key: MediaKey, range: { start: number; end: number }) {
+    const scene = this.scene;
+    if (!scene) return;
+    const start = Math.max(0, Math.round(range.start));
+    const end = Math.min(scene.take.durationMs, Math.round(range.end));
+    if (end - start < 50) return;
+    let id = "";
+    this.change((p) => {
+      const result = mergeRange(p.media[key].cuts, { start, end });
+      p.media[key].cuts = result.ranges;
+      id = result.id;
+    });
+    this.flushSave();
+    this.range = null;
+    this.select({ track: laneCutKey(key), id });
+    toast(LANE_WORDS[key].done, { label: "Desfazer", run: () => this.undo() });
+  }
+
+  /** Moves a media track in time against the screen; `done` ends a drag, so it is saved. */
+  private shiftLane(key: MediaKey, shift: number, done: boolean) {
+    this.change((p) => (p.media[key].shift = Math.round(shift)), false);
+    if (done) this.flushSave();
+    this.syncCompanions(false);
   }
 
   private previewMenu(): MenuItem[] {
@@ -1547,10 +1668,10 @@ export class Editor {
       return;
     }
     const file = scene.project.audio.enhance ? "mic.enhanced.wav" : scene.take.mic;
-    const time = this.ui.video.currentTime;
+    const time = this.ui.video.currentTime - scene.project.media.mic.shift / 1000;
     mic.src = convertFileSrc(joinPath(scene.take.dir, file));
-    mic.currentTime = time;
-    if (!this.ui.video.paused) void mic.play();
+    mic.currentTime = Math.max(0, time);
+    if (!this.ui.video.paused && time >= 0) void mic.play();
   }
 
   /** The system sound's own file, for takes that have one; older takes play it from the video. */
@@ -1561,9 +1682,10 @@ export class Editor {
       system.removeAttribute("src");
       return;
     }
+    const time = this.ui.video.currentTime - scene.project.media.system.shift / 1000;
     system.src = convertFileSrc(joinPath(scene.take.dir, scene.take.systemFile));
-    system.currentTime = this.ui.video.currentTime;
-    if (!this.ui.video.paused) void system.play();
+    system.currentTime = Math.max(0, time);
+    if (!this.ui.video.paused && time >= 0) void system.play();
   }
 
   private toggleWords() {
@@ -1744,8 +1866,8 @@ export class Editor {
     ui.selection.hidden = !selected;
     if (selected) {
       const kind = this.selectedKind(this.selected);
-      const titles = { camera: "Câmera neste trecho", cut: "Corte selecionado", split: "Divisão selecionada", speed: "Trecho acelerado", zoom: "Zoom selecionado", lens: "Lente selecionada", blur: "Desfoque selecionado", text: "Texto selecionado", arrow: "Seta selecionada", box: "Destaque selecionado" };
-      const removes = { camera: "Voltar à bolha", cut: "Remover corte", split: "Remover divisão", speed: "Voltar à velocidade normal", zoom: "Remover zoom", lens: "Remover lente", blur: "Remover desfoque", text: "Remover texto", arrow: "Remover seta", box: "Remover destaque" };
+      const titles = { webcamCut: LANE_WORDS.webcam.title, systemCut: LANE_WORDS.system.title, micCut: LANE_WORDS.mic.title, camera: "Câmera neste trecho", cut: "Corte selecionado", split: "Divisão selecionada", speed: "Trecho acelerado", zoom: "Zoom selecionado", lens: "Lente selecionada", blur: "Desfoque selecionado", text: "Texto selecionado", arrow: "Seta selecionada", box: "Destaque selecionado" };
+      const removes = { webcamCut: "Restaurar", systemCut: "Restaurar", micCut: "Restaurar", camera: "Voltar à bolha", cut: "Remover corte", split: "Remover divisão", speed: "Voltar à velocidade normal", zoom: "Remover zoom", lens: "Remover lente", blur: "Remover desfoque", text: "Remover texto", arrow: "Remover seta", box: "Remover destaque" };
       ui.selectionTitle.textContent = titles[kind];
       ui.selectionDeleteLabel.textContent = removes[kind];
       const seconds = (selected.end - selected.start) / 1000;
@@ -1890,29 +2012,58 @@ export class Editor {
       if (this.applyPendingSeek()) return;
       this.syncCompanions(false);
     });
+    // A paused preview shows the webcam's new frame once a lane move or seek lands.
+    webcam.addEventListener("seeked", () => {
+      if (video.paused) this.version++;
+    });
   }
 
-  /** Keeps microphone, webcam and music in step with the main video. */
+  /**
+   * Keeps microphone, system sound, webcam and music in step with the main video, each moved by
+   * its own shift and silent inside its own cuts.
+   */
   private syncCompanions(start: boolean) {
     const scene = this.scene;
     if (!scene) return;
-    const { video, mic, webcam } = this.ui;
+    const { video, mic, webcam, system } = this.ui;
+    const { take, project } = scene;
+    const media = project.media;
     const t = video.currentTime;
-    if (scene.take.mic && (start || Math.abs(mic.currentTime - t) > 0.08)) mic.currentTime = t;
-    const system = this.ui.system;
-    if (scene.take.systemFile && (start || Math.abs(system.currentTime - t) > 0.08)) system.currentTime = t;
-    const webcamTime = t - (scene.take.webcamOffsetMs ?? 0) / 1000;
-    if (scene.take.webcam && webcamTime >= 0 && (start || Math.abs(webcam.currentTime - webcamTime) > 0.1)) webcam.currentTime = webcamTime;
-    if (scene.project.audio.music && this.music.duration) {
+    if (take.mic) this.follow(mic, t - media.mic.shift / 1000, start, 0.08);
+    if (take.systemFile) this.follow(system, t - media.system.shift / 1000, start, 0.08);
+    if (take.webcam) this.follow(webcam, t - ((take.webcamOffsetMs ?? 0) + media.webcam.shift) / 1000, start, 0.1);
+    // Inside a track's own cuts its sound drops to nothing; elsewhere it keeps its volume.
+    const silent = (key: MediaKey) => media[key].cuts.some((cut) => t * 1000 >= cut.start && t * 1000 < cut.end);
+    const volume = (element: HTMLMediaElement, value: number) => {
+      if (element.volume !== value) element.volume = value;
+    };
+    volume(mic, silent("mic") ? 0 : Math.min(1, project.audio.mic));
+    const systemVolume = silent("system") ? 0 : Math.min(1, project.audio.system);
+    volume(system, systemVolume);
+    // Older takes play the system sound from the video itself.
+    volume(video, systemVolume);
+    if (project.audio.music && this.music.duration) {
       const musicTime = (scene.time.toOutput(t * 1000) / 1000) % this.music.duration;
       if (start || Math.abs(this.music.currentTime - musicTime) > 0.25) this.music.currentTime = musicTime;
     }
-    if (start && !video.paused) {
-      if (scene.take.mic) void mic.play();
-      if (scene.take.systemFile) void system.play();
-      if (scene.take.webcam) void webcam.play();
-      if (scene.project.audio.music) void this.music.play();
+    if (start && !video.paused && project.audio.music) void this.music.play();
+  }
+
+  /**
+   * Puts a companion track at `time` (s on its own clock). Outside its file it waits paused at the
+   * nearest end; inside, it plays along with the video.
+   */
+  private follow(element: HTMLMediaElement, time: number, start: boolean, tolerance: number) {
+    const end = Number.isFinite(element.duration) ? element.duration : Infinity;
+    if (time < 0 || time >= end) {
+      if (!element.paused) element.pause();
+      const edge = time < 0 ? 0 : end;
+      if (Number.isFinite(edge) && Math.abs(element.currentTime - edge) > tolerance) element.currentTime = edge;
+      return;
     }
+    if (start || Math.abs(element.currentTime - time) > tolerance) element.currentTime = time;
+    // A file that can't play would fail again every frame; the error is already in the console once.
+    if (!this.ui.video.paused && element.paused) element.play().catch(() => undefined);
   }
 
   private bindShortcuts() {
@@ -2338,7 +2489,8 @@ export class Editor {
     const { project, take } = scene;
     const targets: DirectTarget[] = [];
     const inLayout = project.cameras.some((range) => t >= range.start && t <= range.end);
-    if (take.webcam && project.webcam.visible && !inLayout) {
+    const cut = project.media.webcam.cuts.some((range) => t >= range.start && t <= range.end);
+    if (take.webcam && project.webcam.visible && !inLayout && !cut) {
       targets.push({ kind: "webcam", id: "webcam", box: webcamBubble(project, output).rect, round: project.webcam.shape === "circle" });
     }
     for (const note of project.notes) {
@@ -2473,11 +2625,16 @@ export class Editor {
       ];
       // Lanes follow what the take recorded, so the layout doesn't jump when their media loads.
       const lanes: MediaLane[] = [];
+      const { media } = project;
+      const edit = (key: MediaKey) => ({ key, shift: media[key].shift, cuts: media[key].cuts });
       if (take.webcam) {
-        lanes.push({ label: "Webcam", kind: "frames", color: "#8e8e93", frames: this.webcamThumbs, offset: take.webcamOffsetMs ?? 0, span: this.webcamSpan });
+        lanes.push({ label: "Webcam", kind: "frames", color: "#8e8e93", frames: this.webcamThumbs, offset: take.webcamOffsetMs ?? 0, span: this.webcamSpan, ...edit("webcam") });
       }
-      if (take.systemFile || take.systemAudio) lanes.push({ label: "Sistema", kind: "wave", color: "#5e5ce6", wave: this.systemWave, muted: project.audio.system <= 0 });
-      if (take.mic) lanes.push({ label: "Microfone", kind: "wave", color: "#66d4cf", wave: this.micWave, muted: project.audio.mic <= 0 });
+      if (take.systemFile || take.systemAudio) {
+        // Sound inside the screen's own file (older takes) plays with it, so it can't be moved.
+        lanes.push({ label: "Sistema", kind: "wave", color: "#5e5ce6", wave: this.systemWave, muted: project.audio.system <= 0, fixed: !take.systemFile, ...edit("system") });
+      }
+      if (take.mic) lanes.push({ label: "Microfone", kind: "wave", color: "#66d4cf", wave: this.micWave, muted: project.audio.mic <= 0, ...edit("mic") });
       this.timeline.set({
         duration: take.durationMs,
         time: t,

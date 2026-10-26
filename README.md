@@ -48,6 +48,8 @@ Gravador de tela e editor para Windows, feito com Tauri 2 (Rust + TypeScript, We
 - **Timeline:**
   - arraste sobre o vídeo para selecionar um trecho; Delete (ou X) corta, e Zoom, Lente e Desfocar usam o trecho;
   - miniaturas e cliques no vídeo; faixas próprias com os quadros da webcam e a forma de onda do som do sistema e do microfone (a faixa fica apagada com o volume em zero);
+  - arraste a faixa da webcam, do sistema ou do microfone para os lados para acertar o sincronismo com a tela (gruda no original e na agulha; um selo mostra o deslocamento);
+  - botão direito numa dessas faixas, ou num trecho selecionado, corta só a webcam ou silencia só aquele som, sem cortar a tela; os trechos aparecem hachurados na faixa e se movem, redimensionam e restauram como os outros itens;
   - corte do início e do fim, e faixas de cortes, velocidade, zoom e lente, textos e desfoque;
   - itens que acontecem ao mesmo tempo (um texto com uma seta) ficam em linhas separadas na faixa;
   - Ctrl + roda aproxima.

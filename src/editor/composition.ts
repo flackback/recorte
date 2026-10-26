@@ -230,6 +230,25 @@ function cameraLayoutAt(project: Project, t: number) {
   return null;
 }
 
+/** How long the webcam takes to fade out at the start of one of its own cuts (and back in at the end), in ms. */
+const WEBCAM_CUT_FADE = 120;
+
+/**
+ * How far the webcam has faded out at `t`: inside its own cuts, and where a moved webcam has no
+ * picture (before it starts or after it ends). 0 while shown, 1 once gone.
+ */
+function webcamCutAt(take: Take, project: Pick<Project, "media">, t: number) {
+  const shift = project.media?.webcam.shift ?? 0;
+  const start = (take.webcamOffsetMs ?? 0) + shift;
+  const end = take.durationMs + shift;
+  if (t < start || t > end) return smooth(Math.min(1, Math.max(start - t, t - end) / WEBCAM_CUT_FADE));
+  for (const cut of project.media?.webcam.cuts ?? []) {
+    if (t < cut.start || t > cut.end) continue;
+    return smooth(Math.max(0, Math.min(1, (t - cut.start) / WEBCAM_CUT_FADE, (cut.end - t) / WEBCAM_CUT_FADE)));
+  }
+  return 0;
+}
+
 /** The webcam at `t` (bubble, full frame, beside the screen or hidden) and the area left for the screen. */
 function webcamAt(scene: Scene, t: number, out: { width: number; height: number }): { webcam: FrameState["webcam"]; area: FrameState["area"] } {
   const { take, project } = scene;
@@ -259,6 +278,12 @@ function webcamAt(scene: Scene, t: number, out: { width: number; height: number 
       radius *= scale;
       opacity = 1 - k;
     }
+  }
+  // Cut on its own: the webcam fades out, and the screen takes back the room it left.
+  const gone = webcamCutAt(take, project, t);
+  if (gone > 0) {
+    opacity *= 1 - gone;
+    if (area) area = mixBox(area, { x: 0, y: 0, width: 1, height: 1 }, gone);
   }
   const { mirror, border, borderColor, shadow, zoom } = project.webcam;
   return {
