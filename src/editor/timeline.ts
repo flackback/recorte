@@ -1,7 +1,7 @@
 import type { Range } from "./project";
 import type { Span } from "./timemap";
 
-export type TrackKey = "cuts" | "speed" | "zoom" | "notes" | "blurs";
+export type TrackKey = "cuts" | "speed" | "zoom" | "notes" | "blurs" | "camera";
 export type Selection = { track: TrackKey; id: string } | null;
 
 export type Track = {
@@ -31,6 +31,24 @@ export type TimelineState = {
   waveform: Float32Array | null;
   /** A stretch selected by dragging over the clip. */
   range: Span | null;
+  /** Read-only rows under the clip: webcam frames and one waveform per audio source. */
+  lanes?: MediaLane[];
+};
+
+export type MediaLane = {
+  label: string;
+  kind: "frames" | "wave";
+  color?: string;
+  /** Frames on the lane's own clock, sorted by time. */
+  frames?: { t: number; image: ImageBitmap }[];
+  /** Where the lane's clock starts on the take's timeline, in ms. */
+  offset?: number;
+  /** The part of the lane's clock that has video, in ms; the rest of the lane stays empty. */
+  span?: { start: number; end: number };
+  /** Peak level per bucket over the whole take, 0–1. */
+  wave?: Float32Array | null;
+  /** The source plays silent: drawn faded, with a hint. */
+  muted?: boolean;
 };
 
 export type TimelineEvents = {
@@ -51,6 +69,8 @@ const RULER = 22;
 const CLIP = { top: 28, height: 44 };
 const TRACK_TOP = 80;
 const TRACK_HEIGHT = 26;
+/** Media lanes sit between the clip and the edit tracks; a frames lane is a little taller. */
+const FRAMES_HEIGHT = 30;
 /** Height of each extra row when items on a track overlap in time (text with an arrow, say). */
 const LANE_HEIGHT = 18;
 const MAX_LANES = 4;
@@ -124,6 +144,8 @@ export class Timeline {
   private view = { start: 0, end: 0 };
   /** Rows per track, recomputed with each state. */
   private lanes: ReturnType<typeof laneLayout>[] = [];
+  /** Media lanes of the current state. */
+  private media: MediaLane[] = [];
   /**
    * Everything but the playhead, drawn when the state, view or size changes; while playing, each
    * frame copies it and adds the playhead.
@@ -155,6 +177,7 @@ export class Timeline {
   set(state: TimelineState) {
     if (!this.state || this.state.duration !== state.duration) this.view = { start: 0, end: state.duration };
     this.lanes = state.tracks.map((track) => laneLayout(track.items));
+    this.media = state.lanes ?? [];
     // Grows with the tracks and their rows, so nothing is cut off.
     const height = `${this.trackTop(state.tracks.length) + 2}px`;
     if (this.canvas.style.height !== height) this.canvas.style.height = height;
@@ -198,9 +221,24 @@ export class Timeline {
   }
 
   private trackTop(index: number) {
-    let top = TRACK_TOP;
+    let top = this.mediaTop(this.media.length);
     for (let i = 0; i < index; i++) top += this.trackHeight(i) + TRACK_GAP;
     return top;
+  }
+
+  private mediaHeight(index: number) {
+    return this.media[index]?.kind === "frames" ? FRAMES_HEIGHT : TRACK_HEIGHT;
+  }
+
+  private mediaTop(index: number) {
+    let top = TRACK_TOP;
+    for (let i = 0; i < index; i++) top += this.mediaHeight(i) + TRACK_GAP;
+    return top;
+  }
+
+  /** The media lane under a height, if any. */
+  private mediaAt(y: number) {
+    return this.media.findIndex((_, i) => y >= this.mediaTop(i) && y <= this.mediaTop(i) + this.mediaHeight(i));
   }
 
   /** The track under a height, if any. */
@@ -298,7 +336,8 @@ export class Timeline {
       }
       return null;
     }
-    return y < CLIP.top ? { kind: "seek" } : null;
+    // Media lanes can't be edited: clicking one goes there, like the ruler.
+    return y < CLIP.top || this.mediaAt(y) >= 0 ? { kind: "seek" } : null;
   }
 
   private pointerDown(event: PointerEvent) {
@@ -504,7 +543,8 @@ export class Timeline {
         if (best.image.width) context.drawImage(best.image, x, CLIP.top, thumbWidth, CLIP.height);
       }
     }
-    if (state.waveform) {
+    // With a lane per source, the mixed waveform on the clip would only repeat them.
+    if (state.waveform && !this.media.some((lane) => lane.kind === "wave")) {
       const wave = state.waveform;
       context.fillStyle = "rgba(255, 255, 255, 0.55)";
       const bottom = CLIP.top + CLIP.height;
@@ -595,6 +635,63 @@ export class Timeline {
       context.fillRect(side - 0.75, CLIP.top + CLIP.height / 2 - 7, 1.5, 14);
     }
 
+    // Media lanes: webcam frames and waveforms, dimmed where the clip is.
+    const cuts = [...(cutTrack?.items ?? []), ...state.wordCuts].filter((cut) => cut.end > cut.start);
+    this.media.forEach((lane, index) => {
+      const top = this.mediaTop(index);
+      const laneHeight = this.mediaHeight(index);
+      context.save();
+      context.beginPath();
+      context.roundRect(clipLeft, top, clipRight - clipLeft, laneHeight, 6);
+      context.clip();
+      context.fillStyle = withAlpha(surface, 0.6) || surface;
+      context.fillRect(clipLeft, top, clipRight - clipLeft, laneHeight);
+      const frames = lane.frames ?? [];
+      if (lane.kind === "frames" && frames.length && frames[0].image.width && frames[0].image.height) {
+        const offset = lane.offset ?? 0;
+        const span = lane.span ?? { start: frames[0].t, end: frames[frames.length - 1].t };
+        const left = Math.max(clipLeft, this.toX(span.start + offset));
+        const right = Math.min(clipRight, this.toX(span.end + offset));
+        const thumbWidth = (laneHeight * frames[0].image.width) / frames[0].image.height;
+        context.save();
+        context.beginPath();
+        context.rect(left, top, right - left, laneHeight);
+        context.clip();
+        for (let x = left; x < right; x += thumbWidth) {
+          if (x + thumbWidth < LEFT || x > width) continue;
+          const best = nearestThumb(frames, this.toTime(x + thumbWidth / 2) - offset);
+          if (best.image.width) context.drawImage(best.image, x, top, thumbWidth, laneHeight);
+        }
+        context.restore();
+      } else if (lane.kind === "wave" && lane.wave) {
+        const wave = lane.wave;
+        const middle = top + laneHeight / 2;
+        context.fillStyle = withAlpha(lane.color ?? accent, lane.muted ? 0.3 : 0.9);
+        for (let x = Math.max(clipLeft, LEFT); x < Math.min(clipRight, width); x += 2) {
+          const level = wave[Math.floor((this.toTime(x) / state.duration) * (wave.length - 1))] ?? 0;
+          const h = Math.max(1, level * (laneHeight - 6));
+          context.fillRect(x, middle - h / 2, 1.5, h);
+        }
+      }
+      // Outside the trim and inside cuts: dim, like the clip.
+      context.fillStyle = "rgba(0, 0, 0, 0.5)";
+      context.fillRect(clipLeft, top, keepLeft - clipLeft, laneHeight);
+      context.fillRect(keepRight, top, clipRight - keepRight, laneHeight);
+      for (const cut of cuts) context.fillRect(this.toX(cut.start), top, this.toX(cut.end) - this.toX(cut.start), laneHeight);
+      context.restore();
+      if (lane.muted) {
+        const x = Math.max(clipLeft, LEFT) + 8;
+        const hint = "mudo";
+        const hintWidth = context.measureText(hint).width + 10;
+        context.fillStyle = surface;
+        context.beginPath();
+        context.roundRect(x, top + laneHeight / 2 - 7, hintWidth, 14, 7);
+        context.fill();
+        context.fillStyle = muted;
+        context.fillText(hint, x + 5, top + laneHeight / 2);
+      }
+    });
+
     // Selected stretch: bright on the clip, a light column across the tracks.
     if (state.range) {
       const x0 = this.toX(state.range.start);
@@ -677,6 +774,15 @@ export class Timeline {
     // Gutter labels.
     context.fillStyle = muted;
     context.fillText("Vídeo", 14, CLIP.top + CLIP.height / 2);
+    this.media.forEach((lane, index) => {
+      const middle = this.mediaTop(index) + this.mediaHeight(index) / 2;
+      context.fillStyle = withAlpha(lane.color ?? muted, lane.muted ? 0.35 : 1);
+      context.beginPath();
+      context.arc(18, middle, 3.5, 0, Math.PI * 2);
+      context.fill();
+      context.fillStyle = muted;
+      context.fillText(lane.label, 28, middle, LEFT - 32);
+    });
     state.tracks.forEach((track, index) => {
       const top = this.trackTop(index);
       context.fillStyle = track.color;

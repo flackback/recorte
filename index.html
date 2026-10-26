@@ -505,6 +505,13 @@
                       <input type="range" id="transition-duration" min="0.3" max="2" step="0.1" />
                     </label>
                   </div>
+                  <div class="selection-camera" id="selection-camera">
+                    <div class="segmented small" id="camera-layout" role="radiogroup" aria-label="Layout da câmera">
+                      <label><input type="radio" name="camera-layout" value="full" />Tela cheia</label>
+                      <label><input type="radio" name="camera-layout" value="side" />Lado a lado</label>
+                      <label><input type="radio" name="camera-layout" value="hidden" />Oculta</label>
+                    </div>
+                  </div>
                   <div class="selection-speed" id="selection-speed">
                     <div class="segmented small" id="speed-rate" role="radiogroup" aria-label="Velocidade">
                       <label><input type="radio" name="speed-rate" value="1.5" />1,5×</label>
@@ -555,6 +562,7 @@
                   </label>
                   <div class="field">
                     <span>Posição</span>
+                    <p class="hint">Arraste a webcam no vídeo para pôr onde quiser, ou escolha um canto.</p>
                     <div class="corners" id="webcam-corner" role="radiogroup" aria-label="Canto da webcam">
                       <label title="Superior esquerdo"><input type="radio" name="corner" value="tl" /></label>
                       <label title="Superior direito"><input type="radio" name="corner" value="tr" /></label>
@@ -565,6 +573,30 @@
                   <div class="segmented small" id="webcam-shape" role="radiogroup" aria-label="Formato">
                     <label><input type="radio" name="webcam-shape" value="circle" />Círculo</label>
                     <label><input type="radio" name="webcam-shape" value="rounded" />Arredondado</label>
+                    <label><input type="radio" name="webcam-shape" value="square" />Quadrado</label>
+                  </div>
+                  <label class="switch"><input type="checkbox" id="webcam-mirror" /><span>Espelhar</span></label>
+                  <label class="slider">
+                    <span>Aproximar <output data-value-for="webcam-zoom"></output></span>
+                    <input type="range" id="webcam-zoom" min="1" max="2.5" step="0.05" />
+                  </label>
+                  <label class="slider">
+                    <span>Borda <output data-value-for="webcam-border"></output></span>
+                    <input type="range" id="webcam-border" min="0" max="0.06" step="0.002" />
+                  </label>
+                  <div class="swatches" id="webcam-border-colors" role="group" aria-label="Cor da borda"></div>
+                  <label class="slider">
+                    <span>Sombra <output data-value-for="webcam-shadow"></output></span>
+                    <input type="range" id="webcam-shadow" min="0" max="1" step="0.05" />
+                  </label>
+                </section>
+                <section>
+                  <h3>Layout da câmera</h3>
+                  <p class="hint">Na faixa “Câmera” da timeline, marque trechos em que a webcam fica em tela cheia, ao lado da tela ou oculta. A troca é animada.</p>
+                  <div class="choices camera-add" id="camera-add">
+                    <button type="button" class="choice" data-layout="full">Tela cheia aqui</button>
+                    <button type="button" class="choice" data-layout="side">Lado a lado aqui</button>
+                    <button type="button" class="choice" data-layout="hidden">Ocultar aqui</button>
                   </div>
                 </section>
               </div>

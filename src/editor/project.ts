@@ -113,6 +113,16 @@ export type Rect = { x: number; y: number; width: number; height: number };
 export type Aspect = "auto" | "16:9" | "9:16" | "1:1" | "4:3";
 export type Frame = "none" | "window";
 export type Corner = "br" | "bl" | "tr" | "tl";
+export type WebcamShape = "circle" | "rounded" | "square";
+
+export type CameraLayout = "full" | "side" | "hidden";
+/** A stretch where the webcam fills the frame, sits beside the screen, or hides. */
+export type CameraRange = Range & { layout: CameraLayout };
+export const CAMERA_LAYOUTS: { id: CameraLayout; name: string }[] = [
+  { id: "full", name: "Tela cheia" },
+  { id: "side", name: "Lado a lado" },
+  { id: "hidden", name: "Oculta" },
+];
 
 /** Everything the user changed about a take, saved as `project.json` next to it. */
 export type Project = {
@@ -155,7 +165,24 @@ export type Project = {
     spotlight: boolean;
   };
   keys: { visible: boolean; mode: "shortcuts" | "all" };
-  webcam: { visible: boolean; size: number; corner: Corner; shape: "circle" | "rounded" };
+  webcam: {
+    visible: boolean;
+    size: number;
+    corner: Corner;
+    shape: WebcamShape;
+    /** Center of the bubble as fractions (0–1) of the frame, once dragged; null sits it in `corner`. */
+    position: { x: number; y: number } | null;
+    /** Shown as in a mirror, like video calls. */
+    mirror: boolean;
+    /** Border width as a fraction of the bubble's size, and its color. */
+    border: number;
+    borderColor: string;
+    shadow: number;
+    /** Zooms into the camera picture inside the bubble (1 = all of it). */
+    zoom: number;
+  };
+  /** Stretches where the webcam leaves its bubble. */
+  cameras: CameraRange[];
   audio: {
     system: number;
     mic: number;
@@ -318,7 +345,8 @@ export function defaultProject(take: Take, events: CursorEvent[]): Project {
       spotlight: false,
     },
     keys: { visible: Boolean(take.keys), mode: "shortcuts" },
-    webcam: { visible: Boolean(take.webcam), size: 0.22, corner: "br", shape: "circle" },
+    webcam: { visible: Boolean(take.webcam), size: 0.22, corner: "br", shape: "circle", position: null, mirror: true, border: 0.012, borderColor: "#ffffff", shadow: 0.35, zoom: 1 },
+    cameras: [],
     audio: { system: 1, mic: 1, music: null, musicVolume: 0.25, clickSound: false, clickTone: "tick", keySound: false, enhance: false },
     captions: { visible: false, size: 1, position: "bottom" },
     zoom: { defaultScale, segments: autoZooms(events, take.durationMs, defaultScale) },
@@ -362,6 +390,7 @@ export function normalizeProject(raw: unknown, fallback: Project): Project {
       segments: list(value.zoom?.segments, fallback.zoom.segments).map((segment) => ({ ...segment, mode: segment.mode ?? "zoom" })),
     },
     blurs: list(value.blurs, []),
+    cameras: list(value.cameras, []),
     speed: list(value.speed, []),
     notes: list(value.notes, []),
     cards: {

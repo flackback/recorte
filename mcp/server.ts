@@ -376,6 +376,32 @@ tool(
 );
 
 tool(
+  "set_camera_layout",
+  "Muda a webcam num trecho: tela cheia (full), ao lado da tela (side) ou oculta (hidden). Fora desses trechos ela fica na bolha. A troca é animada. Com remove, tira os trechos indicados (ids) ou todos.",
+  {
+    take: takeArg,
+    start: ms("Início do trecho").optional(),
+    end: ms("Fim do trecho").optional(),
+    layout: z.enum(["full", "side", "hidden"]).optional(),
+    remove: z.array(z.string()).optional().describe("Ids de trechos a tirar (de get_take, campo cameras)."),
+    removeAll: z.boolean().optional(),
+  },
+  ({ take, start, end, layout, remove, removeAll }) =>
+    edit(take, (project, { take: meta }) => {
+      if (!meta.webcam) throw new Error("Esta gravação não tem webcam.");
+      project.cameras ??= [];
+      if (removeAll) project.cameras = [];
+      if (remove?.length) project.cameras = project.cameras.filter((range) => !remove.includes(range.id));
+      if (start === undefined && end === undefined) return removeAll || remove?.length ? "trechos da câmera removidos" : "nada mudou";
+      if (start === undefined || end === undefined || !layout) throw new Error("Informe start, end e layout.");
+      const range = span(meta, start, end);
+      // A new stretch replaces the ones it overlaps.
+      project.cameras = [...project.cameras.filter((other) => other.end <= range.start || other.start >= range.end), { id: newId(), ...range, layout }].sort((a, b) => a.start - b.start);
+      return `câmera ${layout} de ${seconds(range.start)} a ${seconds(range.end)}`;
+    }),
+);
+
+tool(
   "set_transition",
   "Põe, troca ou tira a transição na emenda de um corte ou de uma divisão (split_at). A transição tira o trecho de antes e traz o de depois: esmaecer (fade), zoom com desfoque (zoomblur), girar (flip), queimar (burn), desintegrar (dissolve) ou onda (wave).",
   {
@@ -806,9 +832,15 @@ const settingsShape = {
   webcam: z
     .object({
       visible: z.boolean().optional(),
-      size: z.number().min(0.1).max(0.45).optional(),
-      corner: z.enum(["br", "bl", "tr", "tl"]).optional(),
-      shape: z.enum(["circle", "rounded"]).optional(),
+      size: z.number().min(0.05).max(0.9).optional(),
+      corner: z.enum(["br", "bl", "tr", "tl"]).optional().describe("Canto. Escolher um canto esquece a posição livre."),
+      position: z.object({ x: z.number().min(0).max(1), y: z.number().min(0).max(1) }).nullable().optional().describe("Centro da bolha em frações do quadro final (0 a 1); null volta ao canto."),
+      shape: z.enum(["circle", "rounded", "square"]).optional(),
+      mirror: z.boolean().optional().describe("Espelhar a imagem da câmera."),
+      zoom: z.number().min(1).max(2.5).optional().describe("Aproximar a imagem dentro da bolha."),
+      border: z.number().min(0).max(0.06).optional().describe("Largura da borda, em fração do tamanho da bolha."),
+      borderColor: z.string().regex(/^#[0-9a-fA-F]{6}$/).optional(),
+      shadow: z.number().min(0).max(1).optional(),
     })
     .optional(),
   audio: z
@@ -869,7 +901,9 @@ tool(
       }
       if (settings.webcam) {
         if (settings.webcam.visible && !meta.webcam) throw new Error("Esta gravação não tem webcam.");
-        project.webcam = { ...project.webcam, ...defined(settings.webcam) };
+        const webcam = defined(settings.webcam);
+        project.webcam = { ...project.webcam, ...webcam };
+        if (webcam.corner && webcam.position === undefined) project.webcam.position = null;
         changes.push("webcam");
       }
       if (settings.audio) {

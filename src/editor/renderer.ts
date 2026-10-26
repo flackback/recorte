@@ -35,7 +35,21 @@ export type FrameState = {
   /** Blurred areas in video pixels. */
   blurs: Rect[];
   /** Webcam bubble in output pixels. */
-  webcam: { rect: Rect; shape: "circle" | "rounded" } | null;
+  webcam: {
+    rect: Rect;
+    /** Corner radius in output pixels. */
+    radius: number;
+    opacity: number;
+    mirror: boolean;
+    /** Border width in output pixels, and its color. */
+    border: number;
+    borderColor: string;
+    shadow: number;
+    /** Zoom into the camera picture (1 = all of it). */
+    zoom: number;
+  } | null;
+  /** Part of the output the screen is laid out in, as fractions; null is all of it. */
+  area: Rect | null;
   /** Whether the text overlay canvas has content to draw. */
   overlay: boolean;
 };
@@ -73,8 +87,8 @@ struct Uniforms {
   webcam2: vec4f,   // visible, corner radius, overlay visible, cursor slot
   bg_image: vec4f,  // output uv -> image uv: scale xy, offset xy
   box: vec4f,       // outer frame box (composed px)
-  extra: vec4f,     // blur count, blur strength (uv), unused x2
-  unused: vec4f,
+  extra: vec4f,     // blur count, blur strength (uv), webcam shadow, webcam mirrored
+  cam_style: vec4f, // webcam border rgb, border width (output px)
   webcam_uv: vec4f, // bubble uv -> camera uv: scale xy, offset xy
   look: vec4f,      // cursor style row, click style (0 ring, 1 liquid), unused, transition kind (0 none)
   trans: vec4f,     // transition amount, unused x3
@@ -369,19 +383,25 @@ fn fs(@builtin(position) frag: vec4f) -> @location(0) vec4f {
     color = mix(color, screen, cover);
   }
 
-  // Webcam bubble, in output space (unaffected by zoom and tilt).
-  if (u.webcam2.x > 0.5) {
+  // Webcam, in output space (unaffected by zoom and tilt): a bubble, the whole frame or a side panel.
+  let cam_alpha = u.webcam2.x;
+  if (cam_alpha > 0.001) {
     let w = u.webcam;
-    let dw = sd_rect(out_px, w, u.webcam2.y);
-    let wshadow = 1.0 - smoothstep(-8.0, 22.0, sd_rect(out_px - vec2f(0.0, 6.0), w, u.webcam2.y));
-    color = mix(color, vec3f(0.0), wshadow * 0.35);
+    let r = u.webcam2.y;
+    let dw = sd_rect(out_px, w, r);
+    let soft = max(min(w.z, w.w) * 0.08, 4.0);
+    let wshadow = 1.0 - smoothstep(-soft, soft * 2.5, sd_rect(out_px - vec2f(0.0, soft * 0.4), w, r));
+    color = mix(color, vec3f(0.0), wshadow * u.extra.z * cam_alpha);
     if (dw < 1.0) {
       // Cover-fit the camera image into the bubble.
       let cam = (out_px - w.xy) / w.zw * u.webcam_uv.xy + u.webcam_uv.zw;
-      let cam_color = textureSampleBaseClampToEdge(webcam_tex, smp, vec2f(1.0 - cam.x, cam.y)).rgb;
-      color = mix(color, cam_color, clamp(0.5 - dw / u.frame.z, 0.0, 1.0));
-      let ring = abs(dw + 1.5);
-      color = mix(color, vec3f(1.0), (1.0 - smoothstep(0.0, 1.5, ring)) * 0.5);
+      var cx = cam.x;
+      if (u.extra.w > 0.5) { cx = 1.0 - cam.x; }
+      var cam_color = textureSampleBaseClampToEdge(webcam_tex, smp, vec2f(cx, cam.y)).rgb;
+      // Border along the inside of the edge.
+      let border = u.cam_style.w;
+      if (border > 0.0) { cam_color = mix(cam_color, u.cam_style.rgb, smoothstep(-border - u.frame.z, -border, dw)); }
+      color = mix(color, cam_color, clamp(0.5 - dw / u.frame.z, 0.0, 1.0) * cam_alpha);
     }
   }
 
@@ -512,15 +532,19 @@ export function cursorPreview(style: CursorStyle, size = 40): HTMLCanvasElement 
 }
 
 /** Where the frame and the recording inside it sit in the output. */
-export function layout(output: { width: number; height: number }, source: { width: number; height: number }, padding: number, frame: Frame): Layout {
+export function layout(output: { width: number; height: number }, source: { width: number; height: number }, padding: number, frame: Frame, area: Rect | null = null): Layout {
   const ratio = source.height / source.width;
   // Everything in units of the content width.
   const bar = frame === "window" ? 0.045 : 0;
   const boxHeight = ratio + bar;
+  // The screen sits in `area` (fractions of the output), the whole output unless the webcam takes a side.
+  const region = area
+    ? { x: area.x * output.width, y: area.y * output.height, width: area.width * output.width, height: area.height * output.height }
+    : { x: 0, y: 0, width: output.width, height: output.height };
   const pad = padding * Math.min(output.width, output.height);
-  const available = { width: Math.max(1, output.width - pad * 2), height: Math.max(1, output.height - pad * 2) };
+  const available = { width: Math.max(1, region.width - pad * 2), height: Math.max(1, region.height - pad * 2) };
   const scale = Math.min(available.width, available.height / boxHeight);
-  const box = { x: (output.width - scale) / 2, y: (output.height - boxHeight * scale) / 2, width: scale, height: boxHeight * scale };
+  const box = { x: region.x + (region.width - scale) / 2, y: region.y + (region.height - boxHeight * scale) / 2, width: scale, height: boxHeight * scale };
   const content = { x: box.x, y: box.y + bar * scale, width: scale, height: ratio * scale };
   return { content, box };
 }
@@ -627,7 +651,7 @@ export class Renderer {
 
     const { output, video } = state;
     const crop = state.crop ?? { x: 0, y: 0, width: video.width, height: video.height };
-    const { content, box } = layout(output, crop, state.background.padding, state.frame);
+    const { content, box } = layout(output, crop, state.background.padding, state.frame, state.area);
     const zoom = Math.max(1, state.zoom);
     const k = content.width / crop.width;
     const toComposed = (x: number, y: number) => [content.x + (x - crop.x) * k, content.y + (y - crop.y) * k] as const;
@@ -670,12 +694,14 @@ export class Renderer {
       const cam = webcam instanceof HTMLVideoElement ? { width: webcam.videoWidth, height: webcam.videoHeight } : { width: webcam!.displayWidth, height: webcam!.displayHeight };
       const bubble = w.width / w.height;
       const camera = cam.width / cam.height;
-      const sx = camera > bubble ? bubble / camera : 1;
-      const sy = camera > bubble ? 1 : camera / bubble;
+      // Zooming in shows a smaller, centered part of the camera.
+      const zoomIn = Math.max(1, state.webcam!.zoom);
+      const sx = (camera > bubble ? bubble / camera : 1) / zoomIn;
+      const sy = (camera > bubble ? 1 : camera / bubble) / zoomIn;
       vec(16, [sx, sy, (1 - sx) / 2, (1 - sy) / 2]);
+      vec(15, [...hexColor(state.webcam!.borderColor), state.webcam!.border]);
     }
-    const webcamRadius = state.webcam ? (state.webcam.shape === "circle" ? state.webcam.rect.width / 2 : state.webcam.rect.width * 0.12) : 0;
-    vec(11, [webcamReady ? 1 : 0, webcamRadius, state.overlay && this.overlayTexture ? 1 : 0, cursor ? CURSOR_SLOTS.indexOf(cursor.kind) : 0]);
+    vec(11, [webcamReady ? state.webcam!.opacity : 0, state.webcam?.radius ?? 0, state.overlay && this.overlayTexture ? 1 : 0, cursor ? CURSOR_SLOTS.indexOf(cursor.kind) : 0]);
     if (image) {
       // Cover-fit the image to the output.
       const scale = Math.max(output.width / this.backgroundSize.width, output.height / this.backgroundSize.height);
@@ -685,7 +711,7 @@ export class Renderer {
     }
     vec(13, [box.x, box.y, box.width, box.height]);
     const blurs = state.blurs.slice(0, MAX_BLURS);
-    vec(14, [blurs.length, 0.018, 0, 0]);
+    vec(14, [blurs.length, 0.018, (state.webcam?.shadow ?? 0) * 0.6, state.webcam?.mirror ? 1 : 0]);
     blurs.forEach((rect, index) =>
       vec(19 + index, [rect.x / video.width, rect.y / video.height, (rect.x + rect.width) / video.width, (rect.y + rect.height) / video.height]),
     );

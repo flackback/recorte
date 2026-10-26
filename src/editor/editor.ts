@@ -4,12 +4,12 @@ import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { showTour } from "../tips";
 import { toast } from "../toast";
 import { joinPath, takeName, type CursorEvent, type KeyEvent, type Take, type Word } from "../types";
-import { CARD_FADE, cardLength, createScene, frameState, leftClicks, overlayText, refreshTime, sceneSource, wordCuts, type CardView, type Scene } from "./composition";
+import { CARD_FADE, cardLength, createScene, frameState, leftClicks, overlayText, refreshTime, sceneSource, webcamBubble, wordCuts, type CardView, type Scene } from "./composition";
 import { confirmDialog, onContextMenu, type MenuItem } from "../menu";
 import { openAudio, type AudioSource } from "./audio-source";
 import { ExportDialog } from "./export-dialog";
 import { openVideo } from "./exporter";
-import { thumbnails, waveform } from "./media";
+import { thumbnails, trackSpan, waveform } from "./media";
 import { cursorPath } from "./motion";
 import { OverlayPainter } from "./overlay";
 import {
@@ -17,6 +17,7 @@ import {
   ASPECTS,
   autoZooms,
   BACKGROUNDS,
+  CAMERA_LAYOUTS,
   CURSOR_STYLES,
   DEFAULT_TRANSITION,
   defaultProject,
@@ -33,6 +34,8 @@ import {
   outputSize,
   type Aspect,
   type BlurRegion,
+  type CameraLayout,
+  type CameraRange,
   type ClickStyle,
   type ClickTone,
   type Corner,
@@ -43,13 +46,15 @@ import {
   type NoteKind,
   type Project,
   type Range,
+  type Rect,
   type SpeedRange,
   type ZoomSegment,
 } from "./project";
+import { DirectEdit, type DirectTarget } from "./direct-edit";
 import { RectEditor } from "./rect-editor";
 import { cursorPreview, Renderer } from "./renderer";
 import { SoundPreview } from "./sounds";
-import { Timeline, type Selection, type Track, type TrackKey } from "./timeline";
+import { Timeline, type MediaLane, type Selection, type Track, type TrackKey } from "./timeline";
 import type { Span } from "./timemap";
 import { LANGUAGES, preferredLanguage, rememberLanguage, SAMPLE_RATE, speech, transcribe } from "./transcribe";
 import { fillerWords, findSilences } from "./cleanup";
@@ -58,7 +63,7 @@ const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as 
 
 const UNDO_LIMIT = 100;
 /** Default lengths of items added at the playhead, in ms. */
-const LENGTHS: Record<TrackKey, number> = { cuts: 1000, speed: 3000, zoom: 2000, notes: 3000, blurs: 3000 };
+const LENGTHS: Record<TrackKey, number> = { cuts: 1000, speed: 3000, zoom: 2000, notes: 3000, blurs: 3000, camera: 4000 };
 const NOTE_NAMES: Record<NoteKind, string> = { text: "Texto", arrow: "Seta", box: "Destaque" };
 /** Rate of a new sped-up stretch. */
 const DEFAULT_SPEED = 2;
@@ -220,6 +225,14 @@ export class Editor {
     webcamSize: $<HTMLInputElement>("webcam-size"),
     webcamCorner: $("webcam-corner"),
     webcamShape: $("webcam-shape"),
+    webcamMirror: $<HTMLInputElement>("webcam-mirror"),
+    webcamZoom: $<HTMLInputElement>("webcam-zoom"),
+    webcamBorder: $<HTMLInputElement>("webcam-border"),
+    webcamBorderColors: $("webcam-border-colors"),
+    webcamShadow: $<HTMLInputElement>("webcam-shadow"),
+    cameraAdd: $("camera-add"),
+    selectionCamera: $("selection-camera"),
+    cameraLayout: $("camera-layout"),
     volumeSystem: $<HTMLInputElement>("volume-system"),
     volumeMic: $<HTMLInputElement>("volume-mic"),
     enhance: $<HTMLInputElement>("enhance"),
@@ -247,6 +260,8 @@ export class Editor {
   private saveTimer: number | undefined;
   private timeline: Timeline;
   private rectEditor = new RectEditor();
+  /** Dragging the webcam and notes straight on the preview. */
+  private direct!: DirectEdit;
   /** While the area editor is open, the preview shows the whole recording without effects. */
   private rawView = false;
   private overlay = new OverlayPainter(1920, 1080);
@@ -255,6 +270,11 @@ export class Editor {
   private exportDialog = new ExportDialog();
   private thumbs: { t: number; image: ImageBitmap }[] = [];
   private wave: Float32Array | null = null;
+  /** Timeline lanes under the clip: webcam frames (on the webcam's clock) and one waveform per source. */
+  private webcamThumbs: { t: number; image: ImageBitmap }[] = [];
+  private webcamSpan: { start: number; end: number } | undefined;
+  private systemWave: Float32Array | null = null;
+  private micWave: Float32Array | null = null;
   private backgroundKey = "";
   private lastTimelineKey = "";
   /** Playhead time (whole ms) the timeline last showed. */
@@ -296,6 +316,10 @@ export class Editor {
   private previewSpeed = loadPreviewSpeed();
 
   constructor() {
+    this.direct = new DirectEdit(this.ui.canvas, {
+      select: (target) => this.select({ track: "notes", id: target.id }),
+      change: (target, box, done) => this.directChange(target, box, done),
+    });
     this.timeline = new Timeline($<HTMLCanvasElement>("timeline"), {
       seek: (time) => this.seek(time),
       trim: (trim) => this.change((project) => (project.trim = trim), false),
@@ -415,36 +439,49 @@ export class Editor {
     void this.loadStrip(take, gen);
   }
 
-  /** Closes the timeline thumbnails; their bitmaps hold memory until then. */
+  /** Closes the timeline thumbnails (screen and webcam); their bitmaps hold memory until then. */
   private releaseThumbs() {
-    for (const thumb of this.thumbs) thumb.image.close();
+    for (const thumb of [...this.thumbs, ...this.webcamThumbs]) thumb.image.close();
     this.thumbs = [];
+    this.webcamThumbs = [];
+    this.webcamSpan = undefined;
+    this.systemWave = null;
+    this.micWave = null;
     this.lastTimelineKey = "";
   }
 
-  /** Thumbnails and waveform for the timeline, in the background. */
+  /** Thumbnails and waveforms for the timeline, in the background. */
   private async loadStrip(take: Take, gen: number) {
     const url = (file: string) => convertFileSrc(joinPath(take.dir, file));
-    const video = await openVideo(url(take.video)).catch(() => null);
+    const [video, webcam] = await Promise.all([
+      openVideo(url(take.video)).catch(() => null),
+      take.webcam ? openVideo(url(take.webcam)).catch(() => null) : null,
+    ]);
     if (gen !== this.openGen) return;
     // Read a piece at a time: recordings can be far larger than the memory.
-    const sources: AudioSource[] = [];
     const system = take.systemFile ? url(take.systemFile) : take.systemAudio ? url(take.video) : null;
-    for (const file of [system, take.mic ? url(take.mic) : null]) {
-      const audio = file ? await openAudio(file).catch(() => null) : null;
-      if (audio) sources.push(audio);
-    }
-    const [thumbs, wave] = await Promise.all([
-      video ? thumbnails(video.source, video.track).catch(() => []) : Promise.resolve([]),
-      waveform(sources, take.durationMs).catch(() => null),
+    const open = (file: string | null): Promise<AudioSource | null> => (file ? openAudio(file).catch(() => null) : Promise.resolve(null));
+    const systemAudio = await open(system);
+    const micAudio = await open(take.mic ? url(take.mic) : null);
+    // One decoder and one audio reader at a time, to keep memory low.
+    const frames = async (source: typeof video) => (source ? thumbnails(source.source, source.track).catch(() => []) : []);
+    const wave = (audio: AudioSource | null) => (audio ? waveform([audio], take.durationMs).catch(() => null) : null);
+    const [[thumbs, webcamThumbs], [systemWave, micWave]] = await Promise.all([
+      (async () => [await frames(video), await frames(webcam)])(),
+      (async () => [await wave(systemAudio), await wave(micAudio)])(),
     ]);
     if (gen !== this.openGen) {
-      for (const thumb of thumbs) thumb.image.close();
+      for (const thumb of [...thumbs, ...webcamThumbs]) thumb.image.close();
       return;
     }
     this.releaseThumbs();
     this.thumbs = thumbs;
-    this.wave = wave;
+    this.webcamThumbs = webcamThumbs;
+    this.webcamSpan = webcam ? trackSpan(webcam.track) : undefined;
+    this.systemWave = systemWave;
+    this.micWave = micWave;
+    // Each audio source has its own lane, so the clip needs no mixed waveform.
+    this.wave = null;
     this.lastTimelineKey = "";
   }
 
@@ -531,11 +568,13 @@ export class Editor {
     else if (track === "speed") project.speed = items as SpeedRange[];
     else if (track === "notes") project.notes = items as Note[];
     else if (track === "zoom") project.zoom.segments = items as ZoomSegment[];
+    else if (track === "camera") project.cameras = items as CameraRange[];
     else project.blurs = items as BlurRegion[];
   }
 
   private trackItems(project: Project, track: TrackKey): Range[] {
     if (track === "notes") return project.notes;
+    if (track === "camera") return project.cameras;
     return track === "cuts" ? project.cuts : track === "speed" ? project.speed : track === "zoom" ? project.zoom.segments : project.blurs;
   }
 
@@ -645,6 +684,7 @@ export class Editor {
       if (track === "zoom") return { ...range, scale: project.zoom.defaultScale, mode: "zoom" } as ZoomSegment;
       if (track === "speed") return { ...range, rate: DEFAULT_SPEED } as SpeedRange;
       if (track === "notes") return newNote(range);
+      if (track === "camera") return { ...range, layout: this.nextLayout } as CameraRange;
       if (track === "blurs") {
         const source = sceneSource(scene);
         const area = project.crop ?? { x: 0, y: 0, width: take.width, height: take.height };
@@ -664,6 +704,22 @@ export class Editor {
     this.select({ track, id: result.id });
     if (track === "blurs") this.editBlurArea();
     if (track === "notes") this.focusNoteText();
+  }
+
+  /** Layout given to the next camera stretch added by double-click or the menus. */
+  private nextLayout: CameraLayout = "full";
+
+  private addCameraAt(layout: CameraLayout, time: number) {
+    this.nextLayout = layout;
+    this.addAt("camera", time);
+    this.nextLayout = "full";
+  }
+
+  private setCameraLayout(id: string, layout: CameraLayout) {
+    this.change((p) => {
+      const range = p.cameras.find((candidate) => candidate.id === id);
+      if (range) range.layout = layout;
+    });
   }
 
   private addLensAt(time: number) {
@@ -797,13 +853,14 @@ export class Editor {
     const removed = this.selectedKind(selection);
     this.change((project) => this.setTrack(project, selection.track, this.trackItems(project, selection.track).filter((item) => item.id !== selection.id)));
     this.flushSave();
-    const names = { cut: "Corte removido", split: "Divisão removida", zoom: "Zoom removido", lens: "Lente removida", blur: "Desfoque removido", speed: "Trecho voltou à velocidade normal", text: "Texto removido", arrow: "Seta removida", box: "Destaque removido" };
+    const names = { camera: "A webcam voltou à bolha", cut: "Corte removido", split: "Divisão removida", zoom: "Zoom removido", lens: "Lente removida", blur: "Desfoque removido", speed: "Trecho voltou à velocidade normal", text: "Texto removido", arrow: "Seta removida", box: "Destaque removido" };
     toast(names[removed], { label: "Desfazer", run: () => this.undo() });
   }
 
   /** The kind of a selected item, for labels: cut, split, speed, zoom, lens, blur or a note kind. */
-  private selectedKind(selection: Selection): "cut" | "split" | "speed" | "zoom" | "lens" | "blur" | NoteKind {
+  private selectedKind(selection: Selection): "cut" | "split" | "speed" | "zoom" | "lens" | "blur" | "camera" | NoteKind {
     if (!selection) return "cut";
+    if (selection.track === "camera") return "camera";
     if (selection.track === "cuts") {
       const cut = this.scene?.project.cuts.find((candidate) => candidate.id === selection.id);
       return cut && isSplit(cut) ? "split" : "cut";
@@ -910,6 +967,21 @@ export class Editor {
         { label: "Remover desfoque", icon: "trash", danger: true, shortcut: "Delete", action: () => this.deleteSelected() },
       ];
     }
+    if (track === "camera") {
+      const current = (item as CameraRange).layout;
+      return [
+        ...go,
+        "separator",
+        ...CAMERA_LAYOUTS.map((layout): MenuItem => ({
+          label: layout.id === current ? `${layout.name} (atual)` : layout.name,
+          icon: "camera",
+          disabled: layout.id === current ? "Já está assim" : false,
+          action: () => this.setCameraLayout(id, layout.id),
+        })),
+        "separator",
+        { label: "Voltar à bolha", icon: "trash", danger: true, shortcut: "Delete", action: () => this.deleteSelected() },
+      ];
+    }
     if (isSplit(item)) {
       return [
         { label: "Ir para a divisão", icon: "play", action: () => this.seek(item.start) },
@@ -927,10 +999,15 @@ export class Editor {
       notes: { label: "Adicionar texto aqui", icon: "text", shortcut: "T", action: () => this.addAt("notes", time) },
       zoom: { label: "Adicionar zoom aqui", icon: "zoom", shortcut: "Z", action: () => this.addAt("zoom", time) },
       blurs: { label: "Desfocar uma área aqui", icon: "blur", shortcut: "B", action: () => this.addAt("blurs", time) },
+      camera: { label: "Webcam em tela cheia aqui", icon: "camera", action: () => this.addCameraAt("full", time) },
     };
     const items: MenuItem[] = [add[track]];
     if (track === "cuts") items.push({ label: "Dividir aqui, sem cortar", icon: "cut", shortcut: "D", action: () => this.splitAt(time) });
     if (track === "zoom") items.push({ label: "Adicionar lente aqui", icon: "wand", shortcut: "L", action: () => this.addLensAt(time) });
+    if (track === "camera") {
+      items.push({ label: "Webcam ao lado da tela aqui", icon: "camera", action: () => this.addCameraAt("side", time) });
+      items.push({ label: "Ocultar a webcam aqui", icon: "camera", action: () => this.addCameraAt("hidden", time) });
+    }
     if (track === "zoom") items.push({ label: "Gerar zooms a partir dos cliques", icon: "wand", action: () => this.ui.autoZoom.click() });
     items.push("separator", { label: "Ir para este ponto", icon: "play", action: () => this.seek(time) });
     return items;
@@ -1155,6 +1232,26 @@ export class Editor {
       if (segment) segment.scale = v;
     });
     range(ui.webcamSize, (p, v) => (p.webcam.size = v));
+    range(ui.webcamZoom, (p, v) => (p.webcam.zoom = v));
+    range(ui.webcamBorder, (p, v) => (p.webcam.border = v));
+    range(ui.webcamShadow, (p, v) => (p.webcam.shadow = v));
+    ui.webcamBorderColors.replaceChildren(
+      ...NOTE_COLORS.map((color) => {
+        const swatch = document.createElement("button");
+        swatch.className = "swatch";
+        swatch.dataset.color = color;
+        swatch.style.background = color;
+        swatch.setAttribute("aria-label", `Borda ${color}`);
+        swatch.addEventListener("click", () => this.change((p) => (p.webcam.borderColor = color)));
+        return swatch;
+      }),
+    );
+    for (const button of ui.cameraAdd.querySelectorAll<HTMLButtonElement>("button")) {
+      button.addEventListener("click", () => this.addCameraAt(button.dataset.layout as CameraLayout, this.ui.video.currentTime * 1000));
+    }
+    this.radios(ui.cameraLayout, (value) => {
+      if (this.selected?.track === "camera") this.setCameraLayout(this.selected.id, value as CameraLayout);
+    });
     range(ui.volumeSystem, (p, v) => (p.audio.system = v));
     range(ui.volumeMic, (p, v) => (p.audio.mic = v));
     range(ui.volumeMusic, (p, v) => {
@@ -1228,6 +1325,7 @@ export class Editor {
     toggle(ui.keysVisible, (p, v) => (p.keys.visible = v));
     toggle(ui.keySound, (p, v) => (p.audio.keySound = v));
     toggle(ui.webcamVisible, (p, v) => (p.webcam.visible = v));
+    toggle(ui.webcamMirror, (p, v) => (p.webcam.mirror = v));
     ui.enhance.addEventListener("change", () => void this.setEnhance(ui.enhance.checked));
     toggle(ui.captionsVisible, (p, v) => (p.captions.visible = v));
     toggle(ui.introEnabled, (p, v) => (p.cards.intro.enabled = v));
@@ -1263,7 +1361,13 @@ export class Editor {
     this.radios(ui.speedRate, (value) => {
       if (this.selected?.track === "speed") this.setSpeed(this.selected.id, Number(value));
     });
-    this.radios(ui.webcamCorner, (value) => this.change((p) => (p.webcam.corner = value as Corner)));
+    // A corner puts the webcam back in that corner, forgetting where it was dragged.
+    this.radios(ui.webcamCorner, (value) =>
+      this.change((p) => {
+        p.webcam.corner = value as Corner;
+        p.webcam.position = null;
+      }),
+    );
     this.radios(ui.webcamShape, (value) => this.change((p) => (p.webcam.shape = value as Project["webcam"]["shape"])));
     this.radios(ui.captionsPosition, (value) => this.change((p) => (p.captions.position = value as Project["captions"]["position"])));
 
@@ -1553,20 +1657,22 @@ export class Editor {
     const output = document.querySelector<HTMLElement>(`[data-value-for="${input.id}"]`);
     if (!output) return;
     const value = Number(input.value);
-    const percent = ["padding", "shadow", "cursor-smoothing", "webcam-size", "volume-system", "volume-mic", "volume-music"];
+    const percent = ["padding", "shadow", "cursor-smoothing", "webcam-size", "webcam-shadow", "volume-system", "volume-mic", "volume-music"];
     output.textContent = percent.includes(input.id)
       ? `${Math.round(value * 100)}%`
       : input.id === "radius" || input.id === "bg-blur"
         ? `${value}px`
         : input.id === "tilt"
           ? `${value}°`
-          : input.id === "silence-min" || input.id === "cards-duration" || input.id === "transition-duration"
-            ? `${value.toFixed(1).replace(".", ",")} s`
-            : input.id === "cursor-shape-delay"
-              ? value
-                ? `${value} ms`
-                : "desligado"
-              : `${value.toFixed(input.id === "captions-size" ? 2 : 1).replace(".", ",")}×`;
+          : input.id === "webcam-border"
+            ? `${(value * 100).toFixed(1).replace(".", ",")}%`
+            : input.id === "silence-min" || input.id === "cards-duration" || input.id === "transition-duration"
+              ? `${value.toFixed(1).replace(".", ",")} s`
+              : input.id === "cursor-shape-delay"
+                ? value
+                  ? `${value} ms`
+                  : "desligado"
+                : `${value.toFixed(input.id === "captions-size" ? 2 : 1).replace(".", ",")}×`;
   }
 
   private syncInspector() {
@@ -1638,8 +1744,8 @@ export class Editor {
     ui.selection.hidden = !selected;
     if (selected) {
       const kind = this.selectedKind(this.selected);
-      const titles = { cut: "Corte selecionado", split: "Divisão selecionada", speed: "Trecho acelerado", zoom: "Zoom selecionado", lens: "Lente selecionada", blur: "Desfoque selecionado", text: "Texto selecionado", arrow: "Seta selecionada", box: "Destaque selecionado" };
-      const removes = { cut: "Remover corte", split: "Remover divisão", speed: "Voltar à velocidade normal", zoom: "Remover zoom", lens: "Remover lente", blur: "Remover desfoque", text: "Remover texto", arrow: "Remover seta", box: "Remover destaque" };
+      const titles = { camera: "Câmera neste trecho", cut: "Corte selecionado", split: "Divisão selecionada", speed: "Trecho acelerado", zoom: "Zoom selecionado", lens: "Lente selecionada", blur: "Desfoque selecionado", text: "Texto selecionado", arrow: "Seta selecionada", box: "Destaque selecionado" };
+      const removes = { camera: "Voltar à bolha", cut: "Remover corte", split: "Remover divisão", speed: "Voltar à velocidade normal", zoom: "Remover zoom", lens: "Remover lente", blur: "Remover desfoque", text: "Remover texto", arrow: "Remover seta", box: "Remover destaque" };
       ui.selectionTitle.textContent = titles[kind];
       ui.selectionDeleteLabel.textContent = removes[kind];
       const seconds = (selected.end - selected.start) / 1000;
@@ -1657,6 +1763,8 @@ export class Editor {
       }
       ui.blurArea.hidden = kind !== "blur";
       ui.selectionSpeed.hidden = kind !== "speed";
+      ui.selectionCamera.hidden = kind !== "camera";
+      if (kind === "camera") this.setRadio(ui.cameraLayout, (selected as CameraRange).layout);
       ui.selectionNote.hidden = this.selected?.track !== "notes";
       if (this.selected?.track === "notes") {
         const note = selected as Note;
@@ -1683,13 +1791,22 @@ export class Editor {
 
     const hasWebcam = Boolean(take.webcam);
     ui.webcamNote.hidden = hasWebcam;
-    for (const control of [ui.webcamVisible, ui.webcamSize, ...ui.webcamCorner.querySelectorAll("input"), ...ui.webcamShape.querySelectorAll("input")]) {
-      (control as HTMLInputElement).disabled = !hasWebcam;
-    }
+    const webcamControls = [
+      ui.webcamVisible, ui.webcamSize, ui.webcamMirror, ui.webcamZoom, ui.webcamBorder, ui.webcamShadow,
+      ...ui.webcamCorner.querySelectorAll("input"), ...ui.webcamShape.querySelectorAll("input"),
+      ...ui.webcamBorderColors.querySelectorAll("button"), ...ui.cameraAdd.querySelectorAll("button"),
+    ];
+    for (const control of webcamControls) (control as HTMLInputElement).disabled = !hasWebcam;
     ui.webcamVisible.checked = project.webcam.visible;
     ui.webcamSize.value = String(project.webcam.size);
-    this.setRadio(ui.webcamCorner, project.webcam.corner);
+    // A dragged webcam is in no corner.
+    this.setRadio(ui.webcamCorner, project.webcam.position ? "" : project.webcam.corner);
     this.setRadio(ui.webcamShape, project.webcam.shape);
+    ui.webcamMirror.checked = project.webcam.mirror;
+    ui.webcamZoom.value = String(project.webcam.zoom);
+    ui.webcamBorder.value = String(project.webcam.border);
+    ui.webcamShadow.value = String(project.webcam.shadow);
+    for (const swatch of ui.webcamBorderColors.querySelectorAll<HTMLElement>(".swatch")) swatch.classList.toggle("selected", swatch.dataset.color === project.webcam.borderColor);
 
     ui.volumeSystem.value = String(project.audio.system);
     ui.volumeSystem.disabled = !take.systemAudio;
@@ -1729,7 +1846,7 @@ export class Editor {
       if (document.activeElement !== input) input.value = value;
     }
     ui.cardsDuration.value = String(intro.durationMs / 1000);
-    for (const input of [ui.cardsDuration, ui.noteSize, ui.silenceMin, ui.padding, ui.radius, ui.shadow, ui.tilt, ui.bgBlur, ui.cursorSize, ui.smoothing, ui.cursorShapeDelay, ui.clickSize, ui.transitionDuration, ui.zoomDefault, ui.zoomScale, ui.webcamSize, ui.volumeSystem, ui.volumeMic, ui.volumeMusic, ui.captionsSize]) {
+    for (const input of [ui.cardsDuration, ui.noteSize, ui.silenceMin, ui.padding, ui.radius, ui.shadow, ui.tilt, ui.bgBlur, ui.cursorSize, ui.smoothing, ui.cursorShapeDelay, ui.clickSize, ui.transitionDuration, ui.zoomDefault, ui.zoomScale, ui.webcamSize, ui.webcamZoom, ui.webcamBorder, ui.webcamShadow, ui.volumeSystem, ui.volumeMic, ui.volumeMusic, ui.captionsSize]) {
       this.showValue(input);
     }
     this.video.volume = Math.min(1, project.audio.system);
@@ -2184,6 +2301,7 @@ export class Editor {
           lens: null,
           spotlight: 0,
           webcam: null,
+          area: null,
           overlay: false,
           cursor: null,
           clicks: [],
@@ -2200,6 +2318,7 @@ export class Editor {
         state = frameState(scene, t, output, this.overlay.visible);
       }
       if (renderer.render(this.ui.video, state, scene.take.webcam ? this.ui.webcam : null)) this.lastRenderKey = key;
+      this.updateDirect(scene, t, output);
     } catch (error) {
       // Show the failure once instead of throwing on every frame.
       this.renderer = null;
@@ -2212,6 +2331,39 @@ export class Editor {
       this.ui.error.hidden = false;
       this.ui.error.textContent = `A renderização falhou: ${error}`;
     }
+  }
+
+  /** What can be dragged on the preview at `t`: the webcam bubble and the notes on screen. */
+  private updateDirect(scene: Scene, t: number, output: { width: number; height: number }) {
+    const { project, take } = scene;
+    const targets: DirectTarget[] = [];
+    const inLayout = project.cameras.some((range) => t >= range.start && t <= range.end);
+    if (take.webcam && project.webcam.visible && !inLayout) {
+      targets.push({ kind: "webcam", id: "webcam", box: webcamBubble(project, output).rect, round: project.webcam.shape === "circle" });
+    }
+    for (const note of project.notes) {
+      if (t < note.start || t > note.end) continue;
+      targets.push({ kind: "note", id: note.id, box: { x: note.x * output.width, y: note.y * output.height, width: note.width * output.width, height: note.height * output.height } });
+    }
+    const selected = this.selected?.track === "notes" ? this.selected.id : null;
+    this.direct.update(output, targets, selected, !this.rawView && !this.rectEditor.isOpen && !this.card);
+  }
+
+  /** A drag on the preview moved or resized the webcam or a note. */
+  private directChange(target: DirectTarget, box: Rect, done: boolean) {
+    const scene = this.scene;
+    if (!scene) return;
+    const output = this.outputFor(scene);
+    this.change((p) => {
+      if (target.kind === "webcam") {
+        p.webcam.size = Math.min(0.9, Math.max(0.05, box.width / Math.min(output.width, output.height)));
+        p.webcam.position = { x: (box.x + box.width / 2) / output.width, y: (box.y + box.height / 2) / output.height };
+        return;
+      }
+      const note = p.notes.find((candidate) => candidate.id === target.id);
+      if (note) Object.assign(note, { x: box.x / output.width, y: box.y / output.height, width: box.width / output.width, height: box.height / output.height });
+    });
+    if (done) this.flushSave();
   }
 
   private frame() {
@@ -2314,7 +2466,18 @@ export class Editor {
           },
         },
         { key: "blurs", label: "Desfoque", color: "#bf5af2", items: project.blurs, text: () => "Desfocado" },
+        // Only with a webcam: where it leaves its bubble.
+        ...(take.webcam
+          ? [{ key: "camera" as const, label: "Câmera", color: "#5ac8fa", items: project.cameras, text: (item: Range) => CAMERA_LAYOUTS.find((layout) => layout.id === (item as CameraRange).layout)?.name ?? "" }]
+          : []),
       ];
+      // Lanes follow what the take recorded, so the layout doesn't jump when their media loads.
+      const lanes: MediaLane[] = [];
+      if (take.webcam) {
+        lanes.push({ label: "Webcam", kind: "frames", color: "#8e8e93", frames: this.webcamThumbs, offset: take.webcamOffsetMs ?? 0, span: this.webcamSpan });
+      }
+      if (take.systemFile || take.systemAudio) lanes.push({ label: "Sistema", kind: "wave", color: "#5e5ce6", wave: this.systemWave, muted: project.audio.system <= 0 });
+      if (take.mic) lanes.push({ label: "Microfone", kind: "wave", color: "#66d4cf", wave: this.micWave, muted: project.audio.mic <= 0 });
       this.timeline.set({
         duration: take.durationMs,
         time: t,
@@ -2327,6 +2490,7 @@ export class Editor {
         thumbnails: this.thumbs,
         waveform: this.wave,
         range: this.range,
+        lanes,
       });
       this.highlightWord(t);
     }

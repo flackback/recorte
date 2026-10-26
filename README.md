@@ -47,7 +47,7 @@ Gravador de tela e editor para Windows, feito com Tauri 2 (Rust + TypeScript, We
   - trechos editáveis na timeline.
 - **Timeline:**
   - arraste sobre o vídeo para selecionar um trecho; Delete (ou X) corta, e Zoom, Lente e Desfocar usam o trecho;
-  - miniaturas, forma de onda e cliques no vídeo;
+  - miniaturas e cliques no vídeo; faixas próprias com os quadros da webcam e a forma de onda do som do sistema e do microfone (a faixa fica apagada com o volume em zero);
   - corte do início e do fim, e faixas de cortes, velocidade, zoom e lente, textos e desfoque;
   - itens que acontecem ao mesmo tempo (um texto com uma seta) ficam em linhas separadas na faixa;
   - Ctrl + roda aproxima.
@@ -61,7 +61,9 @@ Gravador de tela e editor para Windows, feito com Tauri 2 (Rust + TypeScript, We
 - **Limpeza automática** (aba Trechos):
   - "Tirar silêncios" acha os silêncios pelo áudio (microfone ou som da gravação) e corta, com folga para a fala não ficar colada;
   - "Tirar hã, hum e é longo" corta hesitações da transcrição. O "é" curto (verbo) fica.
-- **Webcam:** bolha em círculo ou quadrado, num dos quatro cantos.
+- **Webcam:** bolha em círculo, arredondada ou quadrada; arraste no vídeo para pôr onde quiser e puxe a alça do canto para mudar o tamanho (ou escolha um dos quatro cantos). Espelhar, aproximar, borda com cor e sombra.
+- **Layout da câmera:** na faixa "Câmera" da timeline, trechos em que a webcam fica em tela cheia, ao lado da tela (a tela vai para a esquerda) ou oculta, com a troca animada.
+- **Edição no vídeo:** além da webcam, textos, setas e destaques também se arrastam e se redimensionam direto na prévia.
 - **Áudio:**
   - volume do sistema e do microfone;
   - "Melhorar a voz", que remove ruído com RNNoise, corta graves, comprime e normaliza;
@@ -129,7 +131,7 @@ O Recorte tem um servidor MCP. Com ele, uma IA (Claude Code, Claude Desktop ou o
 | Velocidade | `add_speed`, `remove_speeds` |
 | Zoom e desfoque | `add_zoom` (zoom ou lente), `auto_zoom`, `remove_zooms`, `add_blur`, `remove_blurs`, `update_item` |
 | Textos e telas | `add_note`, `update_note`, `remove_notes`, `set_title_cards` |
-| Aparência e áudio | `apply_style`, `update_settings`, `set_background_image`, `set_music` |
+| Aparência e áudio | `apply_style`, `update_settings`, `set_camera_layout`, `set_background_image`, `set_music` |
 | Gravação | `rename_take`, `undo_last_edit`, `reset_edit` |
 | App | `app_status`, `open_in_editor`, `transcribe`, `export_video` |
 

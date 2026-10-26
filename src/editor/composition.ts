@@ -195,6 +195,78 @@ function recentClicks(clicks: CursorEvent[], t: number): FrameState["clicks"] {
   return result;
 }
 
+/** How long the webcam takes to move between its bubble and another layout. */
+const CAMERA_EASE = 400;
+/** In "Lado a lado", the screen keeps this share of the width; the camera takes the rest. */
+const SIDE_SCREEN = 0.64;
+
+type Box = { x: number; y: number; width: number; height: number };
+const mixBox = (a: Box, b: Box, k: number): Box => ({ x: a.x + (b.x - a.x) * k, y: a.y + (b.y - a.y) * k, width: a.width + (b.width - a.width) * k, height: a.height + (b.height - a.height) * k });
+
+/** The webcam bubble in the output when it is not moving: its size, and its spot or corner. */
+export function webcamBubble(project: Pick<Project, "webcam">, out: { width: number; height: number }) {
+  const short = Math.min(out.width, out.height);
+  const size = project.webcam.size * short;
+  const margin = short * 0.04;
+  const { position, corner } = project.webcam;
+  const center = position
+    ? { x: position.x * out.width, y: position.y * out.height }
+    : { x: corner.endsWith("l") ? margin + size / 2 : out.width - margin - size / 2, y: corner.startsWith("t") ? margin + size / 2 : out.height - margin - size / 2 };
+  // Always fully inside the frame.
+  const x = Math.min(Math.max(center.x - size / 2, 0), out.width - size);
+  const y = Math.min(Math.max(center.y - size / 2, 0), out.height - size);
+  const shape = project.webcam.shape;
+  const radius = shape === "circle" ? size / 2 : shape === "rounded" ? size * 0.14 : size * 0.03;
+  return { rect: { x, y, width: size, height: size }, radius };
+}
+
+/** The camera layout at `t`, with how far it has moved from the bubble (0–1). */
+function cameraLayoutAt(project: Project, t: number) {
+  for (const range of project.cameras ?? []) {
+    if (t < range.start || t > range.end) continue;
+    const k = Math.max(0, Math.min(1, (t - range.start) / CAMERA_EASE, (range.end - t) / CAMERA_EASE));
+    return { layout: range.layout, k: smooth(k) };
+  }
+  return null;
+}
+
+/** The webcam at `t` (bubble, full frame, beside the screen or hidden) and the area left for the screen. */
+function webcamAt(scene: Scene, t: number, out: { width: number; height: number }): { webcam: FrameState["webcam"]; area: FrameState["area"] } {
+  const { take, project } = scene;
+  if (!take.webcam || !project.webcam.visible) return { webcam: null, area: null };
+  const bubble = webcamBubble(project, out);
+  let rect: Box = bubble.rect;
+  let radius = bubble.radius;
+  let opacity = 1;
+  let area: FrameState["area"] = null;
+  const camera = cameraLayoutAt(project, t);
+  if (camera && camera.k > 0) {
+    const { layout, k } = camera;
+    const short = Math.min(out.width, out.height);
+    const margin = short * 0.04;
+    if (layout === "full") {
+      rect = mixBox(rect, { x: 0, y: 0, width: out.width, height: out.height }, k);
+      radius *= 1 - k;
+    } else if (layout === "side") {
+      const panel = { x: out.width * SIDE_SCREEN, y: margin, width: out.width * (1 - SIDE_SCREEN) - margin, height: out.height - margin * 2 };
+      rect = mixBox(rect, panel, k);
+      radius += (short * 0.03 - radius) * k;
+      area = mixBox({ x: 0, y: 0, width: 1, height: 1 }, { x: 0, y: 0, width: SIDE_SCREEN, height: 1 }, k);
+    } else {
+      // Hidden: shrinks a little as it fades.
+      const scale = 1 - 0.35 * k;
+      rect = { x: rect.x + (rect.width * (1 - scale)) / 2, y: rect.y + (rect.height * (1 - scale)) / 2, width: rect.width * scale, height: rect.height * scale };
+      radius *= scale;
+      opacity = 1 - k;
+    }
+  }
+  const { mirror, border, borderColor, shadow, zoom } = project.webcam;
+  return {
+    webcam: { rect, radius, opacity, mirror, border: border * Math.min(bubble.rect.width, bubble.rect.height), borderColor, shadow, zoom },
+    area,
+  };
+}
+
 /** Everything the renderer needs for the frame at source time `t` (ms). */
 export function frameState(scene: Scene, t: number, output: FrameState["output"], overlay = false): FrameState {
   const { take, project, raw, cursor, camera, clicks } = scene;
@@ -251,22 +323,7 @@ export function frameState(scene: Scene, t: number, output: FrameState["output"]
   }
 
   const out = { width: output.width, height: output.height };
-  let webcam: FrameState["webcam"] = null;
-  if (take.webcam && project.webcam.visible) {
-    const short = Math.min(out.width, out.height);
-    const size = project.webcam.size * short;
-    const margin = short * 0.04;
-    const corner = project.webcam.corner;
-    webcam = {
-      shape: project.webcam.shape,
-      rect: {
-        x: corner.endsWith("l") ? margin : out.width - margin - size,
-        y: corner.startsWith("t") ? margin : out.height - margin - size,
-        width: size,
-        height: size,
-      },
-    };
-  }
+  const { webcam, area } = webcamAt(scene, t, out);
 
   return {
     output: out,
@@ -297,6 +354,7 @@ export function frameState(scene: Scene, t: number, output: FrameState["output"]
         : null,
     blurs: project.blurs.filter((blur) => t >= blur.start && t <= blur.end),
     webcam,
+    area,
     overlay,
   };
 }

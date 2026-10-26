@@ -45,6 +45,17 @@ export async function thumbnails(source: ByteSource, track: Mp4Track, count = 48
   return result.sort((a, b) => a.t - b.t);
 }
 
+/** From the first frame's start to the last frame's end, in ms on the track's own clock. */
+export function trackSpan(track: Mp4Track) {
+  let start = Infinity;
+  let end = 0;
+  for (let i = 0; i < track.count; i++) {
+    start = Math.min(start, track.times[i]);
+    end = Math.max(end, track.times[i] + track.durations[i]);
+  }
+  return { start: Math.min(start, end) / 1000, end: end / 1000 };
+}
+
 /** Peak level per bucket over the take, mixing every audio source given, read a minute at a time. */
 export async function waveform(sources: AudioSource[], durationMs: number, buckets = 1600): Promise<Float32Array | null> {
   if (!sources.length) return null;
