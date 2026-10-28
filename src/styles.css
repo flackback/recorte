@@ -184,8 +184,12 @@ body {
 }
 
 .app.collapsed .sidebar {
-  padding: 12px 0;
+  /* A floating pill that hugs its buttons, not an empty column the height of the window. */
+  align-self: start;
+  padding: 8px 0;
   align-items: center;
+  border-radius: var(--r-pill);
+  box-shadow: var(--shadow-panel);
 }
 
 .app.collapsed .sidebar > :not(.rail),
@@ -197,7 +201,22 @@ body {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 10px;
+  gap: 6px;
+  animation: rail-in var(--base) var(--ease) both;
+}
+
+@keyframes rail-in {
+  from {
+    opacity: 0;
+    transform: translateX(-6px);
+  }
+}
+
+.rail-sep {
+  width: 20px;
+  height: 1px;
+  margin: 4px 0;
+  background: var(--border);
 }
 
 .rail-record,
@@ -235,8 +254,21 @@ body {
 }
 
 .rail-button {
-  background: var(--surface-2);
+  background: transparent;
   color: var(--muted);
+}
+
+/* Som do sistema, Microfone, Webcam: lit when on, like the chips in the panel. */
+.rail-toggle[aria-pressed="true"] {
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  color: var(--accent-text);
+}
+
+.rail-record {
+  width: 44px;
+  height: 44px;
+  margin: 2px 0;
+  box-shadow: inset 0 0 0 1px var(--border);
 }
 
 .rail-record:hover:not(.active),
@@ -1215,10 +1247,49 @@ input[type="range"]:focus-visible::-webkit-slider-thumb {
   flex-direction: column;
   align-items: center;
   gap: 10px;
+  width: min(1040px, 100%);
   margin: auto;
-  max-width: 340px;
+  padding: 32px 40px;
+  box-sizing: border-box;
   text-align: center;
   color: var(--muted);
+}
+
+.empty > p {
+  max-width: 340px;
+}
+
+/* Small windows: the start screen scrolls instead of cutting the recent takes. */
+.stage > .empty {
+  max-height: 100%;
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
+
+/* With recent takes, the start screen sits higher instead of floating in the middle. */
+.empty.with-recent {
+  margin-top: max(24px, 8vh);
+}
+
+.empty-hint {
+  margin-top: 6px !important;
+  color: var(--faint);
+  font-size: 12px;
+}
+
+.empty-hint kbd {
+  display: inline-block;
+  min-width: 18px;
+  padding: 1px 6px;
+  border: 1px solid var(--border);
+  border-bottom-width: 2px;
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.5;
 }
 
 .empty .i {
@@ -1260,14 +1331,37 @@ input[type="range"]:focus-visible::-webkit-slider-thumb {
   padding: 0 20px;
 }
 
-/* Recent takes under the start buttons, in a row that scrolls sideways. */
+/* Recent takes under the start buttons, in a grid that wraps (nothing cut at the edge). */
 .recent {
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  width: min(900px, calc(100vw - 360px));
+  gap: 12px;
+  width: 100%;
   margin-top: 36px;
   text-align: left;
+}
+
+.recent-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.link-button {
+  padding: 4px 2px;
+  border: 0;
+  background: none;
+  color: var(--accent-text);
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.link-button:hover {
+  text-decoration: underline;
+  text-underline-offset: 3px;
 }
 
 .recent h3 {
@@ -1280,17 +1374,15 @@ input[type="range"]:focus-visible::-webkit-slider-thumb {
 }
 
 .recent-row {
-  display: flex;
-  gap: 14px;
-  overflow-x: auto;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 20px 16px;
   padding: 4px 2px 10px;
-  scroll-snap-type: x proximity;
-  scrollbar-width: thin;
 }
 
 .recent-card {
   display: flex;
-  flex: 0 0 196px;
+  min-width: 0;
   flex-direction: column;
   gap: 3px;
   padding: 0;
@@ -1301,7 +1393,27 @@ input[type="range"]:focus-visible::-webkit-slider-thumb {
   font-size: 12px;
   text-align: left;
   cursor: pointer;
-  scroll-snap-align: start;
+  /* Cards come in one after another when the start screen shows. */
+  animation: recent-in var(--base) var(--ease) both;
+}
+
+.recent-card:nth-child(2) { animation-delay: 30ms; }
+.recent-card:nth-child(3) { animation-delay: 60ms; }
+.recent-card:nth-child(4) { animation-delay: 90ms; }
+.recent-card:nth-child(n + 5) { animation-delay: 120ms; }
+
+@keyframes recent-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .recent-card,
+  .rail {
+    animation: none;
+  }
 }
 
 .recent-thumb {
@@ -3110,4 +3222,97 @@ input[type="range"]:focus-visible::-webkit-slider-thumb {
   color: var(--text);
   font-size: 14px;
   font-weight: 600;
+}
+
+/* ---------- inspector controls, in the reference style ---------- */
+
+/* Name on the left, value in a small pill on the right (like the reference's "100%"). */
+.inspector .slider {
+  gap: 10px;
+}
+
+.inspector .slider > span {
+  align-items: center;
+  color: var(--text);
+  font-size: 12.5px;
+}
+
+.inspector .slider output {
+  min-width: 44px;
+  padding: 2px 9px;
+  border-radius: var(--r-pill);
+  background: var(--surface-2);
+  color: var(--muted);
+  font-size: 11.5px;
+  font-weight: 600;
+  text-align: center;
+}
+
+/* A thicker track and a larger knob, easier to grab. */
+.inspector input[type="range"] {
+  height: 22px;
+}
+
+.inspector input[type="range"]::-webkit-slider-runnable-track {
+  height: 8px;
+}
+
+.inspector input[type="range"]::-webkit-slider-thumb {
+  width: 22px;
+  height: 22px;
+  margin-top: -7px;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 35%, transparent), 0 2px 6px rgb(0 0 0 / 0.35);
+}
+
+.inspector input[type="range"]:disabled::-webkit-slider-thumb {
+  box-shadow: 0 1px 3px rgb(0 0 0 / 0.3);
+}
+
+/* On/off rows grouped in one rounded block, with hairlines between them. */
+.inspector .switch {
+  min-height: 42px;
+  padding: 0 12px;
+  border-radius: var(--r-md);
+  background: var(--surface-2);
+  font-size: 13px;
+}
+
+.inspector .switch:has(+ .switch) {
+  border-bottom-right-radius: 0;
+  border-bottom-left-radius: 0;
+}
+
+.inspector .switch + .switch {
+  margin-top: -13px;
+  border-top: 1px solid var(--border);
+  border-top-left-radius: 0;
+  border-top-right-radius: 0;
+}
+
+.inspector .switch input {
+  width: 40px;
+  height: 24px;
+}
+
+.inspector .switch input::after {
+  top: 3px;
+  left: 3px;
+  width: 18px;
+  height: 18px;
+}
+
+.inspector .switch input:checked::after {
+  transform: translateX(16px);
+}
+
+/* Labels over a group of choices, a step quieter than the controls. */
+.inspector .field > span,
+.inspector .field-label {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+/* The sliders' knob rings can poke out a few pixels; never scroll sideways for that. */
+.tab-panel {
+  overflow-x: hidden;
 }
