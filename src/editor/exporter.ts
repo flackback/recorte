@@ -14,6 +14,7 @@ import { cardLength, frameState, outputMoment, overlayText, sceneSource, totalDu
 import { OverlayPainter } from "./overlay";
 import { duckGains, scheduleDuck, voiceActivity, voiceLevels } from "./duck";
 import { GainLimiter, LoudnessMeter, loudnessGain } from "./loudness";
+import { WebcamMatte } from "./matte";
 import { defaultMedia, enhancedFile, outputSize, type Aspect, type EnhanceLevel, type MediaEdit, type Range } from "./project";
 import { Renderer } from "./renderer";
 import { clickSound, keySounds } from "./sounds";
@@ -664,6 +665,10 @@ class FrameRenderer {
   private renderer: Renderer | null = null;
   private screen: FrameSource | null = null;
   private webcam: FrameSource | null = null;
+  /** Segments each webcam frame when its background is blurred or removed. */
+  private matte: WebcamMatte | null = null;
+  /** The camera frame and mode the renderer's matte is from. */
+  private matteKey = "";
   private overlay: OverlayPainter;
 
   constructor(private scene: Scene, private output: { width: number; height: number }) {
@@ -682,6 +687,10 @@ class FrameRenderer {
     if (take.webcam && project.webcam.visible) {
       const camera = await abortable(openVideo(fileUrl(take, take.webcam)), signal);
       this.webcam = new FrameSource(camera.source, camera.track, Math.max(0, first - this.webcamLag()) * 1000);
+      if (project.webcam.background !== "original") {
+        this.matte = new WebcamMatte();
+        await abortable(this.matte.ready(), signal);
+      }
     }
   }
 
@@ -695,17 +704,33 @@ class FrameRenderer {
     const scene = this.scene;
     const screen = await abortable(this.screen!.frameAt(t * 1000), signal);
     let camera: VideoFrame | null = null;
+    let cameraTime = 0;
     if (this.webcam) {
-      const cameraTime = Math.max(0, t - this.webcamLag());
+      cameraTime = Math.max(0, t - this.webcamLag());
       camera = await abortable(this.webcam.frameAt(cameraTime * 1000), signal);
     }
     if (this.overlay.paint(overlayText(scene, t), scene.project, card)) this.renderer!.setOverlay(this.overlay.canvas);
-    this.renderer!.render(screen, frameState(scene, t, this.output, this.overlay.visible), camera);
+    const state = frameState(scene, t, this.output, this.overlay.visible);
+    // The matte comes from the very frame drawn, so the export does not depend on timing.
+    const webcam = state.webcam;
+    if (camera && this.matte && webcam && webcam.background !== "original" && webcam.opacity > 0.001) {
+      // A camera frame shown in several output frames is segmented once.
+      const blur = webcam.background === "blur";
+      const key = `${camera.timestamp}|${blur}`;
+      if (key !== this.matteKey) {
+        const matte = await abortable(this.matte.segment(camera, cameraTime, blur), signal);
+        this.renderer!.setWebcamMatte(matte);
+        matte.blurred?.close();
+        this.matteKey = key;
+      }
+    }
+    this.renderer!.render(screen, state, camera);
   }
 
   close() {
     this.screen?.close();
     this.webcam?.close();
+    this.matte?.close();
     this.renderer?.destroy();
   }
 }

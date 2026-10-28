@@ -4,7 +4,8 @@
  * text overlay (keys, captions). Preview and export share this code, so both look identical.
  */
 
-import { CURSOR_STYLES, TRANSITIONS, type ClickStyle, type CursorStyle, type Frame, type Rect, type TransitionKind } from "./project";
+import type { Matte } from "./matte";
+import { CURSOR_STYLES, TRANSITIONS, type ClickStyle, type CursorStyle, type Frame, type Rect, type TransitionKind, type WebcamBackground } from "./project";
 
 export type CursorKind = "arrow" | "hand" | "text";
 
@@ -49,6 +50,10 @@ export type FrameState = {
     shadow: number;
     /** Zoom into the camera picture (1 = all of it). */
     zoom: number;
+    /** Behind the person: kept, blurred or removed (needs a matte from setWebcamMatte). */
+    background: WebcamBackground;
+    /** How far the webcam fills the frame (0–1); a removed background shows the frame's background there, not the screen. */
+    full: number;
   } | null;
   /** Part of the output the screen is laid out in, as fractions; null is all of it. */
   area: Rect | null;
@@ -111,6 +116,11 @@ struct Uniforms {
 @group(0) @binding(4) var webcam_tex: texture_external;
 @group(0) @binding(5) var overlay_tex: texture_2d<f32>;
 @group(0) @binding(6) var bg_tex: texture_2d<f32>;
+// Webcam matte: person confidence, a blurred copy of the camera, and the mode
+// (x: 0 original, 1 blur, 2 remove; y: how far the webcam fills the frame).
+@group(0) @binding(7) var cam_mask: texture_2d<f32>;
+@group(0) @binding(8) var cam_blur: texture_2d<f32>;
+@group(0) @binding(9) var<uniform> cam_bg: vec4f;
 
 @vertex
 fn vs(@builtin(vertex_index) i: u32) -> @builtin(position) vec4f {
@@ -297,6 +307,14 @@ fn sample_content(uv0: vec2f) -> vec3f {
   return sample_screen(clamp(uv, vec2f(0.0), vec2f(1.0)));
 }
 
+// The frame's background at an output point, without zoom: what stands behind a removed webcam background in full frame.
+fn cam_backdrop(p: vec2f) -> vec3f {
+  let size = u.frame.xy;
+  if (u.bg_from.w > 0.5) { return textureSampleLevel(bg_tex, smp, (p / size) * u.bg_image.xy + u.bg_image.zw, 0.0).rgb; }
+  let dir = vec2f(cos(u.bg_to.w), sin(u.bg_to.w));
+  return mix(u.bg_from.rgb, u.bg_to.rgb, clamp(dot(p / size - 0.5, dir) + 0.5, 0.0, 1.0));
+}
+
 @fragment
 fn fs(@builtin(position) frag: vec4f) -> @location(0) vec4f {
   let size = u.frame.xy;
@@ -468,13 +486,24 @@ fn fs(@builtin(position) frag: vec4f) -> @location(0) vec4f {
     let dw = sd_rect(out_px, w, r);
     let soft = max(min(w.z, w.w) * 0.08, 4.0);
     let wshadow = 1.0 - smoothstep(-soft, soft * 2.5, sd_rect(out_px - vec2f(0.0, soft * 0.4), w, r));
-    color = mix(color, vec3f(0.0), wshadow * u.extra.z * cam_alpha);
+    // A removed background leaves no bubble to cast a shadow.
+    let removed = cam_bg.x > 1.5;
+    if (!removed) { color = mix(color, vec3f(0.0), wshadow * u.extra.z * cam_alpha); }
     if (dw < 1.0) {
       // Cover-fit the camera image into the bubble.
       let cam = (out_px - w.xy) / w.zw * u.webcam_uv.xy + u.webcam_uv.zw;
       var cx = cam.x;
       if (u.extra.w > 0.5) { cx = 1.0 - cam.x; }
-      var cam_color = textureSampleBaseClampToEdge(webcam_tex, smp, vec2f(cx, cam.y)).rgb;
+      let cam_uv = vec2f(cx, cam.y);
+      var cam_color = textureSampleBaseClampToEdge(webcam_tex, smp, cam_uv).rgb;
+      // Behind the person: the blurred camera, or what lies under the bubble (in full frame, the
+      // frame's background rather than the screen).
+      if (cam_bg.x > 0.5) {
+        let person = smoothstep(0.25, 0.75, textureSampleLevel(cam_mask, smp, cam_uv, 0.0).r);
+        var behind = textureSampleLevel(cam_blur, smp, cam_uv, 0.0).rgb;
+        if (removed) { behind = mix(color, cam_backdrop(out_px), cam_bg.y); }
+        cam_color = mix(behind, cam_color, person);
+      }
       // Border along the inside of the edge.
       let border = u.cam_style.w;
       if (border > 0.0) { cam_color = mix(cam_color, u.cam_style.rgb, smoothstep(-border - u.frame.z, -border, dw)); }
@@ -655,6 +684,11 @@ export class Renderer {
   private overlayTexture: GPUTexture | null = null;
   private backgroundTexture: GPUTexture | null = null;
   private emptyTexture: GPUTexture;
+  /** The latest webcam matte (see setWebcamMatte), and whether it has a blurred copy. */
+  private matteMask: GPUTexture | null = null;
+  private matteBlur: GPUTexture | null = null;
+  private matteHasBlur = false;
+  private matteBuffer: GPUBuffer;
   private backgroundSize = { width: 1, height: 1 };
   private context: GPUCanvasContext;
   /**
@@ -680,6 +714,7 @@ export class Renderer {
     this.cursorTexture = this.texture(sprites.width, sprites.height);
     device.queue.copyExternalImageToTexture({ source: sprites }, { texture: this.cursorTexture }, [sprites.width, sprites.height]);
     this.emptyTexture = this.texture(1, 1);
+    this.matteBuffer = device.createBuffer({ size: 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
   }
 
   static async create(canvas: HTMLCanvasElement | OffscreenCanvas): Promise<Renderer> {
@@ -715,6 +750,32 @@ export class Renderer {
       this.overlayTexture = this.texture(canvas.width, canvas.height);
     }
     this.device.queue.copyExternalImageToTexture({ source: canvas }, { texture: this.overlayTexture }, [canvas.width, canvas.height]);
+  }
+
+  /**
+   * Uploads the matte of the webcam frame drawn next (person mask and, for blurring, a blurred
+   * copy); null forgets it, and the webcam shows as recorded until the next one.
+   */
+  setWebcamMatte(matte: Matte | null) {
+    if (!matte) {
+      this.matteMask?.destroy();
+      this.matteMask = null;
+      return;
+    }
+    if (!this.matteMask || this.matteMask.width !== matte.width || this.matteMask.height !== matte.height) {
+      this.matteMask?.destroy();
+      this.matteMask = this.device.createTexture({ size: [matte.width, matte.height], format: "r8unorm", usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST });
+    }
+    this.device.queue.writeTexture({ texture: this.matteMask }, matte.mask, { bytesPerRow: matte.width }, [matte.width, matte.height]);
+    this.matteHasBlur = matte.blurred !== null;
+    if (matte.blurred) {
+      const { width, height } = matte.blurred;
+      if (!this.matteBlur || this.matteBlur.width !== width || this.matteBlur.height !== height) {
+        this.matteBlur?.destroy();
+        this.matteBlur = this.texture(width, height);
+      }
+      this.device.queue.copyExternalImageToTexture({ source: matte.blurred }, { texture: this.matteBlur }, [width, height]);
+    }
   }
 
   /**
@@ -818,6 +879,10 @@ export class Renderer {
     vec(18, [transition?.amount ?? 0, 0, 0, 0]);
 
     this.device.queue.writeBuffer(this.uniformBuffer, 0, u);
+    // The webcam's background mode, only with a matte to draw it from.
+    const camBackground = webcamReady && this.matteMask ? state.webcam!.background : "original";
+    const camMode = camBackground === "remove" ? 2 : camBackground === "blur" && this.matteHasBlur ? 1 : 0;
+    this.device.queue.writeBuffer(this.matteBuffer, 0, new Float32Array([camMode, state.webcam?.full ?? 0, 0, 0]));
     const screen = this.device.importExternalTexture({ source });
     const bindGroup = this.device.createBindGroup({
       layout: this.pipeline.getBindGroupLayout(0),
@@ -830,6 +895,9 @@ export class Renderer {
         { binding: 4, resource: webcamReady ? this.device.importExternalTexture({ source: webcam! }) : screen },
         { binding: 5, resource: (this.overlayTexture ?? this.emptyTexture).createView() },
         { binding: 6, resource: (this.backgroundTexture ?? this.emptyTexture).createView() },
+        { binding: 7, resource: (this.matteMask ?? this.emptyTexture).createView() },
+        { binding: 8, resource: (this.matteBlur ?? this.emptyTexture).createView() },
+        { binding: 9, resource: { buffer: this.matteBuffer } },
       ],
     });
 
@@ -846,8 +914,9 @@ export class Renderer {
   }
 
   destroy() {
-    for (const texture of [this.cursorTexture, this.overlayTexture, this.backgroundTexture, this.emptyTexture]) texture?.destroy();
+    for (const texture of [this.cursorTexture, this.overlayTexture, this.backgroundTexture, this.emptyTexture, this.matteMask, this.matteBlur]) texture?.destroy();
     this.uniformBuffer.destroy();
+    this.matteBuffer.destroy();
     this.device.destroy();
   }
 }

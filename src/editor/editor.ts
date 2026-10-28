@@ -62,6 +62,7 @@ import {
 } from "./project";
 import { DirectEdit, type DirectTarget } from "./direct-edit";
 import { RectEditor } from "./rect-editor";
+import { WebcamMatte, type Matte } from "./matte";
 import { cursorPreview, Renderer } from "./renderer";
 import { SoundPreview } from "./sounds";
 import { laneCutKey, laneOfCut, shiftLabel, Timeline, type ItemKey, type MediaLane, type Selection, type Track, type TrackKey } from "./timeline";
@@ -294,6 +295,7 @@ export class Editor {
     webcamCorner: $("webcam-corner"),
     webcamShape: $("webcam-shape"),
     webcamMirror: $<HTMLInputElement>("webcam-mirror"),
+    webcamBackground: $("webcam-background"),
     webcamZoom: $<HTMLInputElement>("webcam-zoom"),
     webcamBorder: $<HTMLInputElement>("webcam-border"),
     webcamBorderColors: $("webcam-border-colors"),
@@ -386,6 +388,16 @@ export class Editor {
   private inspectorDirty = false;
   /** A seek asked for while the video was still seeking; applied once that one lands. */
   private pendingSeek: number | null = null;
+  /** Finds the person in the webcam for a blurred or removed background; made on first use. */
+  private matte: WebcamMatte | null = null;
+  /** Bumped for every new webcam picture, so a paused preview segments it. */
+  private webcamFrames = 0;
+  /** The webcam picture and mode the last matte was asked for, and the renderer it went to. */
+  private matteKey = "";
+  private matteTarget: Renderer | null = null;
+  /** A finished matte not yet uploaded; `matteVersion` is bumped with each, so a paused preview redraws. */
+  private matteReady: Matte | null = null;
+  private matteVersion = 0;
   /** Size of the preview area, kept by a ResizeObserver instead of measured every frame. */
   private previewBox: { width: number; height: number } | null = null;
   /** What the last frame showed while paused; the same again means there is nothing to do. */
@@ -424,6 +436,11 @@ export class Editor {
     this.bindPlayback();
     this.bindShortcuts();
     this.music.loop = true;
+    const onWebcamFrame = () => {
+      this.webcamFrames++;
+      this.ui.webcam.requestVideoFrameCallback(onWebcamFrame);
+    };
+    this.ui.webcam.requestVideoFrameCallback(onWebcamFrame);
     new ResizeObserver(() => {
       const box = this.ui.preview.getBoundingClientRect();
       this.previewBox = { width: box.width, height: box.height };
@@ -1751,6 +1768,7 @@ export class Editor {
       }),
     );
     this.radios(ui.webcamShape, (value) => this.change((p) => (p.webcam.shape = value as Project["webcam"]["shape"])));
+    this.radios(ui.webcamBackground, (value) => this.change((p) => (p.webcam.background = value as Project["webcam"]["background"])));
     this.radios(ui.captionsPosition, (value) => this.change((p) => (p.captions.position = value as Project["captions"]["position"])));
 
     ui.bgImage.addEventListener("click", () => ui.bgFile.click());
@@ -2198,7 +2216,7 @@ export class Editor {
     ui.webcamNote.hidden = hasWebcam;
     const webcamControls = [
       ui.webcamVisible, ui.webcamSize, ui.webcamMirror, ui.webcamZoom, ui.webcamBorder, ui.webcamShadow,
-      ...ui.webcamCorner.querySelectorAll("input"), ...ui.webcamShape.querySelectorAll("input"),
+      ...ui.webcamCorner.querySelectorAll("input"), ...ui.webcamShape.querySelectorAll("input"), ...ui.webcamBackground.querySelectorAll("input"),
       ...ui.webcamBorderColors.querySelectorAll("button"), ...ui.cameraAdd.querySelectorAll("button"),
     ];
     for (const control of webcamControls) (control as HTMLInputElement).disabled = !hasWebcam;
@@ -2207,6 +2225,7 @@ export class Editor {
     // A dragged webcam is in no corner.
     this.setRadio(ui.webcamCorner, project.webcam.position ? "" : project.webcam.corner);
     this.setRadio(ui.webcamShape, project.webcam.shape);
+    this.setRadio(ui.webcamBackground, project.webcam.background);
     ui.webcamMirror.checked = project.webcam.mirror;
     ui.webcamZoom.value = String(project.webcam.zoom);
     ui.webcamBorder.value = String(project.webcam.border);
@@ -2781,6 +2800,45 @@ export class Editor {
     return this.rawView ? outputSize("auto", { width: scene.take.width, height: scene.take.height }) : outputSize(scene.project.aspect, sceneSource(scene));
   }
 
+  /**
+   * Keeps the webcam matte current when its background is blurred or removed and it is visible:
+   * asks the worker for each new picture, one at a time, and uploads each answer as it arrives
+   * (a frame or two late while playing, exact once paused). Until the segmenter has loaded, the
+   * webcam shows as recorded.
+   */
+  private updateMatte(renderer: Renderer, state: ReturnType<typeof frameState>) {
+    if (this.matteReady) {
+      renderer.setWebcamMatte(this.matteReady);
+      this.matteReady.blurred?.close();
+      this.matteReady = null;
+    }
+    const webcam = state.webcam;
+    const camera = this.ui.webcam;
+    if (!webcam || webcam.background === "original" || webcam.opacity <= 0.001) return;
+    if (camera.readyState < HTMLMediaElement.HAVE_CURRENT_DATA || !camera.videoWidth) return;
+    const blur = webcam.background === "blur";
+    const key = `${this.webcamFrames}|${blur}`;
+    if (key === this.matteKey && this.matteTarget === renderer) return;
+    if (!this.matte) {
+      this.matte = new WebcamMatte();
+      this.matte.ready().then(
+        () => this.matteVersion++,
+        (error) => console.error("Recorte da webcam indisponível:", error),
+      );
+    }
+    if (!this.matte.loaded || this.matte.busy) return;
+    this.matteKey = key;
+    this.matteTarget = renderer;
+    this.matte.segment(camera, camera.currentTime * 1000, blur).then(
+      (matte) => {
+        this.matteReady?.blurred?.close();
+        this.matteReady = matte;
+        this.matteVersion++;
+      },
+      (error) => console.error("O recorte da webcam falhou:", error),
+    );
+  }
+
   private renderFrame(t: number, key: string) {
     const scene = this.scene!;
     const renderer = this.renderer;
@@ -2818,6 +2876,7 @@ export class Editor {
         }
         state = frameState(scene, t, output, this.overlay.visible);
       }
+      this.updateMatte(renderer, state);
       if (renderer.render(this.ui.video, state, scene.take.webcam ? this.ui.webcam : null)) this.lastRenderKey = key;
       this.updateDirect(scene, t, output);
     } catch (error) {
@@ -2880,7 +2939,7 @@ export class Editor {
     let t = video.currentTime * 1000;
 
     // Paused with nothing new since the last frame: it still stands.
-    const idleKey = `${t}|${this.version}|${video.readyState}|${this.ui.webcam.readyState}|${this.previewBox?.width}|${this.previewBox?.height}|${window.devicePixelRatio}|${this.lastRenderKey}|${this.lastTimelineKey}`;
+    const idleKey = `${t}|${this.version}|${video.readyState}|${this.ui.webcam.readyState}|${this.webcamFrames}|${this.matteVersion}|${this.previewBox?.width}|${this.previewBox?.height}|${window.devicePixelRatio}|${this.lastRenderKey}|${this.lastTimelineKey}`;
     if (video.paused && !this.card && idleKey === this.lastIdleKey) return;
     this.lastIdleKey = idleKey;
 
@@ -2914,7 +2973,7 @@ export class Editor {
 
     const output = this.outputFor(scene);
     const resized = this.layoutCanvas(output);
-    const renderKey = `${t}|${this.version}|${video.readyState}|${this.ui.webcam.readyState}`;
+    const renderKey = `${t}|${this.version}|${video.readyState}|${this.ui.webcam.readyState}|${this.webcamFrames}|${this.matteVersion}`;
     if (!video.paused || this.card || resized || renderKey !== this.lastRenderKey) this.renderFrame(t, renderKey);
 
     const current = `${formatTime(time.toOutput(t))} `;

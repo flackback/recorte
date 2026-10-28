@@ -929,6 +929,10 @@ const settingsShape = {
       border: z.number().min(0).max(0.06).optional().describe("Largura da borda, em fração do tamanho da bolha."),
       borderColor: z.string().regex(/^#[0-9a-fA-F]{6}$/).optional(),
       shadow: z.number().min(0).max(1).optional(),
+      background: z
+        .enum(["original", "blur", "remove"])
+        .optional()
+        .describe("Fundo atrás da pessoa, sem tela verde: original, blur (desfocado) ou remove (removido; em tela cheia aparece o fundo do vídeo)."),
     })
     .optional(),
   audio: z
