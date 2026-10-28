@@ -153,6 +153,82 @@ body {
   grid-template-columns: 284px 1fr;
   flex: 1;
   min-height: 0;
+  transition: grid-template-columns var(--base) var(--ease);
+}
+
+/* Panel folded into a rail: record, and a way back to the takes. */
+.app.collapsed {
+  grid-template-columns: 56px 1fr;
+}
+
+.app.collapsed .sidebar {
+  padding: 12px 0;
+  align-items: center;
+}
+
+.app.collapsed .sidebar > :not(.rail),
+.app:not(.collapsed) .rail {
+  display: none;
+}
+
+.rail {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+}
+
+.rail-record,
+.rail-button {
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  border: 0;
+  border-radius: 50%;
+  cursor: pointer;
+  transition: transform var(--fast) var(--ease), background var(--fast) var(--ease);
+}
+
+.rail-record {
+  background: var(--text);
+}
+
+.rail-record .dot {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--record);
+  transition: border-radius var(--base) var(--ease);
+}
+
+.rail-record.active {
+  background: var(--record);
+}
+
+.rail-record.active .dot {
+  border-radius: 3px;
+  background: #fff;
+  animation: pulse 1.2s ease-in-out infinite;
+}
+
+.rail-button {
+  background: transparent;
+  color: var(--muted);
+}
+
+.rail-button:hover {
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+.rail-record:active,
+.rail-button:active {
+  transform: scale(0.94);
+}
+
+.sidebar-toggle {
+  margin-right: 2px;
 }
 
 /* ---------- title bar ---------- */
@@ -807,6 +883,76 @@ input[type="range"]:focus-visible::-webkit-slider-thumb {
 .record + .hint {
   margin-top: -4px;
   text-align: center;
+}
+
+/* Folded options under the chips. */
+.options {
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--surface-2);
+}
+
+.options summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 34px;
+  padding: 0 10px;
+  color: var(--text);
+  font-weight: 600;
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+}
+
+.options summary::-webkit-details-marker {
+  display: none;
+}
+
+.options-summary {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 400;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  text-align: right;
+}
+
+.options .chevron {
+  width: 14px;
+  height: 14px;
+  flex: none;
+  color: var(--muted);
+  transition: transform var(--fast) var(--ease);
+}
+
+.options[open] .chevron {
+  transform: rotate(90deg);
+}
+
+.options[open] .options-summary {
+  visibility: hidden;
+}
+
+.options summary:focus-visible {
+  border-radius: var(--r-md);
+  outline: none;
+  box-shadow: var(--focus);
+}
+
+.options-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 2px 10px 10px;
+  animation: fade-in var(--base) var(--ease);
+}
+
+.options-body .hint {
+  margin: 0;
 }
 
 .warnings {

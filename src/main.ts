@@ -38,6 +38,11 @@ const ui = {
   fps: $("fps"),
   record: $<HTMLButtonElement>("record"),
   recordLabel: $("record-label"),
+  sidebarToggle: $<HTMLButtonElement>("sidebar-toggle"),
+  railRecord: $<HTMLButtonElement>("rail-record"),
+  railTakes: $<HTMLButtonElement>("rail-takes"),
+  recOptions: $<HTMLDetailsElement>("rec-options"),
+  optionsSummary: $("options-summary"),
   recordHint: $("record-hint"),
   warnings: $<HTMLUListElement>("warnings"),
   live: $("live"),
@@ -688,6 +693,9 @@ function setRecordingUi(active: boolean) {
   ui.titlebarStatus.hidden = !active;
   ui.titlebarTime.textContent = "Gravando";
   ui.record.classList.toggle("active", active);
+  ui.railRecord.classList.toggle("active", active);
+  ui.railRecord.title = active ? "Parar (Alt+Shift+R)" : "Gravar (Alt+Shift+R)";
+  ui.railRecord.setAttribute("aria-label", active ? "Parar" : "Gravar");
   ui.recordLabel.textContent = active ? "Parar · 0:00.0" : "Gravar";
   for (const control of [ui.refresh, ui.systemAudio, ui.microphone, ui.webcam, ui.keystrokes, ui.showCursor, ui.drawZoom, ...ui.sourceKind.querySelectorAll("input")]) {
     (control as HTMLInputElement).disabled = active;
@@ -1573,6 +1581,63 @@ ui.takes.addEventListener("keydown", (event) => {
 void updateMaximizeButton();
 
 ui.record.addEventListener("click", toggleRecording);
+ui.railRecord.addEventListener("click", toggleRecording);
+
+// ---------- sidebar ----------
+
+const SIDEBAR_KEY = "recorte.sidebarCollapsed";
+const OPTIONS_KEY = "recorte.optionsOpen";
+
+/** Folds the panel into a thin rail (more room for the editor), or opens it again. Remembered. */
+function setSidebarCollapsed(collapsed: boolean) {
+  document.querySelector(".app")!.classList.toggle("collapsed", collapsed);
+  ui.sidebarToggle.setAttribute("aria-expanded", String(!collapsed));
+  const label = collapsed ? "Mostrar o painel" : "Esconder o painel";
+  ui.sidebarToggle.title = `${label} (Ctrl+\\)`;
+  ui.sidebarToggle.setAttribute("aria-label", label);
+  try {
+    localStorage.setItem(SIDEBAR_KEY, collapsed ? "1" : "0");
+  } catch {
+    // Only a convenience.
+  }
+}
+
+const sidebarCollapsed = () => document.querySelector(".app")!.classList.contains("collapsed");
+ui.sidebarToggle.addEventListener("click", () => setSidebarCollapsed(!sidebarCollapsed()));
+ui.railTakes.addEventListener("click", () => setSidebarCollapsed(false));
+window.addEventListener("keydown", (event) => {
+  if (event.ctrlKey && event.key === "\\") {
+    event.preventDefault();
+    setSidebarCollapsed(!sidebarCollapsed());
+  }
+});
+
+/** "60 fps · Contagem · Zoom ao desenhar": how the folded options are set, at a glance. */
+function updateOptionsSummary() {
+  const on = [
+    ui.keystrokes.checked && "Teclas",
+    ui.showCursor.checked && "Cursor",
+    ui.countdown.checked && "Contagem",
+    ui.drawZoom.checked && "Zoom ao desenhar",
+  ].filter(Boolean);
+  ui.optionsSummary.textContent = [`${selectedFps()} fps`, ...on].join(" · ");
+}
+
+for (const control of [ui.keystrokes, ui.showCursor, ui.countdown, ui.drawZoom, ui.fps]) control.addEventListener("change", updateOptionsSummary);
+ui.recOptions.addEventListener("toggle", () => {
+  try {
+    localStorage.setItem(OPTIONS_KEY, ui.recOptions.open ? "1" : "0");
+  } catch {
+    // Only a convenience.
+  }
+});
+try {
+  setSidebarCollapsed(localStorage.getItem(SIDEBAR_KEY) === "1");
+  ui.recOptions.open = localStorage.getItem(OPTIONS_KEY) === "1";
+} catch {
+  // Defaults: panel open, options folded.
+}
+updateOptionsSummary();
 ui.takeSelectionTrash.addEventListener("click", () => void trashTakes(takes.filter((take) => picked.has(take.id))));
 ui.takeSelectionClear.addEventListener("click", () => clearPicked());
 ui.takeSearch.addEventListener("input", () => runSearch());
