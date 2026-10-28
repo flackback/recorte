@@ -7,7 +7,7 @@ import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { startAgent } from "./agent";
 import { joinSegments } from "./join";
 import { Editor } from "./editor/editor";
-import { confirmDialog, onContextMenu, type MenuItem } from "./menu";
+import { confirmDialog, onContextMenu, showMenu, type MenuItem } from "./menu";
 import { resetTips, showTour } from "./tips";
 import { toast } from "./toast";
 import { Settings } from "./settings";
@@ -31,10 +31,10 @@ const ui = {
   systemAudio: $<HTMLInputElement>("system-audio"),
   microphone: $<HTMLInputElement>("microphone"),
   webcam: $<HTMLInputElement>("webcam"),
-  micPick: $("mic-pick"),
-  micDevice: $<HTMLSelectElement>("mic-device"),
-  camPick: $("cam-pick"),
-  camDevice: $<HTMLSelectElement>("cam-device"),
+  micPick: $<HTMLButtonElement>("mic-pick"),
+  micName: $("mic-name"),
+  camPick: $<HTMLButtonElement>("cam-pick"),
+  camName: $("cam-name"),
   keystrokes: $<HTMLInputElement>("keystrokes"),
   drawZoom: $<HTMLInputElement>("draw-zoom"),
   showCursor: $<HTMLInputElement>("show-cursor"),
@@ -476,46 +476,93 @@ function renderPicker() {
 const devicePick = { mic: "", cam: "" };
 
 type AudioInput = { id: string; name: string; default: boolean };
+/** A choice in a device menu; `shown` is what the card says when it is picked. */
+type DeviceChoice = { value: string; label: string; shown: string };
 
-/** Fills a device list, keeping the pick while it is plugged in. */
-function fillDevices(select: HTMLSelectElement, choices: [string, string][], picked: string) {
-  select.replaceChildren(
-    ...choices.map(([value, label]) => {
-      const option = document.createElement("option");
-      option.value = value;
-      option.textContent = label;
-      return option;
-    }),
-  );
-  select.value = choices.some(([value]) => value === picked) ? picked : (choices[0]?.[0] ?? "");
-  select.dataset.count = String(choices.length);
+/** What each card offers, and what it uses now ("" for the default). */
+const deviceLists = {
+  mic: { choices: [] as DeviceChoice[], value: "", devices: 0 },
+  cam: { choices: [] as DeviceChoice[], value: "", devices: 0 },
+};
+
+/** Keeps the pick while it is plugged in; otherwise the first choice. */
+function fillDevices(kind: "mic" | "cam", choices: DeviceChoice[], devices: number) {
+  const list = deviceLists[kind];
+  list.choices = choices;
+  list.devices = devices;
+  list.value = choices.some((choice) => choice.value === devicePick[kind]) ? devicePick[kind] : (choices[0]?.value ?? "");
+  const card = kind === "mic" ? ui.micPick : ui.camPick;
+  const name = kind === "mic" ? ui.micName : ui.camName;
+  const current = choices.find((choice) => choice.value === list.value);
+  name.textContent = current?.shown ?? "";
+  // One device: nothing to choose, the card only says which one records.
+  card.classList.toggle("single", devices < 2);
+  card.title = devices < 2 ? `${kind === "mic" ? "Microfone" : "Webcam"}: ${current?.shown ?? ""}` : `Trocar ${kind === "mic" ? "o microfone" : "a webcam"}`;
 }
 
 /** Lists the microphones (names from Windows) and the cameras (names show once a camera was allowed). */
 async function listDevices(devices: MediaDeviceInfo[]) {
   const cameras = devices.filter((device) => device.kind === "videoinput" && device.deviceId);
-  fillDevices(ui.camDevice, cameras.map((camera, index) => [camera.deviceId, camera.label || `Webcam ${index + 1}`]), devicePick.cam);
+  fillDevices(
+    "cam",
+    cameras.map((camera, index) => {
+      const label = camera.label.replace(/\s*\([0-9a-f]{4}:[0-9a-f]{4}\)$/i, "") || `Webcam ${index + 1}`;
+      return { value: camera.deviceId, label, shown: label };
+    }),
+    cameras.length,
+  );
   try {
     const inputs = await invoke<AudioInput[]>("audio_inputs");
     const fallback = inputs.find((input) => input.default);
-    const choices: [string, string][] = inputs.map((input) => [input.id, input.name]);
-    fillDevices(ui.micDevice, inputs.length ? [["", fallback ? `Padrão · ${fallback.name}` : "Padrão do Windows"], ...choices] : [], devicePick.mic);
+    const choices = inputs.map((input) => ({ value: input.id, label: input.name, shown: input.name }));
+    fillDevices("mic", inputs.length ? [{ value: "", label: "Padrão do Windows", shown: fallback?.name ?? "Padrão do Windows" }, ...choices] : [], inputs.length);
   } catch (error) {
     console.error("audio_inputs", error);
   }
   showPicks();
 }
 
-/** A list shows before recording, while its chip is on and there is a device. */
+/** A card shows before recording, while its chip is on and there is a device. */
 function showPicks() {
   const allowed = liveAllowed();
-  ui.micPick.hidden = !allowed || !ui.microphone.checked || !ui.micDevice.options.length;
-  ui.camPick.hidden = !allowed || !ui.webcam.checked || !ui.camDevice.options.length;
+  ui.micPick.hidden = !allowed || !ui.microphone.checked || !deviceLists.mic.choices.length;
+  ui.camPick.hidden = !allowed || !ui.webcam.checked || !deviceLists.cam.choices.length;
+}
+
+/** Opens the device menu under its card. */
+function openDeviceMenu(kind: "mic" | "cam") {
+  const list = deviceLists[kind];
+  const card = kind === "mic" ? ui.micPick : ui.camPick;
+  if (list.devices < 2 || card.disabled) return;
+  const rect = card.getBoundingClientRect();
+  const items: MenuItem[] = list.choices.map((choice) => ({
+    label: choice.label,
+    checked: choice.value === list.value,
+    action: () => pickDevice(kind, choice.value),
+  }));
+  // The default comes first, apart from the devices.
+  if (kind === "mic") items.splice(1, 0, "separator");
+  card.setAttribute("aria-expanded", "true");
+  showMenu(rect.left, rect.bottom + 6, items, { width: rect.width, onClose: () => card.setAttribute("aria-expanded", "false") });
+}
+
+function pickDevice(kind: "mic" | "cam", value: string) {
+  if (value === deviceLists[kind].value) return;
+  devicePick[kind] = value;
+  fillDevices(kind, deviceLists[kind].choices, deviceLists[kind].devices);
+  saveSettings();
+  if (kind === "mic") {
+    invoke("set_microphone", { id: value || null }).catch((error) => console.error("set_microphone", error));
+  } else {
+    // The preview moves to the new camera.
+    closePreview();
+    updateLive();
+  }
 }
 
 /** Opens the picked camera, or the first one. */
 function cameraConstraints(width: number, height: number): MediaStreamConstraints {
-  const deviceId = ui.camDevice.value;
+  const deviceId = deviceLists.cam.value;
   return { video: { ...(deviceId ? { deviceId: { exact: deviceId } } : {}), width: { ideal: width }, height: { ideal: height }, frameRate: { ideal: 30 } }, audio: false };
 }
 
@@ -713,7 +760,7 @@ async function openPreview() {
       return;
     }
     // Camera names are only given once a camera was allowed.
-    if (Array.from(ui.camDevice.options).some((option) => /^Webcam \d+$/.test(option.textContent ?? ""))) {
+    if (deviceLists.cam.choices.some((choice) => /^Webcam \d+$/.test(choice.label))) {
       void navigator.mediaDevices.enumerateDevices().then(listDevices).catch(() => undefined);
     }
     live.cam = stream;
@@ -758,7 +805,7 @@ function setRecordingUi(active: boolean) {
   ui.railRecord.title = active ? "Parar (Alt+Shift+R)" : "Gravar (Alt+Shift+R)";
   ui.railRecord.setAttribute("aria-label", active ? "Parar" : "Gravar");
   ui.recordLabel.textContent = active ? "Parar · 0:00.0" : "Gravar";
-  for (const control of [ui.refresh, ui.systemAudio, ui.microphone, ui.webcam, ui.micDevice, ui.camDevice, ui.keystrokes, ui.showCursor, ui.drawZoom, ...ui.sourceKind.querySelectorAll("input")]) {
+  for (const control of [ui.refresh, ui.systemAudio, ui.microphone, ui.webcam, ui.micPick, ui.camPick, ui.keystrokes, ui.showCursor, ui.drawZoom, ...ui.sourceKind.querySelectorAll("input")]) {
     (control as HTMLInputElement).disabled = active;
   }
   renderPicker();
@@ -1749,18 +1796,8 @@ for (const control of [ui.systemAudio, ui.microphone, ui.webcam, ui.keystrokes, 
   control.addEventListener("change", saveSettings);
 }
 for (const control of [ui.systemAudio, ui.microphone, ui.webcam]) control.addEventListener("change", () => updateLive());
-ui.micDevice.addEventListener("change", () => {
-  devicePick.mic = ui.micDevice.value;
-  invoke("set_microphone", { id: devicePick.mic || null }).catch((error) => console.error("set_microphone", error));
-  saveSettings();
-});
-ui.camDevice.addEventListener("change", () => {
-  devicePick.cam = ui.camDevice.value;
-  saveSettings();
-  // The preview moves to the new camera.
-  closePreview();
-  updateLive();
-});
+ui.micPick.addEventListener("click", () => openDeviceMenu("mic"));
+ui.camPick.addEventListener("click", () => openDeviceMenu("cam"));
 // The live check stops while the window is minimized or hidden.
 document.addEventListener("visibilitychange", () => void checkMinimized());
 window.addEventListener("focus", () => void checkMinimized());

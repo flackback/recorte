@@ -208,20 +208,31 @@
 
           <!-- Live check before recording: sound coming in, and the camera framing. -->
           <div class="live" id="live" hidden>
-            <div class="devices">
-              <label class="device" id="mic-pick" title="Microfone usado na gravação" hidden><svg class="i"><use href="#i-mic" /></svg><select id="mic-device" aria-label="Microfone"></select></label>
-              <label class="device" id="cam-pick" title="Webcam usada na gravação" hidden><svg class="i"><use href="#i-camera" /></svg><select id="cam-device" aria-label="Webcam"></select></label>
-            </div>
             <div class="meters">
-              <div class="meter" id="meter-system" data-label="Som do sistema" title="Som do sistema" hidden>
-                <svg class="i"><use href="#i-audio" /></svg><span class="meter-track"><span class="meter-cover"></span></span>
+              <!-- One card per source: the sound level, which microphone and camera record, and the camera preview. -->
+              <div class="device-card static" id="meter-system" data-label="Som do sistema" title="Som do sistema" hidden>
+                <span class="device-badge"><svg class="i"><use href="#i-audio" /></svg></span>
+                <span class="device-text">
+                  <span class="device-name">Som do sistema</span>
+                  <span class="meter"><span class="meter-track"><span class="meter-cover"></span></span></span>
+                </span>
               </div>
-              <div class="meter" id="meter-mic" data-label="Microfone" title="Microfone" hidden>
-                <svg class="i"><use href="#i-mic" /></svg><span class="meter-track"><span class="meter-cover"></span></span>
-              </div>
-            </div>
-            <div class="cam-preview" id="cam-preview" title="Prévia da webcam" hidden>
-              <video id="cam-preview-video" muted playsinline aria-label="Prévia da webcam"></video>
+              <button class="device-card" id="mic-pick" aria-haspopup="menu" aria-expanded="false" hidden>
+                <span class="device-badge"><svg class="i"><use href="#i-mic" /></svg></span>
+                <span class="device-text">
+                  <span class="device-name" id="mic-name"></span>
+                  <span class="meter" id="meter-mic" data-label="Microfone" hidden><span class="meter-track"><span class="meter-cover"></span></span></span>
+                </span>
+                <svg class="i device-chevron"><use href="#i-chevron" /></svg>
+              </button>
+              <button class="device-card" id="cam-pick" aria-haspopup="menu" aria-expanded="false" hidden>
+                <span class="device-badge">
+                  <svg class="i"><use href="#i-camera" /></svg>
+                  <span class="cam-preview" id="cam-preview" hidden><video id="cam-preview-video" muted playsinline aria-label="Prévia da webcam"></video></span>
+                </span>
+                <span class="device-text"><span class="device-name" id="cam-name"></span></span>
+                <svg class="i device-chevron"><use href="#i-chevron" /></svg>
+              </button>
             </div>
             <p class="hint cam-note" id="cam-note" hidden></p>
           </div>

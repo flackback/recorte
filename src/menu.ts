@@ -22,8 +22,8 @@ export function closeMenu() {
   open?.close();
 }
 
-/** Shows a menu at a viewport point, kept fully on screen. */
-export function showMenu(x: number, y: number, items: MenuItem[]) {
+/** Shows a menu at a viewport point, kept fully on screen. `width` matches the control it opens from. */
+export function showMenu(x: number, y: number, items: MenuItem[], options: { width?: number; onClose?: () => void } = {}) {
   closeMenu();
   const visible = items.filter((item, index) => item !== "separator" || (index > 0 && index < items.length - 1 && items[index - 1] !== "separator"));
   if (!visible.length) return;
@@ -70,6 +70,10 @@ export function showMenu(x: number, y: number, items: MenuItem[]) {
     menu.append(button);
   }
 
+  if (options.width) {
+    menu.style.width = `${options.width}px`;
+    menu.style.maxWidth = "none";
+  }
   document.body.append(menu);
   const rect = menu.getBoundingClientRect();
   const left = Math.min(x, window.innerWidth - rect.width - 6);
@@ -107,6 +111,7 @@ export function showMenu(x: number, y: number, items: MenuItem[]) {
       window.removeEventListener("wheel", onDismiss, true);
       menu.remove();
       open = null;
+      options.onClose?.();
       if (restore instanceof HTMLElement) restore.focus({ preventScroll: true });
     },
   };
@@ -115,7 +120,9 @@ export function showMenu(x: number, y: number, items: MenuItem[]) {
   window.addEventListener("blur", onDismiss);
   window.addEventListener("resize", onDismiss);
   window.addEventListener("wheel", onDismiss, true);
-  enabled()[0]?.focus({ preventScroll: true });
+  // Starts on the checked item, so the arrows move from the current choice.
+  const list = enabled();
+  (list.find((button) => button.getAttribute("aria-checked") === "true") ?? list[0])?.focus({ preventScroll: true });
 }
 
 /** Opens a menu for a contextmenu event, unless the target is a text field. */

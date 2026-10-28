@@ -830,47 +830,102 @@ input[type="range"]:focus-visible::-webkit-slider-thumb {
   margin-top: -4px;
 }
 
-/* Which microphone and camera record: compact lists above the level bars. */
-.devices {
-  display: flex;
-  flex-basis: 100%;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.devices:not(:has(.device:not([hidden]))) {
-  display: none;
-}
-
-.device {
+/* Which microphone and camera record: a card each, the microphone's level inside its card. */
+.device-card {
   display: flex;
   align-items: center;
-  gap: 8px;
-  min-width: 0;
+  gap: 10px;
+  width: 100%;
+  min-height: 44px;
+  padding: 6px 12px 6px 6px;
+  border: 0;
+  border-radius: 14px;
+  background: var(--surface-2);
+  color: var(--text);
+  text-align: left;
+  transition: background var(--fast) var(--ease);
+}
+
+.device-card:hover:not(.single):not(:disabled),
+.device-card[aria-expanded="true"] {
+  background: var(--surface-3);
+}
+
+.device-card.single,
+.device-card.static {
+  cursor: default;
+}
+
+.device-card.off .device-text {
+  opacity: 0.5;
+}
+
+.device-badge {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--surface);
   color: var(--muted);
 }
 
-.device .i {
+.device-badge .i {
+  width: 15px;
+  height: 15px;
+}
+
+/* With the preview on, the camera card grows so a face can be checked. */
+.device-badge:has(.cam-preview:not([hidden])) {
+  width: 56px;
+  height: 56px;
+}
+
+.device-text {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.device-name {
+  overflow: hidden;
+  font-size: 12.5px;
+  font-weight: 500;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.device-card .meter-track {
+  height: 4px;
+}
+
+.device-chevron {
   width: 14px;
   height: 14px;
   flex: none;
+  color: var(--muted);
+  transform: rotate(90deg);
+  transition: transform var(--fast) var(--ease);
 }
 
-.device select {
-  height: 30px;
-  padding: 0 10px;
-  overflow: hidden;
-  font-size: 12.5px;
-  color: var(--text);
-  text-overflow: ellipsis;
-  white-space: nowrap;
+.device-card[aria-expanded="true"] .device-chevron {
+  transform: rotate(-90deg);
+}
+
+.device-card.single .device-chevron {
+  display: none;
 }
 
 .meters {
   display: flex;
   flex: 1;
   flex-direction: column;
-  gap: 6px;
+  gap: 8px;
   min-width: 0;
 }
 
@@ -909,14 +964,13 @@ input[type="range"]:focus-visible::-webkit-slider-thumb {
   opacity: 0.45;
 }
 
+/* The camera preview fills the camera card's badge. */
 .cam-preview {
-  width: 64px;
-  height: 64px;
-  flex: none;
+  position: absolute;
+  inset: 0;
   overflow: hidden;
   border-radius: 50%;
-  background: var(--surface-2);
-  box-shadow: 0 0 0 2px var(--surface), 0 0 0 3px var(--border);
+  background: var(--surface);
   animation: fade-in var(--base) var(--ease);
 }
 
