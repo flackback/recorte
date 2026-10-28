@@ -3316,3 +3316,80 @@ input[type="range"]:focus-visible::-webkit-slider-thumb {
 .tab-panel {
   overflow-x: hidden;
 }
+
+/* "i" next to a control's name; its help shows on hover (hints.ts). */
+.info {
+  display: inline-grid;
+  place-items: center;
+  width: 15px;
+  height: 15px;
+  margin-left: 6px;
+  border-radius: 50%;
+  background: var(--surface-2);
+  color: var(--muted);
+  font: italic 600 10px/1 Georgia, "Times New Roman", serif;
+  vertical-align: 1px;
+  cursor: help;
+  transition: background var(--fast) var(--ease), color var(--fast) var(--ease);
+}
+
+.info:hover,
+.info:focus-visible {
+  background: var(--accent);
+  color: #fff;
+  outline: none;
+}
+
+.inspector .slider > span .info {
+  margin-right: auto;
+}
+
+/* One style for every control name; section titles stay small and quiet. */
+.inspector .field > span,
+.inspector .field-label,
+.inspector .slider > span,
+.inspector .switch > span {
+  color: var(--text);
+  font-size: 12.5px;
+  font-weight: 500;
+}
+
+.inspector section {
+  padding-right: 14px;
+}
+
+/* Focus rings after a click look like a bug; they show only when using the keyboard. */
+html:not(.keyboard) .segmented label:has(input:focus-visible) {
+  box-shadow: var(--raised-shadow);
+}
+
+html:not(.keyboard) .choice:focus-visible,
+html:not(.keyboard) .swatch:focus-visible {
+  box-shadow: none;
+}
+
+/* The "i" stays on the same line as the name. */
+.inspector .switch > span,
+.inspector .field > span,
+.inspector .field-label {
+  display: inline-flex;
+  align-items: center;
+}
+
+/* The old ".switch span { order: -1 }" also caught the "i"; keep it after the name, on one line. */
+.inspector .switch > span {
+  flex-wrap: nowrap;
+  min-width: 0;
+  white-space: nowrap;
+}
+
+.switch .info {
+  order: 0;
+}
+
+/* Choices with four or five options fit the panel's width. */
+.inspector .segmented.small label {
+  min-width: 0;
+  padding: 0 4px;
+  font-size: 11.5px;
+}

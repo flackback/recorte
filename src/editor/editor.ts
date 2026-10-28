@@ -1,6 +1,7 @@
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 
+import { tuckHints, trackKeyboard } from "../hints";
 import { showTour } from "../tips";
 import { toast } from "../toast";
 import { joinPath, takeName, type CursorEvent, type KeyEvent, type Take, type Word } from "../types";
@@ -373,6 +374,8 @@ export class Editor {
 
   constructor() {
     this.buildDrop();
+    tuckHints(document.querySelector<HTMLElement>(".inspector")!);
+    trackKeyboard();
     this.direct = new DirectEdit(this.ui.canvas, {
       select: (target) => this.select({ track: "notes", id: target.id }),
       change: (target, box, done) => this.directChange(target, box, done),
