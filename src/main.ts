@@ -58,6 +58,8 @@ const ui = {
   emptyRecord: $<HTMLButtonElement>("empty-record"),
   areaHint: $("area-hint"),
   emptyOpen: $<HTMLButtonElement>("empty-open"),
+  recent: $("recent"),
+  recentRow: $("recent-row"),
   titlebarStatus: $("titlebar-status"),
   titlebarTime: $("titlebar-time"),
   minimize: $<HTMLButtonElement>("win-min"),
@@ -1183,6 +1185,60 @@ function updateTakeRow(row: TakeRow, take: Take) {
   }
 }
 
+// ---------- recent takes on the start screen ----------
+
+/** A card in the row of recent takes under "Gravar agora": thumbnail, name, date and length. */
+function recentCard(take: Take) {
+  const card = document.createElement("button");
+  card.className = "recent-card";
+  card.setAttribute("role", "listitem");
+  card.title = `Abrir “${takeName(take)}”`;
+  const thumb = document.createElement("span");
+  thumb.className = "recent-thumb";
+  const thumbnail = (take as Take & { thumbnail?: string | null }).thumbnail;
+  if (thumbnail) {
+    const image = document.createElement("img");
+    image.alt = "";
+    image.loading = "lazy";
+    image.decoding = "async";
+    image.addEventListener("error", () => image.remove());
+    image.src = convertFileSrc(joinPath(take.dir, thumbnail));
+    thumb.append(image);
+  }
+  const length = document.createElement("span");
+  length.className = "recent-length";
+  length.textContent = take.segments?.length ? "…" : formatDuration(take.durationMs);
+  thumb.append(length);
+  const name = document.createElement("strong");
+  name.textContent = takeName(take);
+  const date = document.createElement("span");
+  date.textContent = take.segments?.length ? "Finalizando a gravação…" : formatDate(take.createdAt);
+  card.append(thumb, name, date);
+  card.addEventListener("click", () => void openTake(take.id));
+  onContextMenu(card, () => {
+    const current = takeById(take.id);
+    // Renaming happens on the list row, which shows the name being edited.
+    return current ? takeMenu(takeRows.get(take.id)?.button ?? card, current) : null;
+  });
+  return card;
+}
+
+function renderRecent() {
+  ui.recent.hidden = takes.length === 0;
+  ui.recentRow.replaceChildren(...takes.map(recentCard));
+}
+
+// The row scrolls sideways with the mouse wheel too.
+ui.recentRow.addEventListener(
+  "wheel",
+  (event) => {
+    if (Math.abs(event.deltaY) <= Math.abs(event.deltaX)) return;
+    event.preventDefault();
+    ui.recentRow.scrollLeft += event.deltaY;
+  },
+  { passive: false },
+);
+
 function focusTake(id: string) {
   takeRows.get(id)?.button.focus();
 }
@@ -1211,6 +1267,7 @@ async function refreshTakes() {
     if (here !== row.item) ui.takes.insertBefore(row.item, here ?? null);
   });
   if (!takes.length) ui.takes.append(noTakes);
+  renderRecent();
   applySearch();
   markSelected();
   // A take may have been transcribed or renamed since; look again for an active search.

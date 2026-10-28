@@ -1036,6 +1036,108 @@ input[type="range"]:focus-visible::-webkit-slider-thumb {
   margin-top: 6px;
 }
 
+/* Recent takes under the start buttons, in a row that scrolls sideways. */
+.recent {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: min(900px, calc(100vw - 360px));
+  margin-top: 28px;
+  text-align: left;
+}
+
+.recent h3 {
+  margin: 0;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.recent-row {
+  display: flex;
+  gap: 12px;
+  overflow-x: auto;
+  padding: 4px 2px 10px;
+  scroll-snap-type: x proximity;
+  scrollbar-width: thin;
+}
+
+.recent-card {
+  display: flex;
+  flex: 0 0 196px;
+  flex-direction: column;
+  gap: 3px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+  scroll-snap-align: start;
+}
+
+.recent-thumb {
+  position: relative;
+  display: block;
+  aspect-ratio: 16 / 9;
+  margin-bottom: 4px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--surface-3);
+  transition: border-color var(--fast) var(--ease), transform var(--fast) var(--ease), box-shadow var(--fast) var(--ease);
+}
+
+.recent-thumb img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.recent-length {
+  position: absolute;
+  right: 6px;
+  bottom: 6px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: rgb(0 0 0 / 0.7);
+  color: #fff;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.recent-card strong {
+  overflow: hidden;
+  color: var(--text);
+  font-size: 12.5px;
+  font-weight: 600;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.recent-card:hover .recent-thumb {
+  border-color: var(--accent);
+  box-shadow: 0 6px 18px rgb(0 0 0 / 0.25);
+  transform: translateY(-2px);
+}
+
+.recent-card:active .recent-thumb {
+  transform: scale(0.98);
+}
+
+.recent-card:focus-visible {
+  outline: none;
+}
+
+.recent-card:focus-visible .recent-thumb {
+  box-shadow: var(--focus);
+}
+
 .empty .rec-mark {
   width: 9px;
   height: 9px;
