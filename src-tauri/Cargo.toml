@@ -1,6 +1,6 @@
 [package]
 name = "recorte"
-version = "0.1.15"
+version = "0.1.16"
 description = "Gravador de tela e editor para Windows (protótipo)"
 authors = ["you"]
 edition = "2024"
