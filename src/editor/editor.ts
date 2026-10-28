@@ -143,15 +143,18 @@ async function fetchJson<T>(path: string): Promise<T | null> {
 /** Uploads a file the user picked into the take folder; returns its name there. */
 const IMAGE_EXTENSIONS = ["png", "jpg", "jpeg", "webp", "bmp"];
 const AUDIO_EXTENSIONS = ["mp3", "wav", "m4a", "aac", "ogg", "oga", "opus", "flac", "weba"];
+/** Videos are imported as new takes; the formats it can't read are refused there, with the reason. */
+const VIDEO_EXTENSIONS = ["mp4", "mov", "m4v", "mkv", "webm", "avi"];
 
 /** A file's extension, lowercase and safe for a file name. */
 const fileExtension = (file: File, fallback: string) => (file.name.includes(".") ? file.name.split(".").pop()! : fallback).toLowerCase().replace(/[^a-z0-9]/g, "") || fallback;
 
 /** What a dropped file can be used for, by its type or, when that is empty, its name. */
-function dropKind(type: string, name: string): "image" | "audio" | "other" {
+function dropKind(type: string, name: string): "image" | "audio" | "video" | "other" {
   const extension = name.includes(".") ? name.split(".").pop()!.toLowerCase() : "";
   if ((type.startsWith("image/") && type !== "image/svg+xml") || IMAGE_EXTENSIONS.includes(extension)) return "image";
   if (type.startsWith("audio/") || AUDIO_EXTENSIONS.includes(extension)) return "audio";
+  if (type.startsWith("video/") || VIDEO_EXTENSIONS.includes(extension)) return "video";
   return "other";
 }
 
@@ -360,6 +363,8 @@ export class Editor {
   private enhancing = false;
   /** Bumped by every open and close, so a slower earlier open gives up instead of overwriting. */
   private openGen = 0;
+  /** Set by the main window: a video dropped anywhere becomes a new take instead of an asset. */
+  onVideoDrop: ((file: File) => void) | null = null;
   /** The renderer being created, so concurrent callers share one device. */
   private rendererPromise: Promise<void> | null = null;
   /** The GPU device was lost; the next frame creates the renderer again. */
@@ -656,6 +661,8 @@ export class Editor {
     document.body.append(zone);
     // dragenter/dragleave fire for every element crossed; a count tells when the pointer left the window.
     let depth = 0;
+    // A video is imported as a new take, with or without a take open.
+    let video = false;
     const hasFiles = (event: DragEvent) => Array.from(event.dataTransfer?.types ?? []).includes("Files");
     const hide = () => {
       depth = 0;
@@ -666,23 +673,26 @@ export class Editor {
       event.preventDefault();
       depth++;
       const kinds = Array.from(event.dataTransfer?.items ?? []).map((item) => dropKind(item.type, ""));
-      const message = !this.scene
-        ? "Abra uma gravação para usar a música ou a imagem"
-        : kinds.includes("image") && kinds.includes("audio")
-          ? "Solte para usar a imagem de fundo e a música"
-          : kinds.includes("image")
-            ? "Solte para usar como imagem de fundo"
-            : kinds.includes("audio")
-              ? "Solte para usar como música de fundo"
-              : "Solte uma imagem ou um arquivo de som";
+      video = Boolean(this.onVideoDrop) && kinds.includes("video");
+      const message = video
+        ? "Solte para importar o vídeo"
+        : !this.scene
+          ? "Abra uma gravação para usar a música ou a imagem"
+          : kinds.includes("image") && kinds.includes("audio")
+            ? "Solte para usar a imagem de fundo e a música"
+            : kinds.includes("image")
+              ? "Solte para usar como imagem de fundo"
+              : kinds.includes("audio")
+                ? "Solte para usar como música de fundo"
+                : "Solte uma imagem, um som ou um vídeo";
       sign.textContent = message;
-      zone.classList.toggle("refuse", !this.scene || (!kinds.includes("image") && !kinds.includes("audio") && kinds.every((kind) => kind === "other")));
+      zone.classList.toggle("refuse", !video && (!this.scene || (!kinds.includes("image") && !kinds.includes("audio") && kinds.every((kind) => kind === "other"))));
       zone.hidden = false;
     });
     window.addEventListener("dragover", (event) => {
       if (!hasFiles(event)) return;
       event.preventDefault();
-      if (event.dataTransfer) event.dataTransfer.dropEffect = this.scene ? "copy" : "none";
+      if (event.dataTransfer) event.dataTransfer.dropEffect = this.scene || video ? "copy" : "none";
     });
     window.addEventListener("dragleave", (event) => {
       if (!hasFiles(event)) return;
@@ -694,6 +704,11 @@ export class Editor {
       event.preventDefault();
       hide();
       const files = Array.from(event.dataTransfer?.files ?? []);
+      const movie = files.find((file) => dropKind(file.type, file.name) === "video");
+      if (movie && this.onVideoDrop) {
+        this.onVideoDrop(movie);
+        return;
+      }
       if (!this.scene) {
         toast("Abra uma gravação para usar a música ou a imagem.");
         return;

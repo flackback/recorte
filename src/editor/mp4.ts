@@ -135,9 +135,14 @@ function sampleEntry(bytes: Uint8Array, stsd: Box, track: Building) {
       track.codec = `avc1.${hex(config[1])}${hex(config[2])}${hex(config[3])}`;
     }
   } else if (entry.type === "mp4a") {
-    track.channels = data.getUint16(content + 16);
-    track.sampleRate = data.getUint32(content + 24) / 65536;
-    const esds = children(bytes, content + 28, entry.start + entry.size).find((child) => child.type === "esds");
+    // QuickTime sound descriptions (MOV files) are 16 (version 1) or 36 (version 2) bytes longer,
+    // and may keep the esds inside a "wave" box.
+    const version = data.getUint16(content + 8);
+    track.channels = version === 2 ? data.getUint32(content + 40) : data.getUint16(content + 16);
+    track.sampleRate = version === 2 ? data.getFloat64(content + 32) : data.getUint32(content + 24) / 65536;
+    const inside = children(bytes, content + 28 + (version === 1 ? 16 : version === 2 ? 36 : 0), entry.start + entry.size);
+    const wave = inside.find((child) => child.type === "wave");
+    const esds = inside.find((child) => child.type === "esds") ?? (wave && find(bytes, wave, "esds"));
     const config = esds ? audioConfig(bytes, body(esds), esds.start + esds.size) : null;
     if (config) {
       track.description = config;

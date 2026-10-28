@@ -4,6 +4,7 @@ mod ai;
 mod control;
 mod cursor;
 mod export;
+mod import;
 mod meter;
 mod overlay;
 pub mod recorder;
@@ -306,6 +307,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().with_handler(overlay::on_shortcut).build())
         .manage(AppState::default())
         .manage(export::Exports::default())
@@ -363,7 +365,9 @@ pub fn run() {
             meter::meter_start,
             meter::meter_stop,
             disk_free,
-            takes_search
+            takes_search,
+            import::take_import,
+            import::import_upload
         ])
         .build(tauri::generate_context!())
         .expect("error while running tauri application")

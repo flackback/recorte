@@ -62,7 +62,7 @@ pub fn asset_create(app: AppHandle, exports: State<'_, Exports>, dir: String, na
     open(&exports, dir.join(name))
 }
 
-fn open(exports: &Exports, target: PathBuf) -> Result<Created, String> {
+pub(crate) fn open(exports: &Exports, target: PathBuf) -> Result<Created, String> {
     let mut partial = target.clone().into_os_string();
     partial.push(".part");
     let partial = PathBuf::from(partial);

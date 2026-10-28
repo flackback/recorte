@@ -137,7 +137,7 @@ O Recorte tem um servidor MCP. Com ele, uma IA (Claude Code, Claude Desktop ou o
 | Textos e telas | `add_note`, `update_note`, `remove_notes`, `set_title_cards` |
 | Aparência e áudio | `apply_style`, `update_settings`, `set_camera_layout`, `set_background_image`, `set_music` |
 | Gravação | `rename_take`, `undo_last_edit`, `reset_edit` |
-| App | `app_status`, `open_in_editor`, `transcribe`, `export_video` |
+| App | `app_status`, `open_in_editor`, `import_video`, `transcribe`, `export_video` |
 
 ### Como funciona
 

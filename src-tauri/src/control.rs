@@ -153,6 +153,7 @@ fn handle(app: &AppHandle, token: &str, mut request: tiny_http::Request) {
     let reply = match kind.as_str() {
         "ping" => Ok(json!({ "app": "Recorte", "version": env!("CARGO_PKG_VERSION") })),
         "enhance" => enhance(app, &payload),
+        "import" => import(app, &payload),
         _ => ask_window(app, &kind, payload),
     };
     match reply {
@@ -167,6 +168,13 @@ fn enhance(app: &AppHandle, payload: &Value) -> Reply {
     let level = crate::voice::Level::parse(payload["level"].as_str().unwrap_or("medium"));
     let file = crate::voice::enhance_take(&dir, level).map_err(|error| format!("{error:#}"))?;
     Ok(json!({ "file": file }))
+}
+
+/// Importing a video copies and reads files only, so it runs here too, however long it takes.
+fn import(app: &AppHandle, payload: &Value) -> Reply {
+    let path = payload["path"].as_str().filter(|path| !path.is_empty()).ok_or("caminho do vídeo ausente")?;
+    let meta = crate::import::run(app, std::path::Path::new(path), None)?;
+    Ok(json!({ "takeId": meta.id, "dir": meta.dir, "title": meta.title, "durationMs": meta.duration_ms, "width": meta.width, "height": meta.height, "fps": meta.fps, "audio": meta.system_audio, "warnings": meta.warnings }))
 }
 
 /// Forwards a request to the main window and waits for `agent_reply`.

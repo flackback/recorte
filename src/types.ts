@@ -2,7 +2,8 @@
 export type Take = {
   id: string;
   createdAt: string;
-  sourceKind: "monitor" | "window";
+  /** "import" for a video brought in from a file; `sourceName` is then its file name. */
+  sourceKind: "monitor" | "window" | "import";
   sourceName: string;
   width: number;
   height: number;
@@ -68,6 +69,7 @@ export type Word = { i: number; t0: number; t1: number; text: string };
 export function takeName(take: Pick<Take, "title" | "sourceKind" | "sourceName" | "crop">) {
   if (take.title) return take.title;
   if (take.sourceKind === "window") return take.sourceName || "Janela";
+  if (take.sourceKind === "import") return take.sourceName || "Vídeo importado";
   return take.crop ? "Área da tela" : "Tela inteira";
 }
 

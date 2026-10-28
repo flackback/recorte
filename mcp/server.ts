@@ -3,6 +3,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import type { RequestHandlerExtra } from "@modelcontextprotocol/sdk/shared/protocol.js";
 import type { CallToolResult, ServerNotification, ServerRequest } from "@modelcontextprotocol/sdk/types.js";
 import fs from "node:fs/promises";
+import path from "node:path";
 import * as z from "zod";
 
 import {
@@ -53,7 +54,8 @@ Regras:
 - Todos os tempos estão em milissegundos, na linha do tempo da gravação original (antes dos cortes).
 - Coordenadas de cliques e áreas estão em pixels do vídeo gravado.
 - Cada edição é salva no project.json da gravação. Se o editor do app estiver com a gravação aberta, ele mostra a mudança na hora. O usuário pode desfazer com Ctrl+Z no editor. Você pode desfazer com undo_last_edit.
-- transcribe, export_video, open_in_editor e a melhoria de voz precisam do app aberto.
+- transcribe, export_video, open_in_editor, import_video e a melhoria de voz precisam do app aberto.
+- Para editar um vídeo que já está no computador (MP4 ou MOV em H.264): chame import_video com o caminho do arquivo.
 - Para tirar pausas: chame remove_silences (pelo áudio, precisa do app) ou find_pauses (pela transcrição) e depois add_cuts.
 - Para hesitações ("hã", "hum", "é" longo): chame cut_fillers.
 - Para uma transição sem tirar nada do vídeo: chame split_at e depois set_transition com o id da divisão.
@@ -165,7 +167,7 @@ async function takeSummary(take: Take) {
     id: take.id,
     name: store.takeName(take),
     createdAt: take.createdAt,
-    source: `${take.sourceKind === "window" ? "janela" : "tela"}: ${take.sourceName}`,
+    source: `${take.sourceKind === "window" ? "janela" : take.sourceKind === "import" ? "vídeo importado" : "tela"}: ${take.sourceName}`,
     video: `${take.width}×${take.height} a ${take.fps} fps`,
     durationMs: round(take.durationMs),
     editedDurationMs: finalDuration(project, words),
@@ -1141,6 +1143,29 @@ tool(
     const take = await store.findTake(ref);
     await appRequest("open", { takeId: take.id });
     return { take: take.id, opened: true };
+  },
+);
+
+tool(
+  "import_video",
+  "Importa um vídeo do computador (MP4 ou MOV em H.264, com som AAC) como uma nova gravação, para editar como as outras. O arquivo é copiado; o original fica onde está. Precisa do app aberto. Devolve o id da nova gravação.",
+  {
+    path: z.string().describe("Caminho completo do arquivo de vídeo."),
+    open: z.boolean().optional().describe("Abre a nova gravação no editor do app. Padrão: não."),
+  },
+  async ({ path: file, open }) => {
+    const absolute = path.resolve(file);
+    const stat = await fs.stat(absolute).catch(() => null);
+    if (!stat?.isFile()) throw new Error(`Arquivo não encontrado: ${absolute}`);
+    // Copying a large video takes a while; the app answers when the take is ready.
+    const imported = await appRequest<{ takeId: string; title: string | null; durationMs: number; width: number; height: number; fps: number; audio: boolean; warnings: string[] }>(
+      "import",
+      { path: absolute },
+      60 * 60_000,
+    );
+    const { takeId, ...details } = imported;
+    if (open) await appRequest("open", { takeId });
+    return { take: takeId, ...details, opened: Boolean(open), next: "Use o id em get_take, transcribe e nas ferramentas de edição." };
   },
 );
 
