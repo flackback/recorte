@@ -124,6 +124,7 @@
       <symbol id="i-undo" viewBox="0 0 24 24"><path d="M9 14 4 9l5-5M4 9h11a5 5 0 0 1 0 10h-3" /></symbol>
       <symbol id="i-redo" viewBox="0 0 24 24"><path d="m15 14 5-5-5-5M20 9H9a5 5 0 0 0 0 10h3" /></symbol>
       <symbol id="i-export" viewBox="0 0 24 24"><path d="M12 3v12m0 0-4.5-4.5M12 15l4.5-4.5M5 20h14" /></symbol>
+      <symbol id="i-import" viewBox="0 0 24 24"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8ZM14 3v5h5M12 11v6M9 14h6" /></symbol>
       <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z" /></symbol>
       <symbol id="i-cut" viewBox="0 0 24 24"><circle cx="6" cy="6" r="3" /><circle cx="6" cy="18" r="3" /><path d="M8.1 8.1 20 20M8.1 15.9 20 4" /></symbol>
       <symbol id="i-zoom" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7" /><path d="m20 20-4-4M11 8v6M8 11h6" /></symbol>
@@ -267,7 +268,10 @@
         <section class="takes">
           <div class="takes-head">
             <h2>Gravações</h2>
-            <button class="secondary compact" id="open-folder" title="Abrir a pasta das gravações no Explorer"><svg class="i"><use href="#i-folder" /></svg>Abrir pasta</button>
+            <div class="takes-actions">
+              <button class="secondary compact" id="import-video" title="Importar um vídeo do computador (MP4 ou MOV). Também dá para soltar o arquivo aqui." aria-label="Importar vídeo"><svg class="i"><use href="#i-import" /></svg><span id="import-progress" hidden></span></button>
+              <button class="secondary compact" id="open-folder" title="Abrir a pasta das gravações no Explorer"><svg class="i"><use href="#i-folder" /></svg>Abrir pasta</button>
+            </div>
           </div>
           <div class="take-search" id="take-search-box" hidden>
             <svg class="i" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7" /><path d="m20 20-4-4" /></svg>

@@ -1178,6 +1178,21 @@ input[type="range"]:focus-visible::-webkit-slider-thumb {
   margin-bottom: 6px;
 }
 
+.takes-actions {
+  display: flex;
+  gap: 4px;
+}
+
+/* Import is an icon until a copy runs; then it shows how far along it is. */
+#import-video {
+  padding: 0 7px;
+}
+
+#import-video:has(#import-progress:not([hidden])) {
+  padding: 0 9px;
+  font-variant-numeric: tabular-nums;
+}
+
 .takes h2,
 .inspector h3 {
   margin: 0;

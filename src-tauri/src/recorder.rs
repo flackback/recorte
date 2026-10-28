@@ -30,7 +30,7 @@ use crate::cursor::{self, Button, KeyPress, Kind, RawEvent, Shape};
 use crate::sources;
 
 pub const META_FILE: &str = "take.json";
-const VIDEO_FILE: &str = "screen.mp4";
+pub(crate) const VIDEO_FILE: &str = "screen.mp4";
 const MIC_FILE: &str = "mic.wav";
 const SYSTEM_FILE: &str = "system.wav";
 /// While recording, video goes to short, finished segments here; they become `screen.mp4` when
@@ -49,9 +49,9 @@ const RECORDING_FILE: &str = "recording.json";
 const CURSOR_PARTIAL: &str = "cursor.partial.jsonl";
 const KEYS_PARTIAL: &str = "keys.partial.jsonl";
 const PARTIAL_EVERY: Duration = Duration::from_secs(2);
-const CURSOR_FILE: &str = "cursor.json";
+pub(crate) const CURSOR_FILE: &str = "cursor.json";
 const KEYS_FILE: &str = "keys.json";
-const THUMB_FILE: &str = "thumb.jpg";
+pub(crate) const THUMB_FILE: &str = "thumb.jpg";
 /// The thumbnail is taken this many frames in, past any first-frame artifacts.
 const THUMB_FRAME: u64 = 20;
 
@@ -749,7 +749,7 @@ impl Recording {
 }
 
 /// Creates a new folder for a take; a take started in the same second gets a `-2`, `-3`… suffix.
-fn create_take_dir(root: &Path, base: &str) -> anyhow::Result<(String, PathBuf)> {
+pub(crate) fn create_take_dir(root: &Path, base: &str) -> anyhow::Result<(String, PathBuf)> {
     fs::create_dir_all(root).with_context(|| format!("criar {}", root.display()))?;
     for attempt in 1..100 {
         let id = if attempt == 1 { base.to_string() } else { format!("{base}-{attempt}") };
@@ -1002,7 +1002,7 @@ fn key_track(keys: &[KeyPress], t0: i64) -> serde_json::Value {
 }
 
 /// Writes then renames, so a crash mid-write never leaves a truncated file.
-fn write_json(path: &Path, value: &impl Serialize) -> anyhow::Result<()> {
+pub(crate) fn write_json(path: &Path, value: &impl Serialize) -> anyhow::Result<()> {
     let json = serde_json::to_vec_pretty(value)?;
     let temporary = path.with_extension("json.tmp");
     fs::write(&temporary, json).with_context(|| format!("gravar {}", temporary.display()))?;

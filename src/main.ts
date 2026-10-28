@@ -7,6 +7,7 @@ import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { startAgent } from "./agent";
 import { joinSegments } from "./join";
 import { Editor } from "./editor/editor";
+import { readMp4, type ByteSource } from "./editor/mp4";
 import { confirmDialog, onContextMenu, showMenu, type MenuItem } from "./menu";
 import { resetTips, showTour } from "./tips";
 import { toast } from "./toast";
@@ -59,6 +60,8 @@ const ui = {
   takeSearch: $<HTMLInputElement>("take-search"),
   takes: $<HTMLUListElement>("takes"),
   openFolder: $<HTMLButtonElement>("open-folder"),
+  importVideo: $<HTMLButtonElement>("import-video"),
+  importProgress: $("import-progress"),
   empty: $("empty"),
   takeSelection: $("take-selection"),
   takeSelectionCount: $("take-selection-count"),
@@ -1657,6 +1660,7 @@ onContextMenu(document.querySelector<HTMLElement>(".titlebar")!, () => {
 onContextMenu(ui.takes, () => [
   { label: "Atualizar lista", icon: "refresh", action: () => void refreshTakes() },
   { label: "Abrir pasta de gravações", icon: "folder", action: () => ui.openFolder.click() },
+  { label: "Importar vídeo", icon: "import", action: () => void pickVideo() },
 ]);
 // The WebView's own menu (Back, Reload, Inspect…) makes no sense in an app; keep it for text fields only.
 document.addEventListener("contextmenu", (event) => {
@@ -1808,6 +1812,86 @@ ui.keystrokes.addEventListener("change", () => {
 ui.openFolder.addEventListener("click", () => {
   invoke("takes_dir_open").catch((error) => showWarnings([`Não foi possível abrir a pasta de gravações: ${error}`]));
 });
+
+// ---------- importing a video ----------
+
+const UNSUPPORTED_VIDEO = "Formato não suportado. Use um vídeo MP4 ou MOV em H.264.";
+let importing = false;
+
+/** How far a copy or upload is, on the import button; null ends it. */
+function showImportProgress(fraction: number | null) {
+  ui.importProgress.hidden = fraction === null;
+  ui.importProgress.textContent = fraction === null ? "" : `${Math.floor(fraction * 100)}%`;
+  ui.importVideo.disabled = fraction !== null;
+}
+
+/** Runs one import at a time, then opens the new take in the editor. */
+async function runImport(work: (progress: (fraction: number) => void) => Promise<Take>) {
+  if (importing) {
+    toast("Aguarde a importação em andamento.");
+    return;
+  }
+  importing = true;
+  showImportProgress(0);
+  try {
+    const take = await work(showImportProgress);
+    await refreshTakes();
+    await openTake(take.id);
+    toast("Vídeo importado");
+  } catch (error) {
+    toast(error instanceof Error ? error.message : String(error));
+  } finally {
+    importing = false;
+    showImportProgress(null);
+  }
+}
+
+/** Picks a file with the system dialog; Rust copies it on its own thread and reports progress. */
+async function pickVideo() {
+  const options = { title: "Importar vídeo", multiple: false, directory: false, filters: [{ name: "Vídeos", extensions: ["mp4", "mov", "m4v"] }] };
+  const path = await invoke<string | null>("plugin:dialog|open", { options }).catch((error) => {
+    toast(String(error));
+    return null;
+  });
+  if (path) await runImport(() => invoke<Take>("take_import", { path }));
+}
+
+/**
+ * A dropped file has no path in the WebView, so it is checked with the editor's own MP4 reader and
+ * then uploaded into the takes folder in pieces, where Rust makes the take from it.
+ */
+async function importDropped(file: File) {
+  await runImport(async (progress) => {
+    const source: ByteSource = { size: file.size, read: async (offset, length) => new Uint8Array(await file.slice(offset, offset + length).arrayBuffer()) };
+    const video = (await readMp4(source).catch(() => null))?.tracks.find((track) => track.kind === "video");
+    if (!video?.codec.startsWith("avc1") || !video.description) throw new Error(UNSUPPORTED_VIDEO);
+    const free = await invoke<number | null>("disk_free").catch(() => null);
+    if (free !== null && free < file.size + 300 * 1024 ** 2) throw new Error("Não há espaço livre suficiente no disco das gravações para este vídeo.");
+    const upload = await invoke<{ id: number }>("import_upload");
+    try {
+      const chunk = 8 * 1024 * 1024;
+      for (let offset = 0; offset < file.size; offset += chunk) {
+        const bytes = new Uint8Array(await file.slice(offset, offset + chunk).arrayBuffer());
+        await invoke("export_write", bytes, { headers: { "x-export-id": String(upload.id), "x-position": String(offset) } });
+        progress((offset + bytes.length) / file.size);
+      }
+      const path = await invoke<string>("export_finish", { id: upload.id });
+      return await invoke<Take>("take_import", { path, name: file.name });
+    } catch (error) {
+      await invoke("export_cancel", { id: upload.id }).catch(() => {});
+      throw error;
+    }
+  });
+}
+
+ui.importVideo.addEventListener("click", () => void pickVideo());
+editor.onVideoDrop = (file) => void importDropped(file);
+// Copy progress from Rust, also for imports the AI asks for; the last report ends it.
+void listen<{ done: number; total: number }>("import-progress", ({ payload }) => {
+  showImportProgress(payload.done >= payload.total && !importing ? null : payload.done / Math.max(1, payload.total));
+});
+// A take imported through the MCP server shows up in the list.
+void listen("takes-changed", () => void refreshTakes());
 
 // Global shortcuts (work while other apps have focus): Ctrl+Shift+D draws, Ctrl+Shift+X stops.
 /** Marks the current moment of the recording; the floating bar confirms it. */
