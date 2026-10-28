@@ -1,6 +1,6 @@
 //! Live sound levels for the level bars: the latest peak of the system sound and of the
 //! microphone. The recorder's audio threads feed them while recording; before recording, a light
-//! meter thread opens the default devices only to read their peaks (nothing is written).
+//! meter thread opens the devices only to read their peaks (nothing is written).
 
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
@@ -142,6 +142,8 @@ struct Input {
     source: Source,
     stream: Option<audio::Stream>,
     retry_at: Instant,
+    /// The microphone pick the stream was opened with.
+    pick: u64,
 }
 
 impl Input {
@@ -153,8 +155,14 @@ impl Input {
             }
             return;
         }
+        // Another microphone was picked: listen to that one now.
+        if matches!(self.source, Source::Microphone) && self.pick != audio::mic_pick() && self.stream.take().is_some() {
+            level.lost();
+            self.retry_at = Instant::now();
+        }
         if self.stream.is_none() && Instant::now() >= self.retry_at {
             self.retry_at = Instant::now() + RETRY;
+            self.pick = audio::mic_pick();
             self.stream = audio::open(self.source).ok();
         }
         let Some(stream) = &self.stream else {
@@ -177,7 +185,7 @@ fn run(stop: &AtomicBool, system: &AtomicBool, mic: &AtomicBool) {
     if initialize_mta().ok().is_err() {
         return;
     }
-    let mut inputs = [Source::System, Source::Microphone].map(|source| Input { source, stream: None, retry_at: Instant::now() });
+    let mut inputs = [Source::System, Source::Microphone].map(|source| Input { source, stream: None, retry_at: Instant::now(), pick: 0 });
     let (mut queue, mut scratch) = (VecDeque::new(), Vec::new());
     while !stop.load(Ordering::Relaxed) {
         for input in &mut inputs {

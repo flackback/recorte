@@ -2,14 +2,15 @@ use std::collections::VecDeque;
 use std::fs::File;
 use std::io::BufWriter;
 use std::path::Path;
-use std::sync::Arc;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 use std::sync::mpsc;
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, anyhow};
-use wasapi::{AudioCaptureClient, AudioClient, DeviceEnumerator, Direction, SampleType, StreamMode, WasapiError, WaveFormat, initialize_mta};
+use serde::Serialize;
+use wasapi::{AudioCaptureClient, AudioClient, Device, DeviceEnumerator, DeviceState, Direction, SampleType, StreamMode, WasapiError, WaveFormat, initialize_mta};
 
 use crate::clock::{HNS_PER_SEC, now_hns};
 use crate::meter;
@@ -28,8 +29,64 @@ const JITTER: i64 = SAMPLE_RATE / 100;
 pub enum Source {
     /// What the default output device plays (WASAPI loopback).
     System,
-    /// The default input device.
+    /// The input device picked in the app, or the default one.
     Microphone,
+}
+
+/// The microphone picked in the app (its endpoint id); `None` follows the Windows default.
+static MIC_DEVICE: Mutex<Option<String>> = Mutex::new(None);
+/// Bumped when the pick changes, so the idle meter moves to the new device.
+static MIC_PICK: AtomicU64 = AtomicU64::new(0);
+
+pub fn mic_pick() -> u64 {
+    MIC_PICK.load(Ordering::Relaxed)
+}
+
+/// A microphone for the picker.
+#[derive(Serialize)]
+pub struct Input {
+    id: String,
+    name: String,
+    default: bool,
+}
+
+/// The microphones plugged in now. COM runs on a thread of its own (the caller's may be STA).
+#[tauri::command]
+pub fn audio_inputs() -> Result<Vec<Input>, String> {
+    let listed = thread::spawn(|| -> anyhow::Result<Vec<Input>> {
+        initialize_mta().ok().context("inicializar COM")?;
+        let enumerator = DeviceEnumerator::new()?;
+        let default = enumerator.get_default_device(&Direction::Capture).and_then(|device| device.get_id()).ok();
+        let mut inputs = Vec::new();
+        for device in &enumerator.get_device_collection(&Direction::Capture)? {
+            let device = device?;
+            let id = device.get_id()?;
+            let name = device.get_friendlyname().unwrap_or_else(|_| "Microfone".into());
+            inputs.push(Input { default: default.as_deref() == Some(id.as_str()), id, name });
+        }
+        Ok(inputs)
+    });
+    listed.join().map_err(|_| "a lista de microfones falhou".to_string())?.map_err(|error| format!("{error:#}"))
+}
+
+/// Picks the microphone for the meter and the next recordings; `None` follows the Windows default.
+#[tauri::command]
+pub fn set_microphone(id: Option<String>) {
+    let mut picked = MIC_DEVICE.lock().unwrap();
+    if *picked != id {
+        *picked = id;
+        MIC_PICK.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+/// The picked microphone while it is plugged in; otherwise the default one.
+fn microphone(enumerator: &DeviceEnumerator) -> anyhow::Result<Device> {
+    let picked = MIC_DEVICE.lock().unwrap().clone();
+    let plugged = picked.and_then(|id| enumerator.get_device(&id).ok()).filter(|device| matches!(device.get_state(), Ok(DeviceState::Active)));
+    match plugged {
+        Some(device) => Ok(device),
+        None => enumerator.get_default_device(&Direction::Capture).map_err(|_| anyhow!("nenhum microfone encontrado")),
+    }
 }
 
 pub trait Sink: Send {
@@ -121,7 +178,7 @@ const DEVICE_INVALIDATED: u32 = 0x8889_0004;
 /// How often a vanished device is looked for again.
 const REOPEN_EVERY: Duration = Duration::from_millis(500);
 
-/// An open capture stream on the default device.
+/// An open capture stream.
 pub struct Stream {
     pub client: AudioClient,
     pub capture: AudioCaptureClient,
@@ -129,12 +186,11 @@ pub struct Stream {
 
 pub fn open(source: Source) -> anyhow::Result<Stream> {
     let enumerator = DeviceEnumerator::new()?;
-    // Loopback opens the output device in capture direction.
-    let device_direction = match source {
-        Source::System => Direction::Render,
-        Source::Microphone => Direction::Capture,
+    let device = match source {
+        // Loopback opens the output device in capture direction.
+        Source::System => enumerator.get_default_device(&Direction::Render).map_err(|_| anyhow!("nenhum dispositivo de áudio padrão encontrado"))?,
+        Source::Microphone => microphone(&enumerator)?,
     };
-    let device = enumerator.get_default_device(&device_direction).map_err(|_| anyhow!("nenhum dispositivo de áudio padrão encontrado"))?;
     let mut client = device.get_iaudioclient()?;
     let format = WaveFormat::new(16, 16, &SampleType::Int, SAMPLE_RATE as usize, CHANNELS as usize, None);
     let mode = StreamMode::PollingShared { autoconvert: true, buffer_duration_hns: 2_000_000 };
@@ -186,8 +242,8 @@ fn run(source: Source, shared: &Shared, sink: &mut dyn Sink, ready: &mpsc::Sende
         if let Some(current) = &stream {
             match read_packets(source, &current.capture, &mut queue, &mut pending) {
                 Ok(()) => meter::level(source).touch(),
-                // The default device changed (headset plugged in, output switched): the same
-                // track goes on from the new default, the gap filled with silence.
+                // The device went away or the default changed (headset plugged in, output
+                // switched): the same track goes on from the new device, the gap filled with silence.
                 Err(WasapiError::Windows(error)) if error.code().0 as u32 == DEVICE_INVALIDATED => {
                     meter::level(source).lost();
                     stream = None;

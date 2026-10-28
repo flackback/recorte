@@ -358,6 +358,8 @@ pub fn run() {
             ai::ai_status,
             ai::ai_connect,
             meter::audio_levels,
+            audio::audio_inputs,
+            audio::set_microphone,
             meter::meter_start,
             meter::meter_stop,
             disk_free,

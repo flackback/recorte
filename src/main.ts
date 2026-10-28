@@ -31,6 +31,10 @@ const ui = {
   systemAudio: $<HTMLInputElement>("system-audio"),
   microphone: $<HTMLInputElement>("microphone"),
   webcam: $<HTMLInputElement>("webcam"),
+  micPick: $("mic-pick"),
+  micDevice: $<HTMLSelectElement>("mic-device"),
+  camPick: $("cam-pick"),
+  camDevice: $<HTMLSelectElement>("cam-device"),
   keystrokes: $<HTMLInputElement>("keystrokes"),
   drawZoom: $<HTMLInputElement>("draw-zoom"),
   showCursor: $<HTMLInputElement>("show-cursor"),
@@ -148,6 +152,8 @@ function loadSettings() {
     }
     if (saved.fps) for (const input of ui.fps.querySelectorAll<HTMLInputElement>("input")) input.checked = Number(input.value) === saved.fps;
     if (saved.area && typeof saved.area.width === "number") picker.area = saved.area;
+    if (typeof saved.micDevice === "string") devicePick.mic = saved.micDevice;
+    if (typeof saved.camDevice === "string") devicePick.cam = saved.camDevice;
     return saved.source as string | undefined;
   } catch {
     return undefined;
@@ -164,6 +170,8 @@ function saveSettings() {
         systemAudio: ui.systemAudio.checked,
         microphone: ui.microphone.checked,
         webcam: ui.webcam.checked,
+        micDevice: devicePick.mic,
+        camDevice: devicePick.cam,
         keystrokes: ui.keystrokes.checked,
         showCursor: ui.showCursor.checked,
         countdown: ui.countdown.checked,
@@ -464,7 +472,54 @@ function renderPicker() {
   else renderMonitors();
 }
 
-/** Turns off the Microfone and Webcam chips when there is no such device. */
+/** The microphone and the camera picked for recording; "" is the Windows default (the first camera). */
+const devicePick = { mic: "", cam: "" };
+
+type AudioInput = { id: string; name: string; default: boolean };
+
+/** Fills a device list, keeping the pick while it is plugged in. */
+function fillDevices(select: HTMLSelectElement, choices: [string, string][], picked: string) {
+  select.replaceChildren(
+    ...choices.map(([value, label]) => {
+      const option = document.createElement("option");
+      option.value = value;
+      option.textContent = label;
+      return option;
+    }),
+  );
+  select.value = choices.some(([value]) => value === picked) ? picked : (choices[0]?.[0] ?? "");
+  select.dataset.count = String(choices.length);
+}
+
+/** Lists the microphones (names from Windows) and the cameras (names show once a camera was allowed). */
+async function listDevices(devices: MediaDeviceInfo[]) {
+  const cameras = devices.filter((device) => device.kind === "videoinput" && device.deviceId);
+  fillDevices(ui.camDevice, cameras.map((camera, index) => [camera.deviceId, camera.label || `Webcam ${index + 1}`]), devicePick.cam);
+  try {
+    const inputs = await invoke<AudioInput[]>("audio_inputs");
+    const fallback = inputs.find((input) => input.default);
+    const choices: [string, string][] = inputs.map((input) => [input.id, input.name]);
+    fillDevices(ui.micDevice, inputs.length ? [["", fallback ? `Padrão · ${fallback.name}` : "Padrão do Windows"], ...choices] : [], devicePick.mic);
+  } catch (error) {
+    console.error("audio_inputs", error);
+  }
+  showPicks();
+}
+
+/** A list shows before recording, while its chip is on and there is a device. */
+function showPicks() {
+  const allowed = liveAllowed();
+  ui.micPick.hidden = !allowed || !ui.microphone.checked || !ui.micDevice.options.length;
+  ui.camPick.hidden = !allowed || !ui.webcam.checked || !ui.camDevice.options.length;
+}
+
+/** Opens the picked camera, or the first one. */
+function cameraConstraints(width: number, height: number): MediaStreamConstraints {
+  const deviceId = ui.camDevice.value;
+  return { video: { ...(deviceId ? { deviceId: { exact: deviceId } } : {}), width: { ideal: width }, height: { ideal: height }, frameRate: { ideal: 30 } }, audio: false };
+}
+
+/** Turns off the Microfone and Webcam chips when there is no such device, and lists the devices. */
 async function checkDevices() {
   let devices: MediaDeviceInfo[] = [];
   try {
@@ -472,6 +527,7 @@ async function checkDevices() {
   } catch {
     return;
   }
+  void listDevices(devices);
   const chips: [HTMLInputElement, MediaDeviceKind, string][] = [
     [ui.microphone, "audioinput", "Nenhum microfone encontrado"],
     [ui.webcam, "videoinput", "Nenhuma webcam encontrada"],
@@ -514,7 +570,7 @@ class WebcamRecorder {
   static async open(): Promise<WebcamRecorder> {
     const mimeType = ["video/mp4;codecs=avc1.42E01F", "video/mp4;codecs=avc1", "video/mp4"].find((type) => MediaRecorder.isTypeSupported(type));
     if (!mimeType) throw new Error("este WebView não grava vídeo em MP4");
-    const stream = await navigator.mediaDevices.getUserMedia({ video: { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30 } }, audio: false });
+    const stream = await navigator.mediaDevices.getUserMedia(cameraConstraints(1280, 720));
     return new WebcamRecorder(stream, mimeType);
   }
 
@@ -589,6 +645,7 @@ function updateLive() {
   ui.meterSystem.hidden = !system;
   ui.meterMic.hidden = !mic;
   ui.live.hidden = !(system || mic || cam);
+  showPicks();
 
   const wanted = system || mic ? `${system}:${mic}` : "";
   if (wanted !== live.meter) {
@@ -650,10 +707,14 @@ async function openPreview() {
   live.camOpening = true;
   ui.camNote.hidden = true;
   try {
-    const stream = await navigator.mediaDevices.getUserMedia({ video: { width: { ideal: 320 }, height: { ideal: 240 }, frameRate: { ideal: 30 } }, audio: false });
+    const stream = await navigator.mediaDevices.getUserMedia(cameraConstraints(320, 240));
     if (token !== live.camToken) {
       for (const track of stream.getTracks()) track.stop();
       return;
+    }
+    // Camera names are only given once a camera was allowed.
+    if (Array.from(ui.camDevice.options).some((option) => /^Webcam \d+$/.test(option.textContent ?? ""))) {
+      void navigator.mediaDevices.enumerateDevices().then(listDevices).catch(() => undefined);
     }
     live.cam = stream;
     ui.camVideo.srcObject = stream;
@@ -697,7 +758,7 @@ function setRecordingUi(active: boolean) {
   ui.railRecord.title = active ? "Parar (Alt+Shift+R)" : "Gravar (Alt+Shift+R)";
   ui.railRecord.setAttribute("aria-label", active ? "Parar" : "Gravar");
   ui.recordLabel.textContent = active ? "Parar · 0:00.0" : "Gravar";
-  for (const control of [ui.refresh, ui.systemAudio, ui.microphone, ui.webcam, ui.keystrokes, ui.showCursor, ui.drawZoom, ...ui.sourceKind.querySelectorAll("input")]) {
+  for (const control of [ui.refresh, ui.systemAudio, ui.microphone, ui.webcam, ui.micDevice, ui.camDevice, ui.keystrokes, ui.showCursor, ui.drawZoom, ...ui.sourceKind.querySelectorAll("input")]) {
     (control as HTMLInputElement).disabled = active;
   }
   renderPicker();
@@ -1688,6 +1749,18 @@ for (const control of [ui.systemAudio, ui.microphone, ui.webcam, ui.keystrokes, 
   control.addEventListener("change", saveSettings);
 }
 for (const control of [ui.systemAudio, ui.microphone, ui.webcam]) control.addEventListener("change", () => updateLive());
+ui.micDevice.addEventListener("change", () => {
+  devicePick.mic = ui.micDevice.value;
+  invoke("set_microphone", { id: devicePick.mic || null }).catch((error) => console.error("set_microphone", error));
+  saveSettings();
+});
+ui.camDevice.addEventListener("change", () => {
+  devicePick.cam = ui.camDevice.value;
+  saveSettings();
+  // The preview moves to the new camera.
+  closePreview();
+  updateLive();
+});
 // The live check stops while the window is minimized or hidden.
 document.addEventListener("visibilitychange", () => void checkMinimized());
 window.addEventListener("focus", () => void checkMinimized());
@@ -1778,6 +1851,7 @@ function hideSplash() {
 
 window.addEventListener("DOMContentLoaded", async () => {
   const savedSource = loadSettings();
+  if (devicePick.mic) invoke("set_microphone", { id: devicePick.mic }).catch((error) => console.error("set_microphone", error));
   void checkDevices();
   await refreshSources(savedSource);
   hideSplash();

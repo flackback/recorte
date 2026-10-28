@@ -208,6 +208,10 @@
 
           <!-- Live check before recording: sound coming in, and the camera framing. -->
           <div class="live" id="live" hidden>
+            <div class="devices">
+              <label class="device" id="mic-pick" title="Microfone usado na gravação" hidden><svg class="i"><use href="#i-mic" /></svg><select id="mic-device" aria-label="Microfone"></select></label>
+              <label class="device" id="cam-pick" title="Webcam usada na gravação" hidden><svg class="i"><use href="#i-camera" /></svg><select id="cam-device" aria-label="Webcam"></select></label>
+            </div>
             <div class="meters">
               <div class="meter" id="meter-system" data-label="Som do sistema" title="Som do sistema" hidden>
                 <svg class="i"><use href="#i-audio" /></svg><span class="meter-track"><span class="meter-cover"></span></span>

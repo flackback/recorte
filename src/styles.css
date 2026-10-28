@@ -830,6 +830,42 @@ input[type="range"]:focus-visible::-webkit-slider-thumb {
   margin-top: -4px;
 }
 
+/* Which microphone and camera record: compact lists above the level bars. */
+.devices {
+  display: flex;
+  flex-basis: 100%;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.devices:not(:has(.device:not([hidden]))) {
+  display: none;
+}
+
+.device {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  color: var(--muted);
+}
+
+.device .i {
+  width: 14px;
+  height: 14px;
+  flex: none;
+}
+
+.device select {
+  height: 30px;
+  padding: 0 10px;
+  overflow: hidden;
+  font-size: 12.5px;
+  color: var(--text);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .meters {
   display: flex;
   flex: 1;
