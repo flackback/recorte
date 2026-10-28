@@ -1,21 +1,29 @@
 /* ---------- tokens ---------- */
 
+/* Canvas → panels → controls, each a step lighter (dark) or a step apart (light).
+   Colors the timeline reads (getComputedStyle) stay 6-digit hex: it adds alpha to them itself. */
 :root {
-  --bg: #f2f2f5;
-  --surface: #ffffff;
-  --surface-2: #ececf0;
-  --surface-3: #e2e2e8;
-  --border: #dcdce3;
+  --bg: #f0f0f2; /* canvas: window, title bar, stage */
+  --surface: #ffffff; /* panels, sheets, menus */
+  --surface-2: #ebebee; /* controls and capsules */
+  --surface-3: #e0e0e4; /* control hover */
+  --raised: #ffffff; /* selected segment or tab inside a capsule */
+  --raised-shadow: 0 1px 2px rgb(0 0 0 / 0.1), 0 1px 1px rgb(0 0 0 / 0.04);
+  --track: #d9d9de; /* empty part of sliders and switches */
+  --border: #e2e2e6;
   --window-radius: 10px;
   --window-edge: rgb(0 0 0 / 0.16);
-  --text: #1c1c1e;
-  --muted: #6e6e73;
-  --faint: #a1a1a8;
-  --stage: #e4e4ea;
-  --preview-bg: #d6d6dd;
+  --text: #161618;
+  --muted: #55555b;
+  --faint: #69696f;
+  --stage: #f0f0f2;
+  --preview-bg: #dcdce0;
 
   /* One color per role. */
   --accent: #0a84ff;
+  /* Accent behind white text, and accent used as text: both reach 4.5:1. */
+  --accent-strong: #0a6cf0;
+  --accent-text: #0a5fd6;
   --record: #ff3b30;
   --zoom: #ff9f0a;
   --cut: #ff453a;
@@ -23,17 +31,23 @@
   --lens: #64d2ff;
   --speed: #30d158;
   --note: #ffd60a;
-  --danger: #ff3b30;
+  --danger: #d70015; /* as text it reaches 4.5:1 on panels and controls */
   --success: #34c759;
 
   --warning-bg: #fff4e0;
   --warning-text: #8a5300;
   --focus: 0 0 0 3px color-mix(in srgb, var(--accent) 40%, transparent);
-  --shadow-panel: 0 1px 2px rgb(0 0 0 / 0.06), 0 8px 24px rgb(0 0 0 / 0.06);
+  --shadow-panel: 0 1px 2px rgb(0 0 0 / 0.05), 0 8px 24px rgb(0 0 0 / 0.06);
+  --shadow-pop: 0 2px 6px rgb(0 0 0 / 0.08), 0 16px 40px rgb(0 0 0 / 0.16);
+  --toast-bg: #1f1f21;
+  --toast-text: #ffffff;
 
-  --r-lg: 14px;
-  --r-md: 10px;
-  --r-sm: 7px;
+  --r-xl: 18px; /* panels, sheets */
+  --r-lg: 14px; /* cards */
+  --r-md: 12px;
+  --r-sm: 10px;
+  --r-pill: 999px; /* controls */
+  --gap-panel: 8px; /* canvas showing around the floating panels */
 
   --fast: 120ms;
   --base: 200ms;
@@ -44,20 +58,28 @@
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #121214;
-    --surface: #1b1b1e;
-    --surface-2: #26262a;
-    --surface-3: #303035;
-    --border: #2f2f35;
-    --window-edge: rgb(255 255 255 / 0.09);
-    --text: #f2f2f4;
-    --muted: #9c9ca5;
-    --faint: #66666e;
-    --stage: #0d0d0f;
-    --preview-bg: #050506;
+    --bg: #111111;
+    --surface: #1a1a1a;
+    --surface-2: #242424;
+    --surface-3: #2e2e2e;
+    --raised: #3a3a3a;
+    --raised-shadow: none;
+    --track: #383838;
+    --border: #2a2a2a;
+    --window-edge: rgb(255 255 255 / 0.08);
+    --text: #f5f5f5;
+    --muted: #a8a8a8;
+    --faint: #8c8c8c;
+    --stage: #111111;
+    --preview-bg: #0a0a0a;
+    --accent-text: #3d9bff;
+    --danger: #ff453a;
     --warning-bg: #3a2a10;
     --warning-text: #ffc66b;
     --shadow-panel: 0 1px 2px rgb(0 0 0 / 0.4), 0 12px 32px rgb(0 0 0 / 0.35);
+    --shadow-pop: 0 2px 8px rgb(0 0 0 / 0.45), 0 18px 44px rgb(0 0 0 / 0.5);
+    --toast-bg: #2a2a2a;
+    --toast-text: #f5f5f5;
     color-scheme: dark;
   }
 }
@@ -158,7 +180,7 @@ body {
 
 /* Panel folded into a rail: record, and a way back to the takes. */
 .app.collapsed {
-  grid-template-columns: 56px 1fr;
+  grid-template-columns: 64px 1fr;
 }
 
 .app.collapsed .sidebar {
@@ -191,7 +213,7 @@ body {
 }
 
 .rail-record {
-  background: var(--text);
+  background: var(--surface-2);
 }
 
 .rail-record .dot {
@@ -207,18 +229,19 @@ body {
 }
 
 .rail-record.active .dot {
-  border-radius: 3px;
+  border-radius: 4px;
   background: #fff;
   animation: pulse 1.2s ease-in-out infinite;
 }
 
 .rail-button {
-  background: transparent;
+  background: var(--surface-2);
   color: var(--muted);
 }
 
+.rail-record:hover:not(.active),
 .rail-button:hover {
-  background: var(--surface-2);
+  background: var(--surface-3);
   color: var(--text);
 }
 
@@ -237,11 +260,10 @@ body {
   position: relative;
   display: flex;
   align-items: center;
-  height: 36px;
+  height: 40px;
   flex: none;
   padding-left: 12px;
-  background: var(--surface);
-  border-bottom: 1px solid var(--border);
+  background: var(--bg);
   user-select: none;
 }
 
@@ -309,7 +331,7 @@ body {
   padding: 0 10px;
   border: 0;
   border-radius: 999px;
-  background: var(--accent);
+  background: var(--accent-strong);
   color: #fff;
   font: inherit;
   font-size: 12px;
@@ -390,26 +412,26 @@ body {
 select {
   flex: 1;
   min-width: 0;
-  height: 32px;
-  padding: 0 8px;
-  border: 1px solid var(--border);
-  border-radius: var(--r-sm);
+  height: 34px;
+  padding: 0 12px;
+  border: 1px solid transparent;
+  border-radius: var(--r-pill);
   background: var(--surface-2);
-  transition: border-color var(--fast) var(--ease);
+  transition: background var(--fast) var(--ease), border-color var(--fast) var(--ease);
 }
 
 select:hover:not(:disabled) {
-  border-color: var(--faint);
+  background: var(--surface-3);
 }
 
 .icon {
   display: inline-grid;
   place-items: center;
-  width: 32px;
-  height: 32px;
+  width: 34px;
+  height: 34px;
   flex: none;
-  border: 1px solid var(--border);
-  border-radius: var(--r-sm);
+  border: 0;
+  border-radius: 50%;
   background: var(--surface-2);
   cursor: pointer;
   transition: background var(--fast) var(--ease), transform var(--fast) var(--ease);
@@ -428,6 +450,7 @@ select:hover:not(:disabled) {
 .secondary:active:not(:disabled),
 .primary:active:not(:disabled),
 .tool:active:not(:disabled),
+.round-action:active:not(:disabled) .round-face,
 .play:active,
 .swatch:active {
   transform: scale(0.96);
@@ -439,26 +462,26 @@ select:hover:not(:disabled) {
   align-items: center;
   justify-content: center;
   gap: 6px;
-  height: 30px;
-  padding: 0 12px;
-  border-radius: var(--r-sm);
+  height: 34px;
+  padding: 0 16px;
+  border-radius: var(--r-pill);
   cursor: pointer;
   white-space: nowrap;
   transition: background var(--fast) var(--ease), border-color var(--fast) var(--ease), filter var(--fast) var(--ease), transform var(--fast) var(--ease);
 }
 
 .secondary {
-  border: 1px solid var(--border);
-  background: var(--surface);
+  border: 1px solid transparent;
+  background: var(--surface-2);
 }
 
 .secondary:hover:not(:disabled) {
-  background: var(--surface-2);
+  background: var(--surface-3);
 }
 
 .primary {
   border: 0;
-  background: var(--accent);
+  background: var(--accent-strong);
   color: #fff;
   font-weight: 600;
 }
@@ -478,9 +501,9 @@ select:hover:not(:disabled) {
 
 /* Small buttons for headers, captions and inline actions. */
 .secondary.compact {
-  height: 24px;
-  gap: 4px;
-  padding: 0 8px;
+  height: 26px;
+  gap: 5px;
+  padding: 0 11px;
   font-size: 12px;
 }
 
@@ -522,8 +545,8 @@ label:has(input:disabled) {
 
 .note {
   margin: 0;
-  padding: 8px 10px;
-  border-radius: var(--r-sm);
+  padding: 10px 12px;
+  border-radius: var(--r-md);
   background: var(--surface-2);
   color: var(--muted);
   font-size: 12px;
@@ -535,8 +558,8 @@ kbd {
   padding: 0 5px;
   border: 1px solid var(--border);
   border-bottom-width: 2px;
-  border-radius: 5px;
-  background: var(--surface);
+  border-radius: 6px;
+  background: var(--surface-2);
   font: 11px/16px "Segoe UI", system-ui, sans-serif;
   text-align: center;
 }
@@ -563,7 +586,7 @@ kbd {
   margin: 0;
   flex: none;
   border-radius: 999px;
-  background: var(--surface-3);
+  background: var(--track);
   appearance: none;
   cursor: pointer;
   transition: background var(--base) var(--ease);
@@ -593,8 +616,8 @@ kbd {
 /* Segmented control built from radio buttons. */
 .segmented {
   display: flex;
-  padding: 2px;
-  border-radius: var(--r-sm);
+  padding: 3px;
+  border-radius: var(--r-pill);
   background: var(--surface-2);
 }
 
@@ -602,9 +625,9 @@ kbd {
   flex: 1;
   display: grid;
   place-items: center;
-  height: 28px;
-  padding: 0 6px;
-  border-radius: 6px;
+  height: 30px;
+  padding: 0 8px;
+  border-radius: var(--r-pill);
   color: var(--muted);
   cursor: pointer;
   white-space: nowrap;
@@ -612,8 +635,12 @@ kbd {
 }
 
 .segmented.small label {
-  height: 24px;
+  height: 26px;
   font-size: 12px;
+}
+
+.segmented label:hover:not(:has(input:checked)) {
+  color: var(--text);
 }
 
 .segmented input {
@@ -623,10 +650,10 @@ kbd {
 }
 
 .segmented label:has(input:checked) {
-  background: var(--surface);
+  background: var(--raised);
   color: var(--text);
   font-weight: 600;
-  box-shadow: 0 1px 2px rgb(0 0 0 / 0.12);
+  box-shadow: var(--raised-shadow);
 }
 
 .segmented label:has(input:focus-visible) {
@@ -661,14 +688,14 @@ input[type="range"] {
 }
 
 input[type="range"]::-webkit-slider-runnable-track {
-  height: 4px;
+  height: 6px;
   border-radius: 999px;
-  background: linear-gradient(to right, var(--accent) var(--fill), var(--surface-3) var(--fill));
+  background: linear-gradient(to right, var(--accent) var(--fill), var(--track) var(--fill));
 }
 
 input[type="range"]::-webkit-slider-thumb {
-  width: 16px;
-  height: 16px;
+  width: 18px;
+  height: 18px;
   margin-top: -6px;
   border: 0;
   border-radius: 50%;
@@ -692,14 +719,17 @@ input[type="range"]:focus-visible::-webkit-slider-thumb {
 
 /* ---------- sidebar ---------- */
 
+/* A floating panel on the canvas, like the inspector and the timeline. */
 .sidebar {
   display: flex;
   flex-direction: column;
   gap: 16px;
-  padding: 16px 14px;
-  background: var(--surface);
-  border-right: 1px solid var(--border);
   min-height: 0;
+  margin: 0 0 var(--gap-panel) var(--gap-panel);
+  padding: 16px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-xl);
+  background: var(--surface);
 }
 
 .brand-mark {
@@ -718,14 +748,16 @@ input[type="range"]:focus-visible::-webkit-slider-thumb {
   gap: 6px;
 }
 
+/* Pill toggles: dim when off, bright with an accent icon when on. */
 .chip {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  height: 28px;
-  padding: 0 10px;
-  border: 1px solid var(--border);
-  border-radius: 999px;
+  height: 32px;
+  padding: 0 13px 0 11px;
+  border: 1px solid transparent;
+  border-radius: var(--r-pill);
+  background: var(--surface-2);
   color: var(--muted);
   cursor: pointer;
   user-select: none;
@@ -738,10 +770,19 @@ input[type="range"]:focus-visible::-webkit-slider-thumb {
   pointer-events: none;
 }
 
-.chip:has(input:checked) {
-  border-color: color-mix(in srgb, var(--accent) 50%, transparent);
-  background: color-mix(in srgb, var(--accent) 14%, transparent);
+.chip:hover {
+  background: var(--surface-3);
   color: var(--text);
+}
+
+.chip:has(input:checked) {
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+  background: color-mix(in srgb, var(--accent) 16%, var(--surface-2));
+  color: var(--text);
+}
+
+.chip:has(input:checked) .i {
+  color: var(--accent-text);
 }
 
 .chip:has(input:focus-visible) {
@@ -806,8 +847,8 @@ input[type="range"]:focus-visible::-webkit-slider-thumb {
   flex: none;
   overflow: hidden;
   border-radius: 50%;
-  background: var(--surface-3);
-  box-shadow: 0 0 0 1px var(--border);
+  background: var(--surface-2);
+  box-shadow: 0 0 0 2px var(--surface), 0 0 0 3px var(--border);
   animation: fade-in var(--base) var(--ease);
 }
 
@@ -835,15 +876,19 @@ input[type="range"]:focus-visible::-webkit-slider-thumb {
   align-items: center;
   justify-content: center;
   gap: 10px;
-  height: 42px;
+  height: 46px;
   border: 0;
-  border-radius: var(--r-md);
+  border-radius: var(--r-pill);
   background: var(--text);
   color: var(--surface);
   font-weight: 600;
   cursor: pointer;
   font-variant-numeric: tabular-nums;
   transition: transform var(--fast) var(--ease), background var(--base) var(--ease);
+}
+
+.record:hover:not(:disabled):not(.active) {
+  background: color-mix(in srgb, var(--text) 88%, var(--surface));
 }
 
 .record:active {
@@ -886,18 +931,25 @@ input[type="range"]:focus-visible::-webkit-slider-thumb {
 }
 
 /* Folded options under the chips. */
+/* A rounded panel with its own outline; the chips inside keep the control color. */
 .options {
   border: 1px solid var(--border);
-  border-radius: var(--r-md);
-  background: var(--surface-2);
+  border-radius: var(--r-lg);
+  background: transparent;
+  transition: background var(--fast) var(--ease);
+}
+
+.options[open] {
+  background: color-mix(in srgb, var(--surface-2) 35%, transparent);
 }
 
 .options summary {
   display: flex;
   align-items: center;
   gap: 8px;
-  min-height: 34px;
-  padding: 0 10px;
+  min-height: 40px;
+  padding: 0 14px;
+  border-radius: var(--r-lg);
   color: var(--text);
   font-weight: 600;
   cursor: pointer;
@@ -937,8 +989,12 @@ input[type="range"]:focus-visible::-webkit-slider-thumb {
   visibility: hidden;
 }
 
+.options summary:hover .chevron {
+  color: var(--text);
+}
+
 .options summary:focus-visible {
-  border-radius: var(--r-md);
+  border-radius: var(--r-lg);
   outline: none;
   box-shadow: var(--focus);
 }
@@ -946,8 +1002,8 @@ input[type="range"]:focus-visible::-webkit-slider-thumb {
 .options-body {
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  padding: 2px 10px 10px;
+  gap: 12px;
+  padding: 2px 12px 14px;
   animation: fade-in var(--base) var(--ease);
 }
 
@@ -969,8 +1025,8 @@ input[type="range"]:focus-visible::-webkit-slider-thumb {
 }
 
 .warnings li {
-  padding: 8px 10px;
-  border-radius: var(--r-sm);
+  padding: 10px 12px;
+  border-radius: var(--r-md);
   background: var(--warning-bg);
   color: var(--warning-text);
   font-size: 12px;
@@ -999,14 +1055,14 @@ input[type="range"]:focus-visible::-webkit-slider-thumb {
   font-weight: 600;
   color: var(--muted);
   text-transform: uppercase;
-  letter-spacing: 0.05em;
+  letter-spacing: 0.06em;
 }
 
 #takes {
   display: flex;
   flex-direction: column;
   gap: 2px;
-  margin: 0 -6px;
+  margin: 0 -8px;
   padding: 0;
   list-style: none;
   overflow-y: auto;
@@ -1025,9 +1081,9 @@ input[type="range"]:focus-visible::-webkit-slider-thumb {
   column-gap: 10px;
   align-items: center;
   width: 100%;
-  padding: 6px;
+  padding: 7px 8px;
   border: 0;
-  border-radius: var(--r-sm);
+  border-radius: var(--r-md);
   background: none;
   text-align: left;
   cursor: pointer;
@@ -1039,7 +1095,7 @@ input[type="range"]:focus-visible::-webkit-slider-thumb {
 }
 
 .take.selected {
-  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  background: color-mix(in srgb, var(--accent) 18%, var(--surface));
 }
 
 /* Picked with Ctrl or Shift, for actions on several takes at once. */
@@ -1052,10 +1108,10 @@ input[type="range"]:focus-visible::-webkit-slider-thumb {
   display: flex;
   align-items: center;
   gap: 10px;
-  margin: 0 0 6px;
-  padding: 6px 10px;
-  border-radius: var(--r-sm);
-  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  margin: 0 0 8px;
+  padding: 5px 5px 5px 14px;
+  border-radius: var(--r-pill);
+  background: color-mix(in srgb, var(--accent) 14%, var(--surface));
   font-size: 12px;
   animation: fade-in var(--base) var(--ease);
 }
@@ -1070,8 +1126,8 @@ input[type="range"]:focus-visible::-webkit-slider-thumb {
   grid-row: span 2;
   width: 64px;
   height: 40px;
-  border-radius: 5px;
-  background: var(--surface-3);
+  border-radius: 8px;
+  background: var(--surface-2);
 }
 
 .take .thumb img {
@@ -1113,7 +1169,7 @@ input[type="range"]:focus-visible::-webkit-slider-thumb {
 
 .take-search .i {
   position: absolute;
-  left: 9px;
+  left: 12px;
   width: 14px;
   height: 14px;
   color: var(--muted);
@@ -1122,10 +1178,10 @@ input[type="range"]:focus-visible::-webkit-slider-thumb {
 
 .take-search input {
   width: 100%;
-  height: 28px;
-  padding: 0 8px 0 29px;
-  border: 1px solid var(--border);
-  border-radius: var(--r-sm);
+  height: 34px;
+  padding: 0 12px 0 34px;
+  border: 1px solid transparent;
+  border-radius: var(--r-pill);
   background: var(--surface-2);
   outline: none;
   transition: border-color var(--fast) var(--ease), box-shadow var(--fast) var(--ease);
@@ -1133,6 +1189,10 @@ input[type="range"]:focus-visible::-webkit-slider-thumb {
 
 .take-search input::placeholder {
   color: var(--faint);
+}
+
+.take-search input:hover {
+  background: var(--surface-3);
 }
 
 .take-search input:focus {
@@ -1165,10 +1225,22 @@ input[type="range"]:focus-visible::-webkit-slider-thumb {
   color: var(--faint);
 }
 
+/* The big icon sits in a soft round badge. */
+.empty > .i.big {
+  box-sizing: content-box;
+  width: 32px;
+  height: 32px;
+  margin-bottom: 6px;
+  padding: 20px;
+  border-radius: 50%;
+  background: var(--surface-2);
+  color: var(--muted);
+}
+
 .empty h2 {
   margin: 0;
   color: var(--text);
-  font-size: 16px;
+  font-size: 17px;
   font-weight: 600;
 }
 
@@ -1179,7 +1251,13 @@ input[type="range"]:focus-visible::-webkit-slider-thumb {
 .empty-actions {
   display: flex;
   gap: 8px;
-  margin-top: 6px;
+  margin-top: 10px;
+}
+
+.empty-actions .primary,
+.empty-actions .secondary {
+  height: 40px;
+  padding: 0 20px;
 }
 
 /* Recent takes under the start buttons, in a row that scrolls sideways. */
@@ -1188,7 +1266,7 @@ input[type="range"]:focus-visible::-webkit-slider-thumb {
   flex-direction: column;
   gap: 10px;
   width: min(900px, calc(100vw - 360px));
-  margin-top: 28px;
+  margin-top: 36px;
   text-align: left;
 }
 
@@ -1203,7 +1281,7 @@ input[type="range"]:focus-visible::-webkit-slider-thumb {
 
 .recent-row {
   display: flex;
-  gap: 12px;
+  gap: 14px;
   overflow-x: auto;
   padding: 4px 2px 10px;
   scroll-snap-type: x proximity;
@@ -1230,11 +1308,11 @@ input[type="range"]:focus-visible::-webkit-slider-thumb {
   position: relative;
   display: block;
   aspect-ratio: 16 / 9;
-  margin-bottom: 4px;
+  margin-bottom: 6px;
   overflow: hidden;
   border: 1px solid var(--border);
-  border-radius: var(--r-md);
-  background: var(--surface-3);
+  border-radius: var(--r-lg);
+  background: var(--surface-2);
   transition: border-color var(--fast) var(--ease), transform var(--fast) var(--ease), box-shadow var(--fast) var(--ease);
 }
 
@@ -1249,9 +1327,9 @@ input[type="range"]:focus-visible::-webkit-slider-thumb {
   position: absolute;
   right: 6px;
   bottom: 6px;
-  padding: 1px 6px;
+  padding: 2px 8px;
   border-radius: 999px;
-  background: rgb(0 0 0 / 0.7);
+  background: rgb(0 0 0 / 0.72);
   color: #fff;
   font-size: 11px;
   font-variant-numeric: tabular-nums;
@@ -1268,8 +1346,12 @@ input[type="range"]:focus-visible::-webkit-slider-thumb {
 
 .recent-card:hover .recent-thumb {
   border-color: var(--accent);
-  box-shadow: 0 6px 18px rgb(0 0 0 / 0.25);
+  box-shadow: var(--shadow-panel);
   transform: translateY(-2px);
+}
+
+.recent-card:hover strong {
+  color: var(--text);
 }
 
 .recent-card:active .recent-thumb {
@@ -1303,10 +1385,10 @@ input[type="range"]:focus-visible::-webkit-slider-thumb {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  height: 48px;
-  padding: 0 12px 0 16px;
-  background: var(--surface);
-  border-bottom: 1px solid var(--border);
+  height: 66px;
+  flex: none;
+  padding: 0 calc(var(--gap-panel) + 4px) 4px 20px;
+  background: var(--stage);
 }
 
 .editor-title {
@@ -1320,13 +1402,133 @@ input[type="range"]:focus-visible::-webkit-slider-thumb {
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
+  font-size: 14px;
   font-weight: 600;
 }
 
 .editor-actions {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 4px;
+}
+
+/* ---------- capsules and round actions ----------
+   Related buttons share a pill (.capsule); each shows its icon with a small label under it.
+   A single action is a circle with its label under it (.round-action). */
+
+.capsule {
+  display: inline-flex;
+  align-items: stretch;
+  gap: 2px;
+  flex: none;
+  padding: 5px;
+  border-radius: var(--r-pill);
+  background: var(--surface-2);
+}
+
+.capsule-item,
+.tool {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  min-width: 54px;
+  height: auto;
+  padding: 6px 10px 5px;
+  border: 0;
+  border-radius: 16px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 13px;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background var(--fast) var(--ease), color var(--fast) var(--ease), filter var(--fast) var(--ease), transform var(--fast) var(--ease);
+}
+
+.capsule-item .i,
+.tool .i {
+  width: 20px;
+  height: 20px;
+}
+
+.capsule-item:first-child,
+.tool:first-child {
+  border-radius: 22px 16px 16px 22px;
+}
+
+.capsule-item:last-child,
+.tool:last-child {
+  border-radius: 16px 22px 22px 16px;
+}
+
+.capsule-item:hover:not(:disabled),
+.tool:hover:not(:disabled) {
+  background: var(--surface-3);
+  color: var(--text);
+}
+
+/* Primary action inside a capsule (Exportar): the accent fill, white icon and label. */
+.capsule-item.primary,
+.capsule-item.primary:hover:not(:disabled) {
+  background: var(--accent-strong);
+  color: #fff;
+  font-weight: 600;
+}
+
+.round-action {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  min-width: 52px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 13px;
+  cursor: pointer;
+  transition: color var(--fast) var(--ease);
+}
+
+.round-face {
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background: var(--surface-2);
+  color: var(--text);
+  transition: background var(--fast) var(--ease), transform var(--fast) var(--ease);
+}
+
+.round-face .i {
+  width: 18px;
+  height: 18px;
+}
+
+.round-action:hover:not(:disabled) {
+  color: var(--text);
+}
+
+.round-action:hover:not(:disabled) .round-face {
+  background: var(--surface-3);
+}
+
+.round-action:focus-visible {
+  box-shadow: none;
+}
+
+.round-action:focus-visible .round-face {
+  box-shadow: var(--focus);
+}
+
+.editor-actions .capsule {
+  margin-left: 8px;
 }
 
 .save-state {
@@ -1364,7 +1566,7 @@ input[type="range"]:focus-visible::-webkit-slider-thumb {
   place-items: center;
   flex: 1;
   min-height: 0;
-  margin: 16px 16px 0;
+  margin: 4px 16px 0;
 }
 
 .canvas-wrap {
@@ -1405,9 +1607,9 @@ input[type="range"]:focus-visible::-webkit-slider-thumb {
 
 .preview canvas {
   display: block;
-  border-radius: 6px;
+  border-radius: 10px;
   background: var(--preview-bg);
-  box-shadow: 0 10px 40px rgb(0 0 0 / 0.25);
+  box-shadow: 0 12px 44px rgb(0 0 0 / 0.3);
 }
 
 .preview-status,
@@ -1496,10 +1698,11 @@ input[type="range"]:focus-visible::-webkit-slider-thumb {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 6px 6px 6px 14px;
+  padding: 6px 6px 6px 16px;
+  border: 1px solid var(--border);
   border-radius: 999px;
   background: var(--surface);
-  box-shadow: var(--shadow-panel);
+  box-shadow: var(--shadow-pop);
   transform: translateX(-50%);
 }
 
@@ -1512,7 +1715,7 @@ input[type="range"]:focus-visible::-webkit-slider-thumb {
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 12px 16px 8px;
+  padding: 12px 16px 10px;
   container-type: inline-size;
 }
 
@@ -1521,20 +1724,29 @@ input[type="range"]:focus-visible::-webkit-slider-thumb {
   .tool-label {
     display: none;
   }
+
+  .tool {
+    min-width: 40px;
+    padding: 9px 10px;
+  }
 }
 
 .play {
   display: grid;
   place-items: center;
-  width: 36px;
-  height: 36px;
+  width: 44px;
+  height: 44px;
   flex: none;
   border: 0;
   border-radius: 50%;
-  background: var(--text);
-  color: var(--surface);
+  background: var(--surface-2);
+  color: var(--text);
   cursor: pointer;
-  transition: transform var(--fast) var(--ease);
+  transition: background var(--fast) var(--ease), transform var(--fast) var(--ease);
+}
+
+.play:hover {
+  background: var(--surface-3);
 }
 
 .play .i {
@@ -1544,6 +1756,7 @@ input[type="range"]:focus-visible::-webkit-slider-thumb {
 
 .time {
   min-width: 112px;
+  font-size: 13.5px;
   font-variant-numeric: tabular-nums;
 }
 
@@ -1553,71 +1766,62 @@ input[type="range"]:focus-visible::-webkit-slider-thumb {
 
 /* Preview-only playback speed; highlighted while it is not 1×. */
 .preview-speed {
-  min-width: 40px;
+  min-width: 44px;
   justify-content: center;
+  font-weight: 600;
   font-variant-numeric: tabular-nums;
 }
 
 .preview-speed.active {
   border-color: var(--accent);
-  color: var(--accent);
+  color: var(--accent-text);
 }
 
+/* The tools capsule: icon over label; .tool shares the .capsule-item look. */
 .tools {
-  display: flex;
-  gap: 4px;
   margin-left: auto;
 }
 
-.tool {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  height: 30px;
-  padding: 0 10px;
-  border: 1px solid transparent;
-  border-radius: var(--r-sm);
-  background: transparent;
-  color: var(--muted);
-  cursor: pointer;
-  transition: background var(--fast) var(--ease), color var(--fast) var(--ease);
+/* Each tool keeps its role color as a soft tint on a near-white icon. */
+.tool .i {
+  color: color-mix(in srgb, var(--tool-color, var(--text)) 55%, var(--text));
+  transition: color var(--fast) var(--ease);
 }
 
-.tool:hover {
-  background: var(--surface-2);
-  color: var(--text);
+.tool:hover:not(:disabled) .i {
+  color: var(--tool-color, var(--text));
 }
 
-#add-cut .i,
-#add-split .i {
-  color: var(--cut);
+#add-cut,
+#add-split {
+  --tool-color: var(--cut);
 }
 
-#add-zoom .i {
-  color: var(--zoom);
+#add-zoom {
+  --tool-color: var(--zoom);
 }
 
-#add-lens .i {
-  color: var(--lens);
+#add-lens {
+  --tool-color: var(--lens);
 }
 
-#add-blur .i {
-  color: var(--blur);
+#add-blur {
+  --tool-color: var(--blur);
 }
 
-#add-speed .i {
-  color: var(--speed);
+#add-speed {
+  --tool-color: var(--speed);
 }
 
-#add-note .i {
-  color: var(--note);
+#add-note {
+  --tool-color: var(--note);
 }
 
 .card-fields {
   display: grid;
   gap: 8px;
   padding-left: 12px;
-  border-left: 2px solid var(--border);
+  border-left: 2px solid var(--surface-3);
 }
 
 .selection-note {
@@ -1628,9 +1832,9 @@ input[type="range"]:focus-visible::-webkit-slider-thumb {
 .field input[type="text"],
 .field textarea {
   min-height: 56px;
-  padding: 6px 8px;
-  border: 1px solid var(--border);
-  border-radius: var(--r-sm);
+  padding: 8px 12px;
+  border: 1px solid transparent;
+  border-radius: var(--r-md);
   background: var(--surface-2);
   color: var(--text);
   font: inherit;
@@ -1638,7 +1842,8 @@ input[type="range"]:focus-visible::-webkit-slider-thumb {
 }
 
 .field input[type="text"] {
-  height: 32px;
+  height: 34px;
+  border-radius: var(--r-pill);
 }
 
 .field input[type="text"]:focus-visible,
@@ -1651,8 +1856,12 @@ input[type="range"]:focus-visible::-webkit-slider-thumb {
   grid-template-columns: repeat(5, 28px);
 }
 
+/* Floating panel, like the sidebar and the inspector. */
 .timeline-wrap {
-  border-top: 1px solid var(--border);
+  margin: 0 0 var(--gap-panel) var(--gap-panel);
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--r-xl);
   background: var(--surface);
 }
 
@@ -1675,51 +1884,64 @@ input[type="range"]:focus-visible::-webkit-slider-thumb {
 
 .inspector {
   display: grid;
-  grid-template-columns: 56px minmax(0, 1fr);
+  grid-template-columns: 74px minmax(0, 1fr);
   grid-template-rows: minmax(0, 1fr);
   min-height: 0;
+  margin: 0 var(--gap-panel) var(--gap-panel);
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--r-xl);
   background: var(--surface);
-  border-left: 1px solid var(--border);
 }
 
-/* Tabs down the side, as in Slice: an icon with a short name under it. */
+/* Tabs down the side in a rounded capsule: an icon with a short name under it;
+   the open tab is a brighter pill. */
 .tabs {
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  padding: 8px 6px;
+  align-self: start;
+  gap: 2px;
+  max-height: calc(100% - 20px);
+  margin: 10px 0 10px 10px;
+  padding: 5px;
   overflow-y: auto;
-  border-right: 1px solid var(--border);
+  border-radius: 28px;
+  background: var(--surface-2);
+  scrollbar-width: none;
 }
 
 .tabs button {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 4px;
+  gap: 3px;
   padding: 9px 0 7px;
   border: 0;
-  border-radius: var(--r-sm);
+  border-radius: 22px;
   background: none;
   color: var(--muted);
-  font-size: 9.5px;
+  font-size: 10px;
+  font-weight: 500;
+  line-height: 12px;
   cursor: pointer;
   transition: background var(--fast) var(--ease), color var(--fast) var(--ease);
 }
 
 .tabs button .i {
-  width: 18px;
-  height: 18px;
+  width: 20px;
+  height: 20px;
 }
 
 .tabs button:hover {
-  background: var(--surface-2);
+  background: var(--surface-3);
+  color: var(--text);
 }
 
 .tabs button[aria-selected="true"] {
-  background: color-mix(in srgb, var(--accent) 14%, transparent);
-  color: var(--accent);
+  background: var(--raised);
+  color: var(--text);
   font-weight: 600;
+  box-shadow: var(--raised-shadow);
 }
 
 .tab-panel {
@@ -1732,49 +1954,79 @@ input[type="range"]:focus-visible::-webkit-slider-thumb {
 .inspector section {
   display: flex;
   flex-direction: column;
-  gap: 12px;
-  padding: 16px;
+  gap: 14px;
+  padding: 18px 18px 20px 14px;
   border-bottom: 1px solid var(--border);
 }
 
-.inspector section.selection {
-  background: color-mix(in srgb, var(--zoom) 7%, transparent);
+.inspector section:last-child {
+  border-bottom: 0;
 }
 
+/* What is selected on the timeline: a tinted card above the sections. */
+.inspector section.selection {
+  margin: 10px 10px 4px 4px;
+  padding: 16px;
+  border: 1px solid color-mix(in srgb, var(--zoom) 22%, transparent);
+  border-radius: var(--r-lg);
+  background: color-mix(in srgb, var(--zoom) 8%, var(--surface));
+}
+
+/* Color circles in a capsule; the chosen one gets a bright ring with a gap. */
 .swatches {
   display: grid;
-  grid-template-columns: repeat(6, 1fr);
-  gap: 6px;
+  grid-template-columns: repeat(auto-fill, 28px);
+  justify-content: space-between;
+  gap: 10px 8px;
+  padding: 8px 10px;
+  border-radius: 24px;
+  background: var(--surface-2);
 }
 
 .swatch {
+  width: 28px;
+  height: 28px;
   aspect-ratio: 1;
+  padding: 0;
   border: 0;
   border-radius: 50%;
   cursor: pointer;
-  box-shadow: inset 0 0 0 1px rgb(0 0 0 / 0.12);
+  box-shadow: inset 0 0 0 1px rgb(127 127 127 / 0.28);
   transition: transform var(--fast) var(--ease), box-shadow var(--fast) var(--ease);
 }
 
+.swatch:hover {
+  transform: scale(1.08);
+}
+
 .swatch.selected {
-  box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px var(--accent);
+  box-shadow: inset 0 0 0 1px rgb(127 127 127 / 0.28), 0 0 0 2.5px var(--surface-2), 0 0 0 4.5px var(--text);
+}
+
+.swatch:focus-visible {
+  box-shadow: 0 0 0 2.5px var(--surface-2), 0 0 0 5px color-mix(in srgb, var(--accent) 70%, transparent);
 }
 
 .corners {
   display: grid;
   grid-template-columns: repeat(2, 1fr);
   gap: 6px;
-  width: 112px;
+  width: 116px;
   padding: 6px;
-  border-radius: var(--r-sm);
+  border-radius: var(--r-lg);
   background: var(--surface-2);
 }
 
 .corners label {
   height: 30px;
-  border: 1px dashed var(--border);
-  border-radius: 5px;
+  border: 1.5px dashed var(--track);
+  border-radius: 8px;
   cursor: pointer;
+  transition: border-color var(--fast) var(--ease);
+}
+
+.corners label:hover {
+  border-color: var(--faint);
 }
 
 .corners input {
@@ -1807,8 +2059,8 @@ input[type="range"]:focus-visible::-webkit-slider-thumb {
 .transcript {
   max-height: 340px;
   overflow-y: auto;
-  padding: 10px;
-  border-radius: var(--r-sm);
+  padding: 12px 14px;
+  border-radius: var(--r-lg);
   background: var(--surface-2);
   line-height: 1.9;
   user-select: none;
@@ -1821,7 +2073,7 @@ input[type="range"]:focus-visible::-webkit-slider-thumb {
 }
 
 .transcript .word:hover {
-  background: var(--surface-3);
+  background: var(--raised);
 }
 
 .transcript .word.current {
@@ -1843,7 +2095,7 @@ input[type="range"]:focus-visible::-webkit-slider-thumb {
 .toasts {
   position: fixed;
   left: calc(50% + 142px);
-  bottom: 236px;
+  bottom: 284px; /* above the timeline panel and the transport */
   z-index: 10;
   display: flex;
   flex-direction: column;
@@ -1857,17 +2109,18 @@ input[type="range"]:focus-visible::-webkit-slider-thumb {
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 8px 8px 8px 14px;
+  padding: 7px 7px 7px 16px;
+  border: 1px solid rgb(255 255 255 / 0.08);
   border-radius: 999px;
-  background: color-mix(in srgb, var(--text) 92%, transparent);
-  color: var(--surface);
-  box-shadow: var(--shadow-panel);
+  background: var(--toast-bg);
+  color: var(--toast-text);
+  box-shadow: var(--shadow-pop);
   pointer-events: auto;
   animation: toast-in var(--base) var(--ease);
 }
 
 .toast:not(:has(button)) {
-  padding-right: 14px;
+  padding: 9px 16px;
 }
 
 .toast.leaving {
@@ -1877,14 +2130,19 @@ input[type="range"]:focus-visible::-webkit-slider-thumb {
 }
 
 .toast button {
-  height: 26px;
-  padding: 0 10px;
+  height: 28px;
+  padding: 0 12px;
   border: 0;
   border-radius: 999px;
-  background: color-mix(in srgb, var(--surface) 18%, transparent);
+  background: rgb(255 255 255 / 0.12);
   color: inherit;
   font-weight: 600;
   cursor: pointer;
+  transition: background var(--fast) var(--ease);
+}
+
+.toast button:hover {
+  background: rgb(255 255 255 / 0.2);
 }
 
 @keyframes toast-in {
@@ -1903,23 +2161,23 @@ input[type="range"]:focus-visible::-webkit-slider-thumb {
   display: grid;
   place-items: center;
   padding: 24px;
-  background: rgb(0 0 0 / 0.45);
+  background: rgb(0 0 0 / 0.5);
   animation: fade-in var(--base) var(--ease);
 }
 
 .sheet {
   width: min(420px, 100%);
-  padding: 20px;
+  padding: 22px;
   border: 1px solid var(--border);
-  border-radius: var(--r-lg);
+  border-radius: 20px;
   background: var(--surface);
-  box-shadow: var(--shadow-panel);
+  box-shadow: var(--shadow-pop);
   animation: sheet-in var(--base) var(--ease);
 }
 
 .sheet h2 {
-  margin: 0 0 16px;
-  font-size: 16px;
+  margin: 0 0 18px;
+  font-size: 17px;
   font-weight: 600;
 }
 
@@ -1931,8 +2189,8 @@ input[type="range"]:focus-visible::-webkit-slider-thumb {
 
 .sheet .summary {
   margin: 0;
-  padding: 10px 12px;
-  border-radius: var(--r-sm);
+  padding: 12px 14px;
+  border-radius: var(--r-lg);
   background: var(--surface-2);
   color: var(--muted);
   font-size: 12px;
@@ -1943,14 +2201,20 @@ input[type="range"]:focus-visible::-webkit-slider-thumb {
   display: flex;
   justify-content: flex-end;
   gap: 8px;
-  margin-top: 4px;
+  margin-top: 6px;
+}
+
+.actions .primary,
+.actions .secondary {
+  height: 36px;
+  padding: 0 18px;
 }
 
 .progress {
   height: 8px;
   overflow: hidden;
   border-radius: 999px;
-  background: var(--surface-3);
+  background: var(--track);
 }
 
 .progress-bar {
@@ -2060,8 +2324,8 @@ input[type="range"]:focus-visible::-webkit-slider-thumb {
 /* Monitors drawn where they sit on the desktop. */
 .monitor-map {
   position: relative;
-  height: 96px;
-  border-radius: var(--r-md);
+  height: 100px;
+  border-radius: var(--r-lg);
   background: var(--surface-2);
 }
 
@@ -2070,8 +2334,8 @@ input[type="range"]:focus-visible::-webkit-slider-thumb {
   display: grid;
   place-items: center;
   padding: 0;
-  border: 1.5px solid var(--border);
-  border-radius: 5px;
+  border: 1.5px solid var(--track);
+  border-radius: 7px;
   background: var(--surface);
   color: var(--muted);
   font-size: 15px;
@@ -2089,7 +2353,7 @@ input[type="range"]:focus-visible::-webkit-slider-thumb {
   content: "Desenhar área";
   position: absolute;
   inset: auto 0 4px;
-  color: var(--accent);
+  color: var(--accent-text);
   font-size: 10px;
   font-weight: 600;
   opacity: 0;
@@ -2118,7 +2382,7 @@ input[type="range"]:focus-visible::-webkit-slider-thumb {
 
 @keyframes hint-flash {
   50% {
-    color: var(--accent);
+    color: var(--accent-text);
   }
 }
 
@@ -2151,7 +2415,7 @@ input[type="range"]:focus-visible::-webkit-slider-thumb {
 .monitor[aria-checked="true"] {
   border-color: var(--accent);
   background: color-mix(in srgb, var(--accent) 18%, var(--surface));
-  color: var(--accent);
+  color: var(--accent-text);
 }
 
 /* Taskbar hint on the primary monitor. */
@@ -2191,9 +2455,9 @@ input[type="range"]:focus-visible::-webkit-slider-thumb {
   flex-direction: column;
   gap: 2px;
   max-height: 188px;
-  padding: 4px;
+  padding: 5px;
   overflow-y: auto;
-  border-radius: var(--r-md);
+  border-radius: var(--r-lg);
   background: var(--surface-2);
 }
 
@@ -2202,9 +2466,9 @@ input[type="range"]:focus-visible::-webkit-slider-thumb {
   flex-direction: column;
   align-items: flex-start;
   width: 100%;
-  padding: 6px 8px;
+  padding: 7px 10px;
   border: 0;
-  border-radius: 6px;
+  border-radius: var(--r-sm);
   background: transparent;
   text-align: left;
   cursor: pointer;
@@ -2245,11 +2509,11 @@ input[type="range"]:focus-visible::-webkit-slider-thumb {
   z-index: 40;
   min-width: 220px;
   max-width: 320px;
-  padding: 5px;
+  padding: 6px;
   border: 1px solid var(--border);
-  border-radius: var(--r-md);
+  border-radius: var(--r-lg);
   background: var(--surface);
-  box-shadow: 0 2px 6px rgb(0 0 0 / 0.12), 0 12px 32px rgb(0 0 0 / 0.28);
+  box-shadow: var(--shadow-pop);
   animation: menu-in 110ms var(--ease);
 }
 
@@ -2258,10 +2522,10 @@ input[type="range"]:focus-visible::-webkit-slider-thumb {
   align-items: center;
   gap: 8px;
   width: 100%;
-  height: 30px;
-  padding: 0 10px 0 6px;
+  height: 32px;
+  padding: 0 10px 0 8px;
   border: 0;
-  border-radius: 6px;
+  border-radius: 9px;
   background: transparent;
   text-align: left;
   cursor: default;
@@ -2269,8 +2533,8 @@ input[type="range"]:focus-visible::-webkit-slider-thumb {
 
 .menu-item:hover:not(:disabled),
 .menu-item:focus-visible {
-  background: var(--accent);
-  color: #fff;
+  background: var(--surface-2);
+  color: var(--text);
   box-shadow: none;
 }
 
@@ -2284,8 +2548,8 @@ input[type="range"]:focus-visible::-webkit-slider-thumb {
 
 .menu-item.danger:hover:not(:disabled),
 .menu-item.danger:focus-visible {
-  background: var(--danger);
-  color: #fff;
+  background: color-mix(in srgb, var(--danger) 16%, var(--surface));
+  color: var(--danger);
 }
 
 .menu-icon {
@@ -2316,7 +2580,7 @@ input[type="range"]:focus-visible::-webkit-slider-thumb {
 
 .menu-separator {
   height: 1px;
-  margin: 4px 6px;
+  margin: 5px 8px;
   background: var(--border);
 }
 
@@ -2337,12 +2601,12 @@ input[type="range"]:focus-visible::-webkit-slider-thumb {
 }
 
 .primary.destructive {
-  background: var(--danger);
+  background: color-mix(in srgb, var(--danger) 82%, #000);
 }
 
 .secondary.selected {
   border-color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  background: color-mix(in srgb, var(--accent) 16%, var(--surface-2));
 }
 
 .take .rename {
@@ -2350,7 +2614,7 @@ input[type="range"]:focus-visible::-webkit-slider-thumb {
   height: 22px;
   padding: 0 6px;
   border: 1px solid var(--accent);
-  border-radius: 5px;
+  border-radius: 6px;
   background: var(--surface);
   font-weight: 600;
 }
@@ -2401,11 +2665,11 @@ input[type="range"]:focus-visible::-webkit-slider-thumb {
   align-items: center;
   justify-content: center;
   gap: 4px;
-  min-height: 32px;
+  min-height: 34px;
   padding: 6px 4px;
-  border: 1px solid var(--border);
-  border-radius: var(--r-sm);
-  background: var(--surface);
+  border: 1.5px solid transparent;
+  border-radius: var(--r-md);
+  background: var(--surface-2);
   color: var(--muted);
   font: inherit;
   font-size: 12px;
@@ -2414,7 +2678,7 @@ input[type="range"]:focus-visible::-webkit-slider-thumb {
 }
 
 .choice:hover:not(:disabled) {
-  border-color: var(--faint);
+  background: var(--surface-3);
   color: var(--text);
 }
 
@@ -2424,7 +2688,7 @@ input[type="range"]:focus-visible::-webkit-slider-thumb {
 
 .choice[aria-checked="true"] {
   border-color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 12%, var(--surface));
+  background: color-mix(in srgb, var(--accent) 14%, var(--surface-2));
   color: var(--text);
   font-weight: 600;
 }
@@ -2459,17 +2723,17 @@ input[type="range"]:focus-visible::-webkit-slider-thumb {
   display: flex;
   flex-direction: column;
   gap: 6px;
-  padding: 6px 6px 8px;
-  border: 1px solid var(--border);
-  border-radius: var(--r-md);
-  background: var(--surface);
+  padding: 6px 6px 9px;
+  border: 1.5px solid transparent;
+  border-radius: var(--r-lg);
+  background: var(--surface-2);
   text-align: left;
   cursor: pointer;
   transition: border-color var(--fast) var(--ease), transform var(--fast) var(--ease), background var(--fast) var(--ease);
 }
 
 .style-card:hover {
-  border-color: var(--faint);
+  background: var(--surface-3);
 }
 
 .style-card:active {
@@ -2478,10 +2742,11 @@ input[type="range"]:focus-visible::-webkit-slider-thumb {
 
 .style-card.selected {
   border-color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 10%, var(--surface));
+  background: color-mix(in srgb, var(--accent) 12%, var(--surface-2));
 }
 
 .style-card strong {
+  padding: 0 3px;
   font-size: 12px;
   font-weight: 600;
 }
@@ -2493,7 +2758,7 @@ input[type="range"]:focus-visible::-webkit-slider-thumb {
   place-items: center;
   aspect-ratio: 16 / 9;
   overflow: hidden;
-  border-radius: 6px;
+  border-radius: 9px;
   perspective: 160px;
 }
 
@@ -2524,7 +2789,7 @@ input[type="range"]:focus-visible::-webkit-slider-thumb {
 .tip-ring {
   position: fixed;
   z-index: 49;
-  border-radius: var(--r-md);
+  border-radius: var(--r-lg);
   box-shadow: 0 0 0 2px var(--accent), 0 0 0 9999px rgb(0 0 0 / 0.35);
   pointer-events: none;
   transition: left var(--base) var(--ease), top var(--base) var(--ease), width var(--base) var(--ease), height var(--base) var(--ease);
@@ -2537,16 +2802,16 @@ input[type="range"]:focus-visible::-webkit-slider-thumb {
   flex-direction: column;
   gap: 6px;
   width: 280px;
-  padding: 14px;
+  padding: 16px;
   border: 1px solid var(--border);
-  border-radius: var(--r-lg);
+  border-radius: var(--r-xl);
   background: var(--surface);
-  box-shadow: var(--shadow-panel), 0 12px 40px rgb(0 0 0 / 0.3);
+  box-shadow: var(--shadow-pop);
   animation: sheet-in var(--base) var(--ease);
 }
 
 .tip-count {
-  color: var(--accent);
+  color: var(--accent-text);
   font-size: 11px;
   font-weight: 600;
   text-transform: uppercase;
@@ -2578,7 +2843,7 @@ input[type="range"]:focus-visible::-webkit-slider-thumb {
   width: 30px;
   height: 30px;
   border: 0;
-  border-radius: var(--r-sm);
+  border-radius: 50%;
   background: transparent;
   color: var(--muted);
   cursor: pointer;
@@ -2616,9 +2881,9 @@ input[type="range"]:focus-visible::-webkit-slider-thumb {
   display: flex;
   flex-direction: column;
   gap: 2px;
-  padding: 18px 10px;
+  padding: 20px 12px;
   border-right: 1px solid var(--border);
-  background: var(--surface-2);
+  background: var(--bg);
 }
 
 .settings-nav h2 {
@@ -2629,10 +2894,10 @@ input[type="range"]:focus-visible::-webkit-slider-thumb {
   display: flex;
   align-items: center;
   gap: 10px;
-  height: 34px;
-  padding: 0 10px;
+  height: 36px;
+  padding: 0 12px;
   border: 0;
-  border-radius: var(--r-sm);
+  border-radius: var(--r-pill);
   background: transparent;
   color: var(--muted);
   text-align: left;
@@ -2641,14 +2906,15 @@ input[type="range"]:focus-visible::-webkit-slider-thumb {
 }
 
 .settings-nav button:hover {
+  background: var(--surface-2);
   color: var(--text);
 }
 
 .settings-nav button[aria-current="true"] {
-  background: var(--surface);
+  background: var(--raised);
   color: var(--text);
   font-weight: 600;
-  box-shadow: 0 1px 2px rgb(0 0 0 / 0.08);
+  box-shadow: var(--raised-shadow);
 }
 
 .settings-content {
@@ -2705,7 +2971,7 @@ input[type="range"]:focus-visible::-webkit-slider-thumb {
   margin: 0;
   padding: 0;
   border: 1px solid var(--border);
-  border-radius: var(--r-md);
+  border-radius: var(--r-lg);
   list-style: none;
 }
 
@@ -2764,8 +3030,8 @@ input[type="range"]:focus-visible::-webkit-slider-thumb {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 8px 6px 8px 12px;
-  border-radius: var(--r-sm);
+  padding: 8px 6px 8px 14px;
+  border-radius: var(--r-md);
   background: var(--surface-2);
   font-size: 12px;
 }
@@ -2783,8 +3049,8 @@ input[type="range"]:focus-visible::-webkit-slider-thumb {
 .code-row code {
   flex: 1;
   min-width: 0;
-  padding: 8px 10px;
-  border-radius: var(--r-sm);
+  padding: 9px 12px;
+  border-radius: var(--r-md);
   background: var(--surface-2);
   font: 11.5px/1.5 "Cascadia Mono", Consolas, monospace;
   white-space: pre-wrap;
@@ -2813,4 +3079,35 @@ input[type="range"]:focus-visible::-webkit-slider-thumb {
 .about h3 span {
   color: var(--muted);
   font-weight: 400;
+}
+
+/* ---------- dropping files ---------- */
+
+/* Shown while files are dragged over the window: what dropping them will do. */
+.drop-zone {
+  position: fixed;
+  inset: 8px;
+  z-index: 60;
+  display: grid;
+  place-items: center;
+  border: 2px dashed var(--accent);
+  border-radius: var(--r-xl);
+  background: color-mix(in srgb, var(--accent) 10%, rgb(0 0 0 / 0.55));
+  pointer-events: none;
+  animation: fade-in var(--fast) var(--ease);
+}
+
+.drop-zone.refuse {
+  border-color: var(--muted);
+  background: rgb(0 0 0 / 0.6);
+}
+
+.drop-sign {
+  padding: 12px 20px;
+  border-radius: var(--r-pill);
+  background: var(--surface);
+  box-shadow: var(--shadow-pop);
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 600;
 }

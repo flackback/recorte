@@ -136,6 +136,20 @@ async function fetchJson<T>(path: string): Promise<T | null> {
 }
 
 /** Uploads a file the user picked into the take folder; returns its name there. */
+const IMAGE_EXTENSIONS = ["png", "jpg", "jpeg", "webp", "bmp"];
+const AUDIO_EXTENSIONS = ["mp3", "wav", "m4a", "aac", "ogg", "oga", "opus", "flac", "weba"];
+
+/** A file's extension, lowercase and safe for a file name. */
+const fileExtension = (file: File, fallback: string) => (file.name.includes(".") ? file.name.split(".").pop()! : fallback).toLowerCase().replace(/[^a-z0-9]/g, "") || fallback;
+
+/** What a dropped file can be used for, by its type or, when that is empty, its name. */
+function dropKind(type: string, name: string): "image" | "audio" | "other" {
+  const extension = name.includes(".") ? name.split(".").pop()!.toLowerCase() : "";
+  if ((type.startsWith("image/") && type !== "image/svg+xml") || IMAGE_EXTENSIONS.includes(extension)) return "image";
+  if (type.startsWith("audio/") || AUDIO_EXTENSIONS.includes(extension)) return "audio";
+  return "other";
+}
+
 async function saveAsset(dir: string, file: File, name: string): Promise<string> {
   const created = await invoke<{ id: number; path: string }>("asset_create", { dir, name });
   const bytes = new Uint8Array(await file.arrayBuffer());
@@ -358,6 +372,7 @@ export class Editor {
   private previewSpeed = loadPreviewSpeed();
 
   constructor() {
+    this.buildDrop();
     this.direct = new DirectEdit(this.ui.canvas, {
       select: (target) => this.select({ track: "notes", id: target.id }),
       change: (target, box, done) => this.directChange(target, box, done),
@@ -582,6 +597,106 @@ export class Editor {
     if (this.backgroundKey !== key || !this.renderer) return;
     this.renderer.setBackground(canvas);
     this.version++;
+  }
+
+  /** Copies an image into the take's folder and makes it the background. */
+  private async useBackgroundFile(file: File) {
+    const scene = this.scene;
+    if (!scene) return;
+    try {
+      const name = await saveAsset(scene.take.dir, file, `fundo-${Date.now().toString(36)}.${fileExtension(file, "png")}`);
+      this.change((p) => {
+        p.background.kind = "image";
+        p.background.image = name;
+      });
+      this.flushSave();
+      await this.loadBackground();
+      toast(`Imagem de fundo: ${file.name}`, { label: "Desfazer", run: () => this.undo() });
+    } catch (error) {
+      toast(`Não foi possível usar a imagem: ${error}`);
+    }
+  }
+
+  /** Copies a sound file into the take's folder and makes it the background music. */
+  private async useMusicFile(file: File) {
+    const scene = this.scene;
+    if (!scene) return;
+    try {
+      const name = await saveAsset(scene.take.dir, file, `musica-${Date.now().toString(36)}.${fileExtension(file, "mp3")}`);
+      this.change((p) => (p.audio.music = name));
+      this.flushSave();
+      this.loadMusic();
+      toast(`Música: ${file.name}`, { label: "Desfazer", run: () => this.undo() });
+    } catch (error) {
+      toast(`Não foi possível usar a música: ${error}`);
+    }
+  }
+
+  // ---------- dropping files ----------
+
+  /** Dragging files over the window: a sign says what dropping them will do. */
+  private buildDrop() {
+    const zone = document.createElement("div");
+    zone.className = "drop-zone";
+    zone.hidden = true;
+    zone.setAttribute("aria-hidden", "true");
+    const sign = document.createElement("div");
+    sign.className = "drop-sign";
+    zone.append(sign);
+    document.body.append(zone);
+    // dragenter/dragleave fire for every element crossed; a count tells when the pointer left the window.
+    let depth = 0;
+    const hasFiles = (event: DragEvent) => Array.from(event.dataTransfer?.types ?? []).includes("Files");
+    const hide = () => {
+      depth = 0;
+      zone.hidden = true;
+    };
+    window.addEventListener("dragenter", (event) => {
+      if (!hasFiles(event)) return;
+      event.preventDefault();
+      depth++;
+      const kinds = Array.from(event.dataTransfer?.items ?? []).map((item) => dropKind(item.type, ""));
+      const message = !this.scene
+        ? "Abra uma gravação para usar a música ou a imagem"
+        : kinds.includes("image") && kinds.includes("audio")
+          ? "Solte para usar a imagem de fundo e a música"
+          : kinds.includes("image")
+            ? "Solte para usar como imagem de fundo"
+            : kinds.includes("audio")
+              ? "Solte para usar como música de fundo"
+              : "Solte uma imagem ou um arquivo de som";
+      sign.textContent = message;
+      zone.classList.toggle("refuse", !this.scene || (!kinds.includes("image") && !kinds.includes("audio") && kinds.every((kind) => kind === "other")));
+      zone.hidden = false;
+    });
+    window.addEventListener("dragover", (event) => {
+      if (!hasFiles(event)) return;
+      event.preventDefault();
+      if (event.dataTransfer) event.dataTransfer.dropEffect = this.scene ? "copy" : "none";
+    });
+    window.addEventListener("dragleave", (event) => {
+      if (!hasFiles(event)) return;
+      depth = Math.max(0, depth - 1);
+      if (!depth) hide();
+    });
+    window.addEventListener("drop", (event) => {
+      if (!hasFiles(event)) return;
+      event.preventDefault();
+      hide();
+      const files = Array.from(event.dataTransfer?.files ?? []);
+      if (!this.scene) {
+        toast("Abra uma gravação para usar a música ou a imagem.");
+        return;
+      }
+      const image = files.find((file) => dropKind(file.type, file.name) === "image");
+      const audio = files.find((file) => dropKind(file.type, file.name) === "audio");
+      if (!image && !audio) {
+        toast("Use uma imagem (PNG, JPG, WebP) ou um som (MP3, WAV, M4A, OGG, FLAC).");
+        return;
+      }
+      if (image) void this.useBackgroundFile(image);
+      if (audio) void this.useMusicFile(audio);
+    });
   }
 
   private loadMusic() {
@@ -1511,39 +1626,17 @@ export class Editor {
     this.radios(ui.captionsPosition, (value) => this.change((p) => (p.captions.position = value as Project["captions"]["position"])));
 
     ui.bgImage.addEventListener("click", () => ui.bgFile.click());
-    ui.bgFile.addEventListener("change", async () => {
+    ui.bgFile.addEventListener("change", () => {
       const file = ui.bgFile.files?.[0];
-      const scene = this.scene;
       ui.bgFile.value = "";
-      if (!file || !scene) return;
-      try {
-        const extension = (file.name.split(".").pop() ?? "png").toLowerCase().replace(/[^a-z0-9]/g, "");
-        const name = await saveAsset(scene.take.dir, file, `fundo-${Date.now().toString(36)}.${extension}`);
-        this.change((p) => {
-          p.background.kind = "image";
-          p.background.image = name;
-        });
-        await this.loadBackground();
-      } catch (error) {
-        toast(`Não foi possível usar a imagem: ${error}`);
-      }
+      if (file) void this.useBackgroundFile(file);
     });
 
     ui.musicPick.addEventListener("click", () => ui.musicFile.click());
-    ui.musicFile.addEventListener("change", async () => {
+    ui.musicFile.addEventListener("change", () => {
       const file = ui.musicFile.files?.[0];
-      const scene = this.scene;
       ui.musicFile.value = "";
-      if (!file || !scene) return;
-      try {
-        const extension = (file.name.split(".").pop() ?? "mp3").toLowerCase().replace(/[^a-z0-9]/g, "");
-        const name = await saveAsset(scene.take.dir, file, `musica-${Date.now().toString(36)}.${extension}`);
-        this.change((p) => (p.audio.music = name));
-        this.loadMusic();
-        toast(`Música: ${file.name}`);
-      } catch (error) {
-        toast(`Não foi possível usar a música: ${error}`);
-      }
+      if (file) void this.useMusicFile(file);
     });
     ui.musicRemove.addEventListener("click", () => {
       this.change((p) => (p.audio.music = null));

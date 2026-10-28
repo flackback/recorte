@@ -7,12 +7,13 @@
     <title>Recorte · gravando</title>
     <style>
       :root {
-        --surface: rgb(24 24 27 / 0.95);
-        --line: rgb(255 255 255 / 0.1);
-        --hover: rgb(255 255 255 / 0.1);
-        --pressed: rgb(255 255 255 / 0.18);
-        --text: #f2f2f4;
-        --muted: #a1a1aa;
+        /* Same palette as the app's dark theme: panel #1a1a1a, controls #242424, hover #2e2e2e. */
+        --surface: rgb(26 26 26 / 0.97);
+        --line: rgb(255 255 255 / 0.08);
+        --hover: #2e2e2e;
+        --pressed: #3a3a3a;
+        --text: #f5f5f5;
+        --muted: #a8a8a8;
         --record: #ff3b30;
         --accent: #0a84ff;
         --ease: cubic-bezier(0.2, 0.8, 0.2, 1);
@@ -53,8 +54,8 @@
         display: flex;
         align-items: center;
         gap: 2px;
-        height: 44px;
-        padding: 0 5px;
+        height: 46px;
+        padding: 0 6px;
         border: 1px solid var(--line);
         border-radius: 999px;
         background: var(--surface);
@@ -67,7 +68,7 @@
         place-items: center;
         width: 18px;
         height: 30px;
-        color: rgb(255 255 255 / 0.35);
+        color: rgb(255 255 255 / 0.4);
         cursor: grab;
       }
 

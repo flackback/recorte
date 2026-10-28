@@ -34,6 +34,7 @@ Gravador de tela e editor para Windows, feito com Tauri 2 (Rust + TypeScript, We
 
 - **Estilos prontos:** Tutorial, Vertical (9:16), Minimalista, Apresentação, Perspectiva e Sem efeitos, num clique, sem mexer em cortes e zooms.
 - **Visual:** fundos em degradê ou imagem (com desfoque), margem, cantos, sombra, proporção (original, 16:9, 9:16, 1:1, 4:3), moldura de janela, inclinação 3D, recorte de área.
+- **Arrastar e soltar:** com uma gravação aberta, arraste uma imagem (PNG, JPG, WebP) para usar como fundo ou um som (MP3, WAV, M4A, OGG, FLAC) para usar como música; um aviso diz o que vai acontecer antes de soltar.
 - **Cursor:**
   - redesenhado e suavizado, com tamanho ajustável e o formato real (seta, mão, texto);
   - estilos: Clássico, Claro, Ponto, Pizza, Melancia e Foguete;
@@ -70,7 +71,7 @@ Gravador de tela e editor para Windows, feito com Tauri 2 (Rust + TypeScript, We
   - volume do sistema e do microfone;
   - "Melhorar a voz", que remove ruído com RNNoise, corta graves, comprime e normaliza, em três intensidades (Leve mantém um pouco do som original; Forte também abaixa o fundo entre as falas e dá presença à voz). "Ouvir na prévia" alterna entre a voz melhorada e a original;
   - "Volume padrão do YouTube": na exportação, mede o volume do vídeo (LUFS, norma BS.1770) e leva a −14 LUFS, com um limitador que mantém os picos abaixo de −1 dBFS;
-  - música de fundo com fade no final.
+  - música de fundo com fade no final (também dá para arrastar o arquivo para a janela).
 - **Texto:**
   - transcrição offline com Whisper, rodando no WebView via WebGPU, no idioma escolhido (português, inglês, espanhol, francês, alemão ou italiano);
   - legendas com a palavra atual destacada;

@@ -15,7 +15,7 @@
         place-items: center;
         align-content: center;
         gap: 18px;
-        background: #f2f2f5;
+        background: #f0f0f2;
         transition: opacity 320ms ease, transform 320ms ease;
       }
       .splash.leaving {
@@ -42,7 +42,7 @@
         animation: splash-dot 420ms cubic-bezier(0.2, 0.8, 0.2, 1) 420ms both;
       }
       .splash-name {
-        color: #1c1c1e;
+        color: #161618;
         font: 600 20px "Segoe UI Variable Display", "Segoe UI", system-ui, sans-serif;
         letter-spacing: 0.01em;
         animation: splash-name 420ms cubic-bezier(0.2, 0.8, 0.2, 1) 480ms both;
@@ -50,10 +50,10 @@
       /* After the base rules, so the dark theme wins. */
       @media (prefers-color-scheme: dark) {
         .splash {
-          background: #121214;
+          background: #111111;
         }
         .splash-name {
-          color: #f2f2f4;
+          color: #f5f5f5;
         }
       }
       @keyframes splash-square {
@@ -289,11 +289,15 @@
               <span class="save-state" id="save-state" aria-live="polite"></span>
             </div>
             <div class="editor-actions">
-              <button class="icon ghost" id="shortcuts" title="Atalhos de teclado (?)" aria-label="Atalhos de teclado"><svg class="i"><use href="#i-keyboard" /></svg></button>
-              <button class="icon ghost" id="undo" title="Desfazer (Ctrl+Z)" aria-label="Desfazer"><svg class="i"><use href="#i-undo" /></svg></button>
-              <button class="icon ghost" id="redo" title="Refazer (Ctrl+Y)" aria-label="Refazer"><svg class="i"><use href="#i-redo" /></svg></button>
-              <button class="secondary" id="reveal" title="Mostrar os arquivos desta gravação no Explorer"><svg class="i"><use href="#i-folder" /></svg>Mostrar na pasta</button>
-              <button class="primary" id="export" title="Exportar o vídeo editado (Ctrl+E)"><svg class="i"><use href="#i-export" /></svg>Exportar</button>
+              <!-- Single actions: a circle with the name under it. -->
+              <button class="round-action" id="shortcuts" title="Atalhos de teclado (?)" aria-label="Atalhos de teclado"><span class="round-face"><svg class="i"><use href="#i-keyboard" /></svg></span><span class="round-label">Atalhos</span></button>
+              <button class="round-action" id="undo" title="Desfazer (Ctrl+Z)" aria-label="Desfazer"><span class="round-face"><svg class="i"><use href="#i-undo" /></svg></span><span class="round-label">Desfazer</span></button>
+              <button class="round-action" id="redo" title="Refazer (Ctrl+Y)" aria-label="Refazer"><span class="round-face"><svg class="i"><use href="#i-redo" /></svg></span><span class="round-label">Refazer</span></button>
+              <!-- Related actions share a capsule; Exportar keeps the accent. -->
+              <div class="capsule" role="group" aria-label="Arquivo">
+                <button class="secondary capsule-item" id="reveal" title="Mostrar os arquivos desta gravação no Explorer"><svg class="i"><use href="#i-folder" /></svg><span>Mostrar na pasta</span></button>
+                <button class="primary capsule-item" id="export" title="Exportar o vídeo editado (Ctrl+E)"><svg class="i"><use href="#i-export" /></svg><span>Exportar</span></button>
+              </div>
             </div>
           </header>
 
@@ -323,7 +327,7 @@
                 </button>
                 <span class="time" id="time">0:00.0 <span class="total">/ 0:00.0</span></span>
                 <button class="secondary compact preview-speed" id="preview-speed" title="Velocidade da prévia (não muda o vídeo final)" aria-label="Velocidade da prévia">1×</button>
-                <div class="tools" role="toolbar" aria-label="Ferramentas da timeline">
+                <div class="tools capsule" role="toolbar" aria-label="Ferramentas da timeline">
                   <button class="tool" id="add-cut" title="Cortar um trecho no ponto atual (X)" aria-label="Cortar"><svg class="i"><use href="#i-cut" /></svg><span class="tool-label">Cortar</span></button>
                   <button class="tool" id="add-split" title="Dividir no ponto atual, sem cortar; a emenda aceita transição (D)" aria-label="Dividir"><svg class="i" viewBox="0 0 24 24"><path d="M12 3v18M8 8l-4 4 4 4M16 8l4 4-4 4" /></svg><span class="tool-label">Dividir</span></button>
                   <button class="tool" id="add-zoom" title="Zoom no ponto atual (Z)" aria-label="Zoom"><svg class="i"><use href="#i-zoom" /></svg><span class="tool-label">Zoom</span></button>
