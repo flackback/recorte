@@ -12,7 +12,8 @@ import { joinPath, type Take } from "../types";
 import { openAudio, type AudioSource } from "./audio-source";
 import { cardLength, frameState, outputMoment, overlayText, sceneSource, totalDuration, type CardView, type Scene } from "./composition";
 import { OverlayPainter } from "./overlay";
-import { defaultMedia, outputSize, type Aspect, type MediaEdit, type Range } from "./project";
+import { GainLimiter, LoudnessMeter, loudnessGain } from "./loudness";
+import { defaultMedia, enhancedFile, outputSize, type Aspect, type EnhanceLevel, type MediaEdit, type Range } from "./project";
 import { Renderer } from "./renderer";
 import { clickSound, keySounds } from "./sounds";
 import { readMp4, readSamples, urlSource, type ByteSource, type Mp4Track } from "./mp4";
@@ -169,11 +170,11 @@ function systemAudio(take: Take): Promise<AudioSource | null> {
   return take.systemAudio ? openAudio(fileUrl(take, take.video)) : Promise.resolve(null);
 }
 
-/** The microphone, enhanced when that option is on and the enhanced file exists. */
-async function micAudio(take: Take, enhanced: boolean): Promise<AudioSource | null> {
+/** The microphone, enhanced at `level` when that option is on and the enhanced file exists. */
+async function micAudio(take: Take, enhanced: boolean, level?: EnhanceLevel): Promise<AudioSource | null> {
   if (!take.mic) return null;
   if (enhanced) {
-    const better = await openAudio(fileUrl(take, "mic.enhanced.wav")).catch(() => null);
+    const better = await openAudio(fileUrl(take, enhancedFile(level))).catch(() => null);
     if (better) return better;
   }
   return openAudio(fileUrl(take, take.mic));
@@ -232,7 +233,7 @@ async function createMixer(scene: Scene): Promise<Mixer | null> {
     if (audio) tracks.push({ audio, volume: project.audio.system, edit: media.system });
   }
   if (project.audio.mic > 0) {
-    const audio = await openTrack(() => micAudio(take, project.audio.enhance), "o microfone");
+    const audio = await openTrack(() => micAudio(take, project.audio.enhance, project.audio.enhanceLevel), "o microfone");
     if (audio) tracks.push({ audio, volume: project.audio.mic, edit: media.mic });
   }
   // Music is a short file the user picked; it is decoded whole, once.
@@ -669,12 +670,23 @@ async function exportMp4(scene: Scene, options: ExportOptions, onProgress: (prog
     // Audio first, a block at a time: it is fast, and lets the video loop run uninterrupted afterwards.
     if (audioSetup && mixer) {
       onProgress({ phase: "audio", done: 0, total: totalFrames });
+      // To a loudness standard: one pass measures the whole mix, the next applies the gain.
+      let limiter: GainLimiter | null = null;
+      if (scene.project.audio.loudness) {
+        const meter = new LoudnessMeter(SAMPLE_RATE);
+        for (let index = 0; index < mixer.blocks; index++) {
+          meter.add(await abortable(mixer.block(index), signal));
+          check();
+        }
+        limiter = new GainLimiter(loudnessGain(meter.lufs()), SAMPLE_RATE);
+      }
       audioEncoder = new AudioEncoder({ output: (chunk, meta) => muxer.addAudioChunk(chunk, meta), error: fail });
       audioEncoder.configure(audioSetup.config);
       let written = 0;
       for (let index = 0; index < mixer.blocks; index++) {
         const mixed = await abortable(mixer.block(index), signal);
         check();
+        limiter?.process(Array.from({ length: mixed.numberOfChannels }, (_, channel) => mixed.getChannelData(channel)));
         const block = 4800;
         const left = mixed.getChannelData(0);
         const right = mixed.numberOfChannels > 1 ? mixed.getChannelData(1) : left;

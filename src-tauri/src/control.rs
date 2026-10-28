@@ -164,8 +164,9 @@ fn handle(app: &AppHandle, token: &str, mut request: tiny_http::Request) {
 /// Voice enhancement needs no window, so it runs here.
 fn enhance(app: &AppHandle, payload: &Value) -> Reply {
     let dir = crate::take_dir(app, payload["dir"].as_str().unwrap_or_default())?;
-    crate::voice::enhance(&dir.join("mic.wav"), &dir.join("mic.enhanced.wav")).map_err(|error| format!("{error:#}"))?;
-    Ok(json!({ "file": "mic.enhanced.wav" }))
+    let level = crate::voice::Level::parse(payload["level"].as_str().unwrap_or("medium"));
+    let file = crate::voice::enhance_take(&dir, level).map_err(|error| format!("{error:#}"))?;
+    Ok(json!({ "file": file }))
 }
 
 /// Forwards a request to the main window and waits for `agent_reply`.

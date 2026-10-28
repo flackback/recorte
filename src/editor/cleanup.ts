@@ -28,6 +28,28 @@ export function fillerWords(words: Word[], deleted: number[] = []): number[] {
 
 const FRAME_MS = 20;
 
+/** "speed" plays long pauses fast (no jump in the picture); "cut" removes them, leaving a short pause. */
+export type PauseMode = "speed" | "cut";
+/** Kept around speech when pauses are sped up, so words aren't played fast. */
+const SPEED_PAD_MS = 60;
+/** Speeds outside this range aren't worth it, or turn the screen into a blur. */
+const MIN_PAUSE_RATE = 1.5;
+const MAX_PAUSE_RATE = 16;
+
+/** Margin to pass `findSilences` for a mode: a cut leaves `keepMs` of pause, half on each side. */
+export const pausePad = (mode: PauseMode, keepMs: number) => (mode === "cut" ? keepMs / 2 : SPEED_PAD_MS);
+
+/**
+ * Sped-up stretches that make each pause last about `keepMs`, skipping pauses that would barely
+ * change and any that overlap a stretch already sped up.
+ */
+export function pauseSpeeds(silences: Span[], keepMs: number, existing: Span[] = []): (Span & { rate: number })[] {
+  return silences
+    .filter((silence) => !existing.some((range) => range.start < silence.end && range.end > silence.start))
+    .map((silence) => ({ ...silence, rate: Math.min(MAX_PAUSE_RATE, Math.round(((silence.end - silence.start) / Math.max(50, keepMs)) * 10) / 10) }))
+    .filter((range) => range.rate >= MIN_PAUSE_RATE);
+}
+
 /**
  * Silent stretches of at least `minMs` inside `spans` (the kept parts of the take), shrunk by
  * `padMs` on the sides that touch speech so words don't sound clipped. The threshold adapts to the
@@ -49,6 +71,8 @@ export function findSilences(samples: Float32Array, sampleRate: number, spans: S
   if (!sorted.length) return [];
   const floor = sorted[Math.floor(sorted.length * 0.1)];
   const speech = sorted[Math.floor(sorted.length * 0.9)];
+  // Steady sound with no clear speech over it (a hum, an empty room): nothing tells pauses apart.
+  if (speech < floor * 4) return [];
   const threshold = Math.max(floor * 2.5, speech * 0.08, 0.002);
 
   const result: Span[] = [];

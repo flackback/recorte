@@ -61,14 +61,15 @@ Gravador de tela e editor para Windows, feito com Tauri 2 (Rust + TypeScript, We
 - **Textos, setas e destaques:** por trecho (botão Texto ou tecla T), com cor, tamanho e posição arrastada na prévia. Ficam fixos no quadro final, mesmo com zoom.
 - **Abertura e encerramento:** telas de título no começo e no fim, no fundo do estilo, com transição suave (aba Visual).
 - **Limpeza automática** (aba Trechos):
-  - "Tirar silêncios" acha os silêncios pelo áudio (microfone ou som da gravação) e corta, com folga para a fala não ficar colada;
+  - "Pausas longas" acha as pausas pelo áudio (microfone ou som da gravação). "Encurtar" acelera cada pausa até sobrar o tempo escolhido em "Pausa que fica" (sem salto na imagem); "Cortar" tira a pausa e deixa esse respiro. Um áudio sem fala clara não é alterado;
   - "Tirar hã, hum e é longo" corta hesitações da transcrição. O "é" curto (verbo) fica.
 - **Webcam:** bolha em círculo, arredondada ou quadrada; arraste no vídeo para pôr onde quiser e puxe a alça do canto para mudar o tamanho (ou escolha um dos quatro cantos). Espelhar, aproximar, borda com cor e sombra.
 - **Layout da câmera:** na faixa "Câmera" da timeline, trechos em que a webcam fica em tela cheia, ao lado da tela (a tela vai para a esquerda) ou oculta, com a troca animada.
 - **Edição no vídeo:** além da webcam, textos, setas e destaques também se arrastam e se redimensionam direto na prévia.
 - **Áudio:**
   - volume do sistema e do microfone;
-  - "Melhorar a voz", que remove ruído com RNNoise, corta graves, comprime e normaliza;
+  - "Melhorar a voz", que remove ruído com RNNoise, corta graves, comprime e normaliza, em três intensidades (Leve mantém um pouco do som original; Forte também abaixa o fundo entre as falas e dá presença à voz). "Ouvir na prévia" alterna entre a voz melhorada e a original;
+  - "Volume padrão do YouTube": na exportação, mede o volume do vídeo (LUFS, norma BS.1770) e leva a −14 LUFS, com um limitador que mantém os picos abaixo de −1 dBFS;
   - música de fundo com fade no final.
 - **Texto:**
   - transcrição offline com Whisper, rodando no WebView via WebGPU, no idioma escolhido (português, inglês, espanhol, francês, alemão ou italiano);

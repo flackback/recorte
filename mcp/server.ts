@@ -17,6 +17,7 @@ import {
   mergeRange,
   newId,
   newNote,
+  enhancedFile,
   NOTE_COLORS,
   outputSize,
   sourceSize,
@@ -30,7 +31,7 @@ import {
   type SpeedRange,
   type ZoomSegment,
 } from "../src/editor/project";
-import { fillerWords } from "../src/editor/cleanup";
+import { fillerWords, pausePad, pauseSpeeds } from "../src/editor/cleanup";
 import type { Take, Word } from "../src/types";
 import { appRequest, tryApp } from "./app";
 import * as store from "./store";
@@ -797,22 +798,30 @@ tool(
 
 tool(
   "remove_silences",
-  "Encontra os silêncios pelo áudio (microfone ou som da gravação) e corta. Não precisa de transcrição, mas precisa do app aberto. Com dryRun: true, só mostra os trechos.",
+  "Encurta as pausas longas encontradas pelo áudio (microfone ou som da gravação). Modo speed (padrão): a pausa é acelerada e fica com cerca de keepMs, sem salto na imagem. Modo cut: a pausa é cortada, ficando keepMs de respiro. Não precisa de transcrição, mas precisa do app aberto. Com dryRun: true, só mostra os trechos.",
   {
     take: takeArg,
-    minMs: z.number().min(300).max(10000).optional().describe("Silêncio mínimo. Padrão: 800 ms."),
-    padMs: z.number().min(0).max(1000).optional().describe("Folga mantida perto da fala. Padrão: 150 ms."),
+    minMs: z.number().min(300).max(10000).optional().describe("Pausa mínima a encurtar. Padrão: 800 ms."),
+    mode: z.enum(["speed", "cut"]).optional().describe("speed acelera a pausa (padrão); cut corta."),
+    keepMs: z.number().min(50).max(2000).optional().describe("Quanto da pausa fica. Padrão: 300 ms."),
     dryRun: z.boolean().optional(),
   },
-  async ({ take: ref, minMs, padMs, dryRun }) => {
+  async ({ take: ref, minMs, mode = "speed", keepMs = 300, dryRun }) => {
     const take = await store.findTake(ref);
     if (!take.mic && !take.systemAudio) throw new Error("Esta gravação não tem áudio.");
-    const { silences } = await appRequest<{ silences: { start: number; end: number }[] }>("silences", { takeId: take.id, minMs: minMs ?? 800, padMs: padMs ?? 150 });
+    const { silences } = await appRequest<{ silences: { start: number; end: number }[] }>("silences", { takeId: take.id, minMs: minMs ?? 800, padMs: pausePad(mode, keepMs) });
     const total = silences.reduce((sum, range) => sum + range.end - range.start, 0);
-    if (dryRun || !silences.length) return { take: take.id, silences, totalMs: total, cut: false };
+    // Pauses over most of the take mean there is no clear speech; changing it all would wreck the edit.
+    if (total > take.durationMs * 0.7) throw new Error("Quase todo o áudio parece pausa: a fala não está clara. Nada foi mudado.");
+    if (dryRun || !silences.length) return { take: take.id, mode, silences, totalMs: total, changed: false };
     return edit(take.id, (project) => {
-      project.cuts = mergeCuts(project.cuts, silences);
-      return `${plural(silences.length, "silêncio cortado", "silêncios cortados")} (${seconds(total)})`;
+      if (mode === "cut") {
+        project.cuts = mergeCuts(project.cuts, silences);
+        return `${plural(silences.length, "pausa cortada", "pausas cortadas")} (${seconds(total)})`;
+      }
+      const speeds = pauseSpeeds(silences, keepMs, project.speed);
+      project.speed = [...project.speed, ...speeds.map((range) => ({ id: newId(), ...range }))].sort((a, b) => a.start - b.start);
+      return `${plural(speeds.length, "pausa acelerada", "pausas aceleradas")}`;
     });
   },
 );
@@ -896,7 +905,9 @@ const settingsShape = {
       clickSound: z.boolean().optional(),
       clickTone: z.enum(["tick", "soft", "mech"]).optional().describe("Som do clique: clique, suave ou mecânico."),
       keySound: z.boolean().optional(),
-      enhance: z.boolean().optional().describe("Melhorar a voz: remove ruído e nivela o microfone. Ligar precisa do app aberto na primeira vez."),
+      enhance: z.boolean().optional().describe("Melhorar a voz: remove ruído e nivela o microfone. Ligar precisa do app aberto na primeira vez de cada intensidade."),
+      enhanceLevel: z.enum(["light", "medium", "strong"]).optional().describe("Intensidade da melhoria: leve (voz natural), média ou forte (abaixa o fundo entre falas e dá presença)."),
+      loudness: z.boolean().optional().describe("Na exportação, ajusta o volume ao padrão do YouTube (-14 LUFS), sem estourar os picos."),
     })
     .optional(),
   captions: z.object({ visible: z.boolean().optional(), size: z.number().min(0.6).max(1.8).optional(), position: z.enum(["bottom", "top"]).optional() }).optional(),
@@ -953,10 +964,12 @@ tool(
       }
       if (settings.audio) {
         const audio = defined(settings.audio);
-        if (audio.enhance) {
+        const enhanceOn = audio.enhance ?? (audio.enhanceLevel ? project.audio.enhance : false);
+        if (enhanceOn) {
           if (!meta.mic) throw new Error("Esta gravação não tem microfone.");
-          // The enhanced track is made once by the app, then reused.
-          if (!store.fileExists(meta, "mic.enhanced.wav")) await appRequest("enhance", { dir: meta.dir }, 15 * 60_000);
+          // The enhanced track is made once per level by the app, then reused.
+          const level = audio.enhanceLevel ?? project.audio.enhanceLevel ?? "medium";
+          if (!store.fileExists(meta, enhancedFile(level))) await appRequest("enhance", { dir: meta.dir, level }, 15 * 60_000);
         }
         project.audio = { ...project.audio, ...audio };
         changes.push("áudio");

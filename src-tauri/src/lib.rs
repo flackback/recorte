@@ -239,16 +239,13 @@ fn take_set_webcam(app: AppHandle, dir: String, file: String, started_hns: i64) 
     Ok(meta)
 }
 
-/// Writes `mic.enhanced.wav` next to the microphone track: denoised and leveled.
+/// Writes the enhanced microphone next to the take's own (denoised and leveled at `level`:
+/// "light", "medium" or "strong"), unless it is already there. Returns its file name.
 #[tauri::command]
-async fn enhance_voice(app: AppHandle, dir: String) -> Result<String, String> {
+async fn enhance_voice(app: AppHandle, dir: String, level: Option<String>) -> Result<String, String> {
     let dir = take_dir(&app, &dir)?;
-    blocking(move || {
-        let output = dir.join("mic.enhanced.wav");
-        voice::enhance(&dir.join("mic.wav"), &output).map_err(|error| format!("{error:#}"))?;
-        Ok("mic.enhanced.wav".to_string())
-    })
-    .await
+    let level = voice::Level::parse(level.as_deref().unwrap_or("medium"));
+    blocking(move || voice::enhance_take(&dir, level).map(str::to_string).map_err(|error| format!("{error:#}"))).await
 }
 
 /// The edit for a take, or `None` if it was never edited.

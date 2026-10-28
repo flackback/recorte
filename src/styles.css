@@ -1346,7 +1346,7 @@ input[type="range"]:focus-visible::-webkit-slider-thumb {
 
 .editor-body {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 288px;
+  grid-template-columns: minmax(0, 1fr) 344px;
   flex: 1;
   min-height: 0;
 }
@@ -1674,34 +1674,42 @@ input[type="range"]:focus-visible::-webkit-slider-thumb {
 /* ---------- inspector ---------- */
 
 .inspector {
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-columns: 56px minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
   min-height: 0;
   background: var(--surface);
   border-left: 1px solid var(--border);
 }
 
+/* Tabs down the side, as in Slice: an icon with a short name under it. */
 .tabs {
-  display: grid;
-  grid-template-columns: repeat(6, 1fr);
-  padding: 6px;
-  gap: 2px;
-  border-bottom: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 6px;
+  overflow-y: auto;
+  border-right: 1px solid var(--border);
 }
 
 .tabs button {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 3px;
-  padding: 6px 0 5px;
+  gap: 4px;
+  padding: 9px 0 7px;
   border: 0;
   border-radius: var(--r-sm);
   background: none;
   color: var(--muted);
-  font-size: 10.5px;
+  font-size: 9.5px;
   cursor: pointer;
   transition: background var(--fast) var(--ease), color var(--fast) var(--ease);
+}
+
+.tabs button .i {
+  width: 18px;
+  height: 18px;
 }
 
 .tabs button:hover {
@@ -1715,7 +1723,8 @@ input[type="range"]:focus-visible::-webkit-slider-thumb {
 }
 
 .tab-panel {
-  flex: 1;
+  grid-column: 2;
+  grid-row: 1;
   min-height: 0;
   overflow-y: auto;
 }

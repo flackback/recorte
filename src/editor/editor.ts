@@ -21,6 +21,7 @@ import {
   CURSOR_STYLES,
   DEFAULT_TRANSITION,
   defaultProject,
+  enhancedFile,
   insertRange,
   isSplit,
   mergeCuts,
@@ -37,6 +38,7 @@ import {
   type BlurRegion,
   type CameraLayout,
   type CameraRange,
+  type EnhanceLevel,
   type ClickStyle,
   type ClickTone,
   type Corner,
@@ -59,7 +61,7 @@ import { SoundPreview } from "./sounds";
 import { laneCutKey, laneOfCut, shiftLabel, Timeline, type ItemKey, type MediaLane, type Selection, type Track, type TrackKey } from "./timeline";
 import type { Span } from "./timemap";
 import { LANGUAGES, preferredLanguage, rememberLanguage, SAMPLE_RATE, speech, transcribe } from "./transcribe";
-import { fillerWords, findSilences } from "./cleanup";
+import { fillerWords, findSilences, pausePad, pauseSpeeds, type PauseMode } from "./cleanup";
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 
@@ -98,6 +100,8 @@ const LANE_WORDS: Record<MediaKey, { here: string; range: string; done: string; 
 const LANE_CUT = 1000;
 /** Rate of a new sped-up stretch. */
 const DEFAULT_SPEED = 2;
+/** Where the pause settings ("Encurtar"/"Cortar", lengths) are remembered. */
+const PAUSES_KEY = "recorte.pauses";
 const speedLabel = (rate: number) => `${String(rate).replace(".", ",")}×`;
 
 /** Preview playback speeds the transport button cycles through; export always plays at 1×. */
@@ -229,6 +233,9 @@ export class Editor {
     autoZoom: $<HTMLButtonElement>("auto-zoom"),
     cutSilences: $<HTMLButtonElement>("cut-silences"),
     silenceMin: $<HTMLInputElement>("silence-min"),
+    pauseMode: $("pause-mode"),
+    pauseKeep: $<HTMLInputElement>("pause-keep"),
+    cutSilencesLabel: $("cut-silences-label"),
     cutFillers: $<HTMLButtonElement>("cut-fillers"),
     cleanupHint: $("cleanup-hint"),
     zoomDefault: $<HTMLInputElement>("zoom-default"),
@@ -267,6 +274,10 @@ export class Editor {
     volumeSystem: $<HTMLInputElement>("volume-system"),
     volumeMic: $<HTMLInputElement>("volume-mic"),
     enhance: $<HTMLInputElement>("enhance"),
+    enhanceOptions: $("enhance-options"),
+    enhanceLevel: $("enhance-level"),
+    enhanceCompare: $("enhance-compare"),
+    loudness: $<HTMLInputElement>("loudness"),
     enhanceHint: $("enhance-hint"),
     musicPick: $<HTMLButtonElement>("music-pick"),
     musicLabel: $("music-label"),
@@ -1448,6 +1459,13 @@ export class Editor {
     toggle(ui.webcamVisible, (p, v) => (p.webcam.visible = v));
     toggle(ui.webcamMirror, (p, v) => (p.webcam.mirror = v));
     ui.enhance.addEventListener("change", () => void this.setEnhance(ui.enhance.checked));
+    this.radios(ui.enhanceLevel, (value) => void this.setEnhance(true, value as EnhanceLevel));
+    // Before/after only changes what the preview plays, never the project.
+    this.radios(ui.enhanceCompare, (value) => {
+      this.hearOriginal = value === "before";
+      this.loadMic();
+    });
+    toggle(ui.loudness, (p, v) => (p.audio.loudness = v));
     toggle(ui.captionsVisible, (p, v) => (p.captions.visible = v));
     toggle(ui.introEnabled, (p, v) => (p.cards.intro.enabled = v));
     toggle(ui.outroEnabled, (p, v) => (p.cards.outro.enabled = v));
@@ -1608,6 +1626,26 @@ export class Editor {
     ui.noteText.addEventListener("input", () => this.updateNote((note) => (note.text = ui.noteText.value)));
     ui.notePlace.addEventListener("click", () => this.editNotePosition());
     ui.silenceMin.addEventListener("input", () => this.showValue(ui.silenceMin));
+    ui.pauseKeep.addEventListener("input", () => this.showValue(ui.pauseKeep));
+    // How pauses are handled is a habit, not part of one take: remembered on this computer.
+    try {
+      const saved = JSON.parse(localStorage.getItem(PAUSES_KEY) ?? "{}");
+      if (saved.mode) this.setRadio(ui.pauseMode, saved.mode);
+      if (saved.minMs) ui.silenceMin.value = String(saved.minMs / 1000);
+      if (saved.keepMs) ui.pauseKeep.value = String(saved.keepMs / 1000);
+    } catch {
+      // Defaults.
+    }
+    const rememberPauses = () => {
+      ui.cutSilencesLabel.textContent = this.pauseMode() === "cut" ? "Cortar pausas" : "Encurtar pausas";
+      try {
+        localStorage.setItem(PAUSES_KEY, JSON.stringify({ mode: this.pauseMode(), minMs: Number(ui.silenceMin.value) * 1000, keepMs: Number(ui.pauseKeep.value) * 1000 }));
+      } catch {
+        // Only a convenience.
+      }
+    };
+    for (const control of [ui.pauseMode, ui.silenceMin, ui.pauseKeep]) control.addEventListener("change", rememberPauses);
+    rememberPauses();
     ui.cutSilences.addEventListener("click", () => void this.cutSilences());
     ui.cutFillers.addEventListener("click", () => this.cutFillers());
 
@@ -1631,33 +1669,47 @@ export class Editor {
     });
   }
 
-  /** Turns voice enhancement on (processing the microphone once) or off. */
-  private async setEnhance(on: boolean) {
+  /**
+   * Turns voice enhancement on at `level` (processing the microphone once per level; the app
+   * keeps each result) or off.
+   */
+  private async setEnhance(on: boolean, level = this.scene?.project.audio.enhanceLevel ?? "medium") {
     const scene = this.scene;
     if (!scene?.take.mic) return;
     const ui = this.ui;
     if (on) {
       this.enhancing = true;
       ui.enhance.disabled = true;
+      for (const input of ui.enhanceLevel.querySelectorAll("input")) input.disabled = true;
       ui.enhanceHint.hidden = false;
       ui.enhanceHint.textContent = "Melhorando a voz…";
       try {
-        await invoke("enhance_voice", { dir: scene.take.dir });
+        await invoke("enhance_voice", { dir: scene.take.dir, level });
       } catch (error) {
         this.enhancing = false;
-        ui.enhance.checked = false;
+        ui.enhance.checked = scene.project.audio.enhance;
         ui.enhance.disabled = false;
+        for (const input of ui.enhanceLevel.querySelectorAll("input")) input.disabled = false;
+        this.setRadio(ui.enhanceLevel, scene.project.audio.enhanceLevel);
         ui.enhanceHint.textContent = `Não foi possível melhorar a voz: ${error}`;
         return;
       }
       this.enhancing = false;
       ui.enhance.disabled = false;
+      for (const input of ui.enhanceLevel.querySelectorAll("input")) input.disabled = false;
     }
-    this.change((p) => (p.audio.enhance = on));
+    this.change((p) => {
+      p.audio.enhance = on;
+      p.audio.enhanceLevel = level;
+    });
+    // A new level is heard at once.
+    this.hearOriginal = false;
+    this.setRadio(ui.enhanceCompare, "after");
     this.loadMic();
-    ui.enhanceHint.hidden = false;
-    ui.enhanceHint.textContent = on ? "Ruído removido e volume nivelado. Desligue para ouvir o original." : "Usando o áudio original do microfone.";
   }
+
+  /** Plays the microphone as recorded even with enhancement on, to compare. */
+  private hearOriginal = false;
 
   /** The microphone track for preview: the enhanced one when that option is on. */
   private loadMic() {
@@ -1667,7 +1719,7 @@ export class Editor {
       mic.removeAttribute("src");
       return;
     }
-    const file = scene.project.audio.enhance ? "mic.enhanced.wav" : scene.take.mic;
+    const file = scene.project.audio.enhance && !this.hearOriginal ? enhancedFile(scene.project.audio.enhanceLevel) : scene.take.mic;
     const time = this.ui.video.currentTime - scene.project.media.mic.shift / 1000;
     mic.src = convertFileSrc(joinPath(scene.take.dir, file));
     mic.currentTime = Math.max(0, time);
@@ -1788,7 +1840,7 @@ export class Editor {
           ? `${value}°`
           : input.id === "webcam-border"
             ? `${(value * 100).toFixed(1).replace(".", ",")}%`
-            : input.id === "silence-min" || input.id === "cards-duration" || input.id === "transition-duration"
+            : input.id === "silence-min" || input.id === "pause-keep" || input.id === "cards-duration" || input.id === "transition-duration"
               ? `${value.toFixed(1).replace(".", ",")} s`
               : input.id === "cursor-shape-delay"
                 ? value
@@ -1940,11 +1992,13 @@ export class Editor {
     if (!this.enhancing) {
       ui.enhance.checked = project.audio.enhance;
       ui.enhance.disabled = !take.mic;
-      ui.enhanceHint.hidden = Boolean(take.mic) && !project.audio.enhance;
-      ui.enhanceHint.textContent = !take.mic
-        ? "Disponível quando a gravação tem microfone."
-        : "Ruído removido e volume nivelado. Desligue para ouvir o original.";
+      this.setRadio(ui.enhanceLevel, project.audio.enhanceLevel);
+      ui.enhanceOptions.hidden = !take.mic || !project.audio.enhance;
+      ui.enhanceHint.hidden = Boolean(take.mic);
+      ui.enhanceHint.textContent = "Disponível quando a gravação tem microfone.";
     }
+    ui.loudness.checked = project.audio.loudness;
+    ui.loudness.disabled = !take.mic && !take.systemAudio && !project.audio.music;
     ui.volumeMusic.value = String(project.audio.musicVolume);
     ui.volumeMusic.disabled = !project.audio.music;
     ui.musicLabel.textContent = project.audio.music ? "Trocar música…" : "Escolher música…";
@@ -1968,7 +2022,7 @@ export class Editor {
       if (document.activeElement !== input) input.value = value;
     }
     ui.cardsDuration.value = String(intro.durationMs / 1000);
-    for (const input of [ui.cardsDuration, ui.noteSize, ui.silenceMin, ui.padding, ui.radius, ui.shadow, ui.tilt, ui.bgBlur, ui.cursorSize, ui.smoothing, ui.cursorShapeDelay, ui.clickSize, ui.transitionDuration, ui.zoomDefault, ui.zoomScale, ui.webcamSize, ui.webcamZoom, ui.webcamBorder, ui.webcamShadow, ui.volumeSystem, ui.volumeMic, ui.volumeMusic, ui.captionsSize]) {
+    for (const input of [ui.cardsDuration, ui.noteSize, ui.silenceMin, ui.pauseKeep, ui.padding, ui.radius, ui.shadow, ui.tilt, ui.bgBlur, ui.cursorSize, ui.smoothing, ui.cursorShapeDelay, ui.clickSize, ui.transitionDuration, ui.zoomDefault, ui.zoomScale, ui.webcamSize, ui.webcamZoom, ui.webcamBorder, ui.webcamShadow, ui.volumeSystem, ui.volumeMic, ui.volumeMusic, ui.captionsSize]) {
       this.showValue(input);
     }
     this.video.volume = Math.min(1, project.audio.system);
@@ -2232,7 +2286,14 @@ export class Editor {
     this.flushSave();
   }
 
-  /** Cuts the quiet stretches, found in the microphone (or the recording's own sound). */
+  private pauseMode(): PauseMode {
+    return this.ui.pauseMode.querySelector<HTMLInputElement>("input:checked")?.value === "cut" ? "cut" : "speed";
+  }
+
+  /**
+   * Shortens the long pauses found in the microphone (or the recording's own sound): sped up, so
+   * the picture keeps going, or cut, leaving a short breath.
+   */
   private async cutSilences() {
     const scene = this.scene;
     if (!scene) return;
@@ -2243,15 +2304,36 @@ export class Editor {
       const samples = await speech(scene.take);
       if (this.scene !== scene) return;
       const spans = scene.time.spans.map(({ start, end }) => ({ start, end }));
-      const silences = findSilences(samples, SAMPLE_RATE, spans, Number(ui.silenceMin.value) * 1000, 150);
-      if (!silences.length) {
-        ui.cleanupHint.textContent = "Nenhum silêncio desse tamanho encontrado.";
+      const mode = this.pauseMode();
+      const keepMs = Number(ui.pauseKeep.value) * 1000;
+      const silences = findSilences(samples, SAMPLE_RATE, spans, Number(ui.silenceMin.value) * 1000, pausePad(mode, keepMs));
+      const ranges = mode === "speed" ? pauseSpeeds(silences, keepMs, scene.project.speed) : silences;
+      if (!ranges.length) {
+        ui.cleanupHint.textContent = "Nenhuma pausa desse tamanho encontrada. Se a gravação não tem fala clara, não há pausas para encurtar.";
         return;
       }
-      const total = silences.reduce((sum, range) => sum + range.end - range.start, 0);
-      this.addCuts(silences);
-      ui.cleanupHint.textContent = "Os cortes aparecem na timeline e podem ser desfeitos.";
-      toast(`${silences.length} ${silences.length === 1 ? "silêncio cortado" : "silêncios cortados"} (${(total / 1000).toFixed(1).replace(".", ",")} s)`, { label: "Desfazer", run: () => this.undo() });
+      // Pauses over most of the video mean the sound has no clear speech; changing it all would wreck the edit.
+      const kept = spans.reduce((sum, span) => sum + span.end - span.start, 0);
+      const quiet = ranges.reduce((sum, range) => sum + range.end - range.start, 0);
+      if (quiet > kept * 0.7) {
+        ui.cleanupHint.textContent = "Quase todo o áudio parece pausa: a fala não está clara. Nada foi mudado.";
+        return;
+      }
+      // Time the video gets shorter by.
+      const saved = mode === "speed"
+        ? (ranges as SpeedRange[]).reduce((sum, range) => sum + (range.end - range.start) * (1 - 1 / range.rate), 0)
+        : ranges.reduce((sum, range) => sum + range.end - range.start, 0);
+      const seconds = `${(saved / 1000).toFixed(1).replace(".", ",")} s`;
+      if (mode === "speed") {
+        this.change((p) => (p.speed = [...p.speed, ...(ranges as SpeedRange[]).map((range) => ({ id: newId(), start: range.start, end: range.end, rate: range.rate }))].sort((a, b) => a.start - b.start)));
+        this.flushSave();
+        ui.cleanupHint.textContent = "As pausas aceleradas aparecem na faixa Velocidade e podem ser desfeitas.";
+      } else {
+        this.addCuts(ranges);
+        ui.cleanupHint.textContent = "Os cortes aparecem na timeline e podem ser desfeitos.";
+      }
+      const count = `${ranges.length} ${ranges.length === 1 ? "pausa" : "pausas"}`;
+      toast(`${count} ${mode === "speed" ? "encurtadas" : "cortadas"}: o vídeo ficou ${seconds} mais curto`, { label: "Desfazer", run: () => this.undo() });
     } catch (error) {
       ui.cleanupHint.textContent = `Não foi possível analisar o áudio: ${error instanceof Error ? error.message : error}`;
     } finally {

@@ -340,12 +340,12 @@
 
             <aside class="inspector">
               <nav class="tabs" role="tablist" aria-label="Ajustes">
-                <button role="tab" data-tab="visual" aria-selected="true"><svg class="i"><use href="#i-visual" /></svg><span>Visual</span></button>
-                <button role="tab" data-tab="cursor"><svg class="i"><use href="#i-cursor" /></svg><span>Cursor</span></button>
-                <button role="tab" data-tab="zoom"><svg class="i"><use href="#i-zoom" /></svg><span>Trechos</span></button>
-                <button role="tab" data-tab="camera"><svg class="i"><use href="#i-camera" /></svg><span>Webcam</span></button>
-                <button role="tab" data-tab="audio"><svg class="i"><use href="#i-audio" /></svg><span>Áudio</span></button>
-                <button role="tab" data-tab="captions"><svg class="i"><use href="#i-captions" /></svg><span>Legendas</span></button>
+                <button role="tab" data-tab="visual" title="Visual: estilo, fundo e enquadramento" aria-selected="true"><svg class="i"><use href="#i-visual" /></svg><span>Visual</span></button>
+                <button role="tab" data-tab="cursor" title="Cursor, cliques e teclas"><svg class="i"><use href="#i-cursor" /></svg><span>Cursor</span></button>
+                <button role="tab" data-tab="zoom" title="Trechos: cortes, zooms, pausas"><svg class="i"><use href="#i-zoom" /></svg><span>Trechos</span></button>
+                <button role="tab" data-tab="camera" title="Webcam e layout da câmera"><svg class="i"><use href="#i-camera" /></svg><span>Webcam</span></button>
+                <button role="tab" data-tab="audio" title="Áudio: volumes, voz e música"><svg class="i"><use href="#i-audio" /></svg><span>Áudio</span></button>
+                <button role="tab" data-tab="captions" title="Transcrição e legendas"><svg class="i"><use href="#i-captions" /></svg><span>Legendas</span></button>
               </nav>
 
               <div class="tab-panel" data-panel="visual">
@@ -546,11 +546,20 @@
                 </section>
                 <section>
                   <h3>Limpeza automática</h3>
-                  <button class="secondary wide" id="cut-silences"><svg class="i"><use href="#i-cut" /></svg>Tirar silêncios</button>
+                  <span class="field-label">Pausas longas</span>
+                  <div class="segmented small" id="pause-mode" role="radiogroup" aria-label="O que fazer com as pausas">
+                    <label title="A pausa passa rápido, sem salto na imagem"><input type="radio" name="pause-mode" value="speed" checked />Encurtar</label>
+                    <label title="A pausa sai do vídeo; fica só um respiro"><input type="radio" name="pause-mode" value="cut" />Cortar</label>
+                  </div>
                   <label class="slider">
-                    <span>Silêncio mínimo <output data-value-for="silence-min"></output></span>
+                    <span>A partir de <output data-value-for="silence-min"></output></span>
                     <input type="range" id="silence-min" min="0.4" max="3" step="0.1" value="0.8" />
                   </label>
+                  <label class="slider">
+                    <span>Pausa que fica <output data-value-for="pause-keep"></output></span>
+                    <input type="range" id="pause-keep" min="0.1" max="1" step="0.05" value="0.3" />
+                  </label>
+                  <button class="secondary wide" id="cut-silences"><svg class="i"><use href="#i-speed" /></svg><span id="cut-silences-label">Encurtar pausas</span></button>
                   <button class="secondary wide" id="cut-fillers"><svg class="i"><use href="#i-wand" /></svg>Tirar “hã”, “hum” e “é” longo</button>
                   <p class="hint" id="cleanup-hint">Os cortes aparecem na timeline e podem ser desfeitos.</p>
                 </section>
@@ -634,7 +643,22 @@
                   </label>
                   <p class="hint" id="volume-hint" hidden></p>
                   <label class="switch"><input type="checkbox" id="enhance" /><span>Melhorar a voz (tirar ruído)</span></label>
+                  <div class="enhance-options" id="enhance-options" hidden>
+                    <span class="field-label">Intensidade</span>
+                    <div class="segmented small" id="enhance-level" role="radiogroup" aria-label="Intensidade da melhoria">
+                      <label title="Tira parte do ruído e mantém a voz natural"><input type="radio" name="enhance-level" value="light" />Leve</label>
+                      <label title="Tira o ruído e nivela o volume"><input type="radio" name="enhance-level" value="medium" />Média</label>
+                      <label title="Também abaixa o fundo entre as falas e deixa a voz mais presente"><input type="radio" name="enhance-level" value="strong" />Forte</label>
+                    </div>
+                    <span class="field-label">Ouvir na prévia</span>
+                    <div class="segmented small" id="enhance-compare" role="radiogroup" aria-label="Comparar antes e depois">
+                      <label><input type="radio" name="enhance-compare" value="after" checked />Melhorada</label>
+                      <label><input type="radio" name="enhance-compare" value="before" />Original</label>
+                    </div>
+                  </div>
                   <p class="hint" id="enhance-hint" hidden></p>
+                  <label class="switch"><input type="checkbox" id="loudness" /><span>Volume padrão do YouTube (−14 LUFS)</span></label>
+                  <p class="hint">Na exportação, o volume do vídeo é medido e ajustado, sem estourar os picos.</p>
                 </section>
                 <section>
                   <h3>Música de fundo</h3>

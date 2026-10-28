@@ -115,6 +115,11 @@ export type Frame = "none" | "window";
 export type Corner = "br" | "bl" | "tr" | "tl";
 export type WebcamShape = "circle" | "rounded" | "square";
 
+export type EnhanceLevel = "light" | "medium" | "strong";
+/** The enhanced microphone's file for a level, written by the app next to `mic.wav`. */
+export const enhancedFile = (level: EnhanceLevel | undefined) =>
+  level === "light" ? "mic.enhanced-light.wav" : level === "strong" ? "mic.enhanced-strong.wav" : "mic.enhanced.wav";
+
 export type CameraLayout = "full" | "side" | "hidden";
 /** A stretch where the webcam fills the frame, sits beside the screen, or hides. */
 export type CameraRange = Range & { layout: CameraLayout };
@@ -221,6 +226,10 @@ export type Project = {
     clickTone: ClickTone;
     keySound: boolean;
     enhance: boolean;
+    /** How much the voice is processed when `enhance` is on. */
+    enhanceLevel: EnhanceLevel;
+    /** Brings the finished video's loudness to YouTube's standard (-14 LUFS) when exporting. */
+    loudness: boolean;
   };
   captions: { visible: boolean; size: number; position: "bottom" | "top" };
   zoom: { defaultScale: number; segments: ZoomSegment[] };
@@ -376,7 +385,7 @@ export function defaultProject(take: Take, events: CursorEvent[]): Project {
     webcam: { visible: Boolean(take.webcam), size: 0.22, corner: "br", shape: "circle", position: null, mirror: true, border: 0.012, borderColor: "#ffffff", shadow: 0.35, zoom: 1 },
     cameras: [],
     media: defaultMedia(),
-    audio: { system: 1, mic: 1, music: null, musicVolume: 0.25, clickSound: false, clickTone: "tick", keySound: false, enhance: false },
+    audio: { system: 1, mic: 1, music: null, musicVolume: 0.25, clickSound: false, clickTone: "tick", keySound: false, enhance: false, enhanceLevel: "medium", loudness: false },
     captions: { visible: false, size: 1, position: "bottom" },
     zoom: { defaultScale, segments: autoZooms(events, take.durationMs, defaultScale) },
     blurs: [],
