@@ -26,8 +26,18 @@ export type ExportOptions = {
   aspect?: Aspect;
   /** Keeps the MP4 under this size by lowering the video bitrate. */
   maxBytes?: number;
+  /** MP4 video codec; HEVC falls back to H.264 where it can't be encoded. Default: H.264. */
+  codec?: VideoCodec;
+  /** File name parts: files of one batch share the time stamp and differ by suffix ("-9x16"). */
+  stamp?: string;
+  suffix?: string;
 };
+export type VideoCodec = "h264" | "hevc";
 export type ExportProgress = { phase: "preparing" | "audio" | "video" | "finishing"; done: number; total: number };
+/** Progress of one file in a batch, `file` counting from 1. */
+export type BatchProgress = ExportProgress & { file: number; files: number };
+/** What a batch saved; `fellBack` when HEVC was asked for and H.264 was used instead. */
+export type BatchResult = { paths: string[]; codec: VideoCodec | null; fellBack: boolean };
 
 const SAMPLE_RATE = 48_000;
 const CHANNELS = 2;
@@ -69,9 +79,37 @@ function avcLevel(width: number, height: number, fps: number): string {
   return (levels.find(([, maxFrame, maxRate]) => frame <= maxFrame && rate <= maxRate) ?? levels[levels.length - 1])[0];
 }
 
-/** ~0.1 bit per pixel per frame: crisp text without huge files. */
-export function videoBitrate(width: number, height: number, fps: number) {
-  return Math.round(Math.min(60e6, Math.max(4e6, width * height * fps * 0.1)));
+/**
+ * Smallest HEVC level (Main tier) that fits the frame size and luma sample rate, as level × 30,
+ * the number in the codec string.
+ */
+function hevcLevel(width: number, height: number, fps: number): number {
+  const size = width * height;
+  const rate = size * fps;
+  const levels: [number, number, number][] = [
+    [93, 983_040, 33_177_600], // 3.1
+    [120, 2_228_224, 66_846_720], // 4.0
+    [123, 2_228_224, 133_693_440], // 4.1
+    [150, 8_912_896, 267_386_880], // 5.0
+    [153, 8_912_896, 534_773_760], // 5.1
+    [156, 8_912_896, 1_069_547_520], // 5.2
+    [180, 35_651_584, 1_069_547_520], // 6.0
+    [183, 35_651_584, 2_139_095_040], // 6.1
+    [186, 35_651_584, 4_278_190_080], // 6.2
+  ];
+  return (levels.find(([, maxSize, maxRate]) => size <= maxSize && rate <= maxRate) ?? levels[levels.length - 1])[0];
+}
+
+/**
+ * HEVC Main profile codec strings, most common spelling first: `hvc1` (parameter sets in the
+ * header, what mp4-muxer writes), then `hev1`, with the two usual constraint flags.
+ */
+const hevcCodecs = (level: number) => [`hvc1.1.6.L${level}.B0`, `hvc1.1.6.L${level}.90`, `hev1.1.6.L${level}.B0`];
+
+/** ~0.1 bit per pixel per frame: crisp text without huge files. HEVC needs about half for the same look. */
+export function videoBitrate(width: number, height: number, fps: number, codec: VideoCodec = "h264") {
+  const h264 = Math.min(60e6, Math.max(4e6, width * height * fps * 0.1));
+  return Math.round(codec === "hevc" ? Math.max(2e6, h264 * 0.5) : h264);
 }
 
 export const AUDIO_BITRATE = 192_000;
@@ -86,12 +124,16 @@ export const maxFps = (longSide: number) => (longSide > 2560 ? 60 : 120);
 
 /**
  * Whether an encoder really starts with `config`: some report support and then fail on the first
- * frame (a hardware encoder with no free session, for example). Encodes one black frame.
+ * frame (a hardware encoder with no free session, for example). Encodes one black frame. With
+ * `described`, the first chunk must also carry the decoder description the MP4 header needs.
  */
-async function encoderWorks(config: VideoEncoderConfig): Promise<boolean> {
+async function encoderWorks(config: VideoEncoderConfig, described = false): Promise<boolean> {
   let produced = false;
   let failed = false;
-  const encoder = new VideoEncoder({ output: () => (produced = true), error: () => (failed = true) });
+  const encoder = new VideoEncoder({
+    output: (_chunk, meta) => (produced ||= !described || Boolean(meta?.decoderConfig?.description)),
+    error: () => (failed = true),
+  });
   const canvas = new OffscreenCanvas(config.width, config.height);
   const context = canvas.getContext("2d")!;
   context.fillStyle = "#000";
@@ -111,7 +153,63 @@ async function encoderWorks(config: VideoEncoderConfig): Promise<boolean> {
   }
 }
 
-async function videoEncoderConfig(width: number, height: number, fps: number, cap: number | null): Promise<VideoEncoderConfig> {
+/** WebCodecs' HEVC options, not yet in TypeScript's DOM types. */
+type HevcEncoderConfig = VideoEncoderConfig & { hevc?: { format: "hevc" | "annexb" } };
+
+/** HEVC configs to try for a size, hardware first: browsers have no software HEVC encoder. */
+function hevcConfigs(width: number, height: number, fps: number, bitrate: number, capped: boolean): HevcEncoderConfig[] {
+  return hevcCodecs(hevcLevel(width, height, fps)).flatMap((codec) =>
+    (["prefer-hardware", "no-preference"] as const).map((hardwareAcceleration) => ({
+      codec,
+      width,
+      height,
+      bitrate,
+      bitrateMode: capped ? "constant" : "variable",
+      framerate: fps,
+      hardwareAcceleration,
+      // Length-prefixed samples with the parameter sets in the description, as MP4 wants.
+      hevc: { format: "hevc" },
+    })),
+  );
+}
+
+/** Whether this computer reports an HEVC encoder for every size at `fps` (a quick check, no encoding). */
+export async function hevcSupported(sizes: { width: number; height: number }[], fps: number): Promise<boolean> {
+  if (typeof VideoEncoder === "undefined") return false;
+  for (const { width, height } of sizes) {
+    let found = false;
+    for (const config of hevcConfigs(width, height, fps, videoBitrate(width, height, fps, "hevc"), false)) {
+      const support = await VideoEncoder.isConfigSupported(config).catch(() => null);
+      if (support?.supported) {
+        found = true;
+        break;
+      }
+    }
+    if (!found) return false;
+  }
+  return true;
+}
+
+/** A working encoder config for `codec`; HEVC falls back to H.264 when no HEVC encoder starts. */
+async function videoEncoderConfig(
+  width: number,
+  height: number,
+  fps: number,
+  cap: number | null,
+  codec: VideoCodec,
+): Promise<{ config: VideoEncoderConfig; codec: VideoCodec }> {
+  if (codec === "hevc") {
+    const bitrate = cap === null ? videoBitrate(width, height, fps, "hevc") : Math.min(videoBitrate(width, height, fps, "hevc"), cap);
+    for (const config of hevcConfigs(width, height, fps, bitrate, cap !== null)) {
+      const support = await VideoEncoder.isConfigSupported(config).catch(() => null);
+      if (support?.supported && (await encoderWorks(config, true))) return { config, codec: "hevc" };
+    }
+    console.warn(`HEVC indisponível em ${width}×${height} a ${fps} fps; usando H.264`);
+  }
+  return { config: await avcEncoderConfig(width, height, fps, cap), codec: "h264" };
+}
+
+async function avcEncoderConfig(width: number, height: number, fps: number, cap: number | null): Promise<VideoEncoderConfig> {
   const level = avcLevel(width, height, fps);
   const bitrate = cap === null ? videoBitrate(width, height, fps) : Math.min(videoBitrate(width, height, fps), cap);
   for (const profile of ["6400", "4d00", "4200"]) {
@@ -629,10 +727,61 @@ export async function exportVideo(
   onProgress: (progress: ExportProgress) => void,
   signal: AbortSignal,
 ): Promise<string> {
-  return options.format === "gif" ? exportGif(scene, options, onProgress, signal) : exportMp4(scene, options, onProgress, signal);
+  return (await exportOne(scene, options, onProgress, signal)).path;
 }
 
-async function exportMp4(scene: Scene, options: ExportOptions, onProgress: (progress: ExportProgress) => void, signal: AbortSignal): Promise<string> {
+function exportOne(scene: Scene, options: ExportOptions, onProgress: (progress: ExportProgress) => void, signal: AbortSignal) {
+  return options.format === "gif"
+    ? exportGif(scene, options, onProgress, signal).then((path) => ({ path, codec: null }))
+    : exportMp4(scene, options, onProgress, signal);
+}
+
+/** File name suffix for an aspect: "9:16" → "-9x16" ("auto" is the recording's own shape). */
+export const aspectSuffix = (aspect: Aspect) => `-${aspect === "auto" ? "original" : aspect.replace(":", "x")}`;
+
+/**
+ * Exports the edit once per aspect, one file after another, without touching the project: each
+ * file renders a copy of the scene with that aspect. With more than one file, all share a time
+ * stamp, and every file whose aspect isn't the edit's own gets a suffix ("-9x16"). Cancelling
+ * stops the whole batch; files already finished stay.
+ */
+export async function exportBatch(
+  scene: Scene,
+  options: ExportOptions,
+  aspects: Aspect[],
+  onProgress: (progress: BatchProgress) => void,
+  signal: AbortSignal,
+): Promise<BatchResult> {
+  const list = aspects.length ? [...new Set(aspects)] : [options.aspect ?? scene.project.aspect];
+  const now = new Date();
+  const stamp = [now.getHours(), now.getMinutes(), now.getSeconds()].map((part) => String(part).padStart(2, "0")).join("");
+  const paths: string[] = [];
+  let codec: VideoCodec | null = null;
+  let fellBack = false;
+  let wanted = options.format === "gif" ? undefined : (options.codec ?? "h264");
+  for (const [index, aspect] of list.entries()) {
+    if (signal.aborted) throw new ExportCancelled();
+    const copy: Scene = { ...scene, project: { ...scene.project, aspect } };
+    const suffix = list.length > 1 && aspect !== scene.project.aspect ? aspectSuffix(aspect) : "";
+    const file = { ...options, aspect, codec: wanted, stamp: list.length > 1 ? stamp : options.stamp, suffix: suffix || options.suffix };
+    const result = await exportOne(copy, file, (progress) => onProgress({ ...progress, file: index + 1, files: list.length }), signal);
+    paths.push(result.path);
+    codec = result.codec;
+    // Once HEVC fails, the next files go straight to H.264 instead of probing again.
+    if (wanted === "hevc" && result.codec === "h264") {
+      fellBack = true;
+      wanted = "h264";
+    }
+  }
+  return { paths, codec, fellBack };
+}
+
+async function exportMp4(
+  scene: Scene,
+  options: ExportOptions,
+  onProgress: (progress: ExportProgress) => void,
+  signal: AbortSignal,
+): Promise<{ path: string; codec: VideoCodec }> {
   const { take } = scene;
   const check = () => {
     if (signal.aborted) throw new ExportCancelled();
@@ -645,10 +794,10 @@ async function exportMp4(scene: Scene, options: ExportOptions, onProgress: (prog
   const audioSetup = hasAudio(scene) ? await audioEncoderConfig() : null;
   const mixer = audioSetup ? await abortable(createMixer(scene), signal) : null;
   const cap = options.maxBytes ? cappedBitrate(options.maxBytes, totalDuration(scene) / 1000, Boolean(audioSetup)) : null;
-  const videoConfig = await videoEncoderConfig(output.width, output.height, fps, cap);
+  const video = await videoEncoderConfig(output.width, output.height, fps, cap, options.codec ?? "h264");
   check();
 
-  const created = await invoke<{ id: number; path: string }>("export_create", { takeId: take.id, extension: "mp4" });
+  const created = await invoke<{ id: number; path: string }>("export_create", { takeId: take.id, extension: "mp4", stamp: options.stamp, suffix: options.suffix });
   const writer = new DiskWriter(created.id);
   const frames = new FrameRenderer(scene, output);
   let videoEncoder: VideoEncoder | null = null;
@@ -659,7 +808,7 @@ async function exportMp4(scene: Scene, options: ExportOptions, onProgress: (prog
   try {
     const muxer = new Muxer({
       target: new StreamTarget({ onData: (data, position) => writer.write(data, position), chunked: true, chunkSize: WRITE_CHUNK }),
-      video: { codec: "avc", width: output.width, height: output.height, frameRate: fps },
+      video: { codec: video.codec === "hevc" ? "hevc" : "avc", width: output.width, height: output.height, frameRate: fps },
       audio: audioSetup ? { codec: audioSetup.codec, sampleRate: SAMPLE_RATE, numberOfChannels: CHANNELS } : undefined,
       // Size-capped files are small and meant for sharing: index at the start so they play while
       // downloading. Large ones keep it at the end, so nothing waits in memory.
@@ -720,7 +869,7 @@ async function exportMp4(scene: Scene, options: ExportOptions, onProgress: (prog
 
     await frames.start(signal);
     videoEncoder = new VideoEncoder({ output: (chunk, meta) => muxer.addVideoChunk(chunk, meta), error: fail });
-    videoEncoder.configure(videoConfig);
+    videoEncoder.configure(video.config);
     const keyframeEvery = Math.max(1, Math.round(fps * KEYFRAME_SECONDS));
 
     for (let index = 0; index < totalFrames; index++) {
@@ -747,7 +896,7 @@ async function exportMp4(scene: Scene, options: ExportOptions, onProgress: (prog
     check();
     muxer.finalize();
     await writer.drain();
-    return await invoke<string>("export_finish", { id: created.id });
+    return { path: await invoke<string>("export_finish", { id: created.id }), codec: video.codec };
   } catch (error) {
     await writer.drain().catch(() => undefined);
     await invoke("export_cancel", { id: created.id }).catch(() => undefined);
@@ -768,7 +917,7 @@ async function exportGif(scene: Scene, options: ExportOptions, onProgress: (prog
   const totalFrames = Math.max(1, Math.round((totalDuration(scene) / 1000) * fps));
   onProgress({ phase: "preparing", done: 0, total: totalFrames });
 
-  const created = await invoke<{ id: number; path: string }>("export_create", { takeId: take.id, extension: "gif" });
+  const created = await invoke<{ id: number; path: string }>("export_create", { takeId: take.id, extension: "gif", stamp: options.stamp, suffix: options.suffix });
   const writer = new DiskWriter(created.id);
   const frames = new FrameRenderer(scene, output);
   const readback = new OffscreenCanvas(output.width, output.height);

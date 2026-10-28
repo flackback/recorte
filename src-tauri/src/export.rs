@@ -33,20 +33,35 @@ pub struct Created {
 }
 
 /// Starts an export of `take_id` into `<takes>/Exportados`, writing to a `.part` file until done.
+/// The files of one batch (several aspects) share `stamp` and differ by `suffix`, such as `-9x16`.
 #[tauri::command]
-pub fn export_create(app: AppHandle, exports: State<'_, Exports>, take_id: String, extension: String) -> Result<Created, String> {
+pub fn export_create(
+    app: AppHandle,
+    exports: State<'_, Exports>,
+    take_id: String,
+    extension: String,
+    stamp: Option<String>,
+    suffix: Option<String>,
+) -> Result<Created, String> {
     if !matches!(extension.as_str(), "mp4" | "gif") {
         return Err("formato inválido".into());
     }
     if take_id.is_empty() || !take_id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
         return Err("identificador de gravação inválido".into());
     }
+    let stamp = stamp.unwrap_or_else(|| chrono::Local::now().format("%H%M%S").to_string());
+    if stamp.is_empty() || stamp.len() > 16 || !stamp.chars().all(|c| c.is_ascii_digit()) {
+        return Err("horário inválido".into());
+    }
+    let suffix = suffix.unwrap_or_default();
+    if suffix.len() > 16 || !suffix.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
+        return Err("sufixo inválido".into());
+    }
     let dir = crate::takes_root(&app)?.join(EXPORT_DIR);
     fs::create_dir_all(&dir).map_err(|error| error.to_string())?;
     remove_leftovers(&dir, &exports);
 
-    let stamp = chrono::Local::now().format("%H%M%S");
-    let target = dir.join(format!("{take_id}-{stamp}.{extension}"));
+    let target = dir.join(format!("{take_id}-{stamp}{suffix}.{extension}"));
     open(&exports, target)
 }
 

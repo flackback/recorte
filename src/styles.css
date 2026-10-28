@@ -821,6 +821,14 @@ input[type="range"]:focus-visible::-webkit-slider-thumb {
   box-shadow: var(--focus);
 }
 
+/* Text-only chips, a size down (the aspects in the export sheet). */
+.chips.compact .chip {
+  height: 28px;
+  padding: 0 12px;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
 /* Live check under the chips: level bars and the round camera preview. */
 .live {
   display: flex;
@@ -2468,6 +2476,8 @@ input[type="range"]:focus-visible::-webkit-slider-thumb {
   color: var(--muted);
   font-size: 12px;
   word-break: break-all;
+  /* One file name per line after a batch. */
+  white-space: pre-line;
 }
 
 @keyframes fade-in {

@@ -23,6 +23,7 @@ import {
   sourceSize,
   SPEEDS,
   STYLES,
+  type Aspect,
   type BlurRegion,
   type MediaKey,
   type Note,
@@ -1174,15 +1175,21 @@ const PRESET_LIMITS: Record<string, { side: number; fps: number; aspect?: Projec
 
 tool(
   "export_video",
-  "Exporta o vídeo editado em MP4 (H.264 com áudio) ou GIF, com a mesma imagem da prévia. Precisa do app aberto. Espera terminar e devolve o caminho do arquivo.",
+  "Exporta o vídeo editado em MP4 (H.264 ou HEVC, com áudio) ou GIF, com a mesma imagem da prévia. Pode gerar vários arquivos de uma vez, um por proporção (aspects). Precisa do app aberto. Espera terminar e devolve o caminho dos arquivos.",
   {
     take: takeArg,
     preset: z.enum(["youtube", "vertical", "whatsapp", "discord"]).optional().describe("Destino: youtube (1080p), vertical (9:16 para Reels, TikTok e Shorts), whatsapp (até 16 MB) ou discord (até 10 MB). Preenche formato, resolução e fps."),
     format: z.enum(["mp4", "gif"]).optional().describe("Padrão: mp4."),
     resolution: z.number().int().optional().describe("Lado maior do vídeo, em px. MP4: 1280, 1920, 2560, 3840 ou o tamanho original. GIF: 480, 640 ou 960. Nunca maior que a gravação. Padrão: 1920 (MP4) ou 640 (GIF)."),
     fps: z.number().int().optional().describe("MP4: 30, 60 ou 120, até o fps da gravação. GIF: 10, 15 ou 20. Padrão: o fps da gravação (MP4) ou 15 (GIF)."),
+    codec: z.enum(["h264", "hevc"]).optional().describe("Só MP4. hevc: mesma imagem em cerca de metade do tamanho; se o computador não codificar HEVC, sai em H.264. Padrão: h264."),
+    aspects: z
+      .array(z.enum(ASPECTS.map((aspect) => aspect.id) as [Aspect, ...Aspect[]]))
+      .min(1)
+      .optional()
+      .describe('Um arquivo por proporção, na mesma exportação, sem mudar a edição. Ex.: ["16:9", "9:16", "1:1"]. Os arquivos que não estão na proporção da edição ganham o sufixo -9x16, -1x1 etc. Padrão: só a proporção da edição (ou a do preset).'),
   },
-  async ({ take: ref, preset, format: chosenFormat, resolution, fps }, extra) => {
+  async ({ take: ref, preset, format: chosenFormat, resolution, fps, codec, aspects }, extra) => {
     const destination = preset ? PRESET_LIMITS[preset] : null;
     const format = destination ? "mp4" : (chosenFormat ?? "mp4");
     const take = await store.findTake(ref);
@@ -1203,21 +1210,32 @@ tool(
     const rate = fps ?? (destination ? (rates.filter((value) => value <= destination.fps).pop() ?? rates[0]) : format === "gif" ? 15 : rates.includes(take.fps) ? take.fps : rates[rates.length - 1]);
     if (!rates.includes(rate)) throw new Error(`${rate} fps não disponível. Opções: ${rates.join(", ")}.`);
 
-    const { jobId } = await appRequest<{ jobId: string }>("export", { takeId: take.id, format, longSide, fps: rate, preset });
+    const list = aspects ? [...new Set(aspects)] : [destination?.aspect ?? project.aspect];
+    const { jobId } = await appRequest<{ jobId: string }>("export", { takeId: take.id, format, longSide, fps: rate, preset, codec: format === "mp4" ? (codec ?? "h264") : undefined, aspects: list });
     const job = await waitJob(jobId, extra, 4 * 60 * 60_000, true);
     if (job.state === "cancelled") throw new Error("A exportação foi cancelada.");
     if (job.state !== "done") throw new Error(`A exportação falhou: ${job.message}`);
-    const file = (job.result as { path: string }).path;
-    const size = (await fs.stat(file).catch(() => null))?.size ?? null;
-    const output = outputSize(destination?.aspect ?? project.aspect, source, longSide);
+    const result = job.result as { path: string; paths?: string[]; codec?: "h264" | "hevc" | null; fellBack?: boolean };
+    // An app from before batches sends one path.
+    const paths = result.paths ?? [result.path];
+    const files = await Promise.all(
+      paths.map(async (file, index) => {
+        const bytes = (await fs.stat(file).catch(() => null))?.size ?? null;
+        const output = outputSize(list[index] ?? list[0], source, longSide);
+        return { file, aspect: list[index] ?? list[0], size: `${output.width}×${output.height}`, megabytes: bytes === null ? null : Number((bytes / 1e6).toFixed(1)) };
+      }),
+    );
     return {
       take: take.id,
-      file,
+      file: files[0].file,
       format,
-      size: `${output.width}×${output.height}`,
+      codec: format === "mp4" ? (result.codec ?? "h264") : null,
+      ...(result.fellBack ? { note: "HEVC não funcionou neste computador; o vídeo saiu em H.264." } : {}),
+      size: files[0].size,
       fps: rate,
       durationMs: finalDuration(project, words),
-      megabytes: size === null ? null : Number((size / 1e6).toFixed(1)),
+      megabytes: files[0].megabytes,
+      ...(files.length > 1 ? { files } : {}),
       seconds: Math.round(job.elapsedMs / 1000),
     };
   },
