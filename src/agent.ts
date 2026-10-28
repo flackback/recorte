@@ -6,8 +6,8 @@ import { createScene, refreshTime, type Scene } from "./editor/composition";
 import type { Editor } from "./editor/editor";
 import { findSilences } from "./editor/cleanup";
 import { PRESETS } from "./editor/export-dialog";
-import { ExportCancelled, exportVideo, maxFps, type ExportOptions } from "./editor/exporter";
-import { defaultProject, normalizeProject } from "./editor/project";
+import { ExportCancelled, exportBatch, maxFps, type ExportOptions } from "./editor/exporter";
+import { ASPECTS, defaultProject, normalizeProject, type Aspect } from "./editor/project";
 import { LANGUAGES, preferredLanguage, SAMPLE_RATE, speech, transcribe } from "./editor/transcribe";
 import { toast } from "./toast";
 import { joinPath, takeName, type CursorEvent, type KeyEvent, type Take, type Word } from "./types";
@@ -94,7 +94,7 @@ export function startAgent(host: AgentHost) {
     return take;
   };
 
-  async function exportJob(take: Take, options: ExportOptions) {
+  async function exportJob(take: Take, options: ExportOptions, aspects: Aspect[]) {
     if (running("export")) throw new Error("já existe uma exportação em andamento");
     if (host.editor.currentTakeId === take.id) host.editor.flush();
     const scene = await loadScene(take);
@@ -102,15 +102,18 @@ export function startAgent(host: AgentHost) {
     const abort = new AbortController();
     job.abort = abort;
     toast(`A IA está exportando “${takeName(take)}”…`);
-    exportVideo(scene, options, (progress) => {
-      job.phase = PHASES[progress.phase];
+    exportBatch(scene, options, aspects, (progress) => {
+      job.phase = (progress.files > 1 ? `Formato ${progress.file} de ${progress.files} · ` : "") + PHASES[progress.phase];
       job.done = progress.done;
       job.total = progress.total;
     }, abort.signal)
-      .then((path) => {
+      .then(({ paths, codec, fellBack }) => {
+        const path = paths[0];
         job.state = "done";
-        job.result = { path };
-        toast(`Exportado: ${path.split("\\").pop()}`, { label: "Mostrar na pasta", run: () => void revealItemInDir(path) });
+        job.result = { path, paths, codec, fellBack };
+        if (fellBack) toast("HEVC falhou neste computador: exportado em H.264");
+        const name = paths.length > 1 ? `${paths.length} arquivos` : path.split("\\").pop();
+        toast(`Exportado: ${name}`, { label: "Mostrar na pasta", run: () => void revealItemInDir(path) });
       })
       .catch((error) => {
         const cancelled = error instanceof ExportCancelled || abort.signal.aborted;
@@ -181,9 +184,11 @@ export function startAgent(host: AgentHost) {
           fps: Math.min(Math.round(Number(payload.fps)), maxFps(longSide)),
           aspect: preset?.aspect,
           maxBytes: preset?.maxBytes,
+          codec: payload.codec === "hevc" ? "hevc" : "h264",
         };
         if (!(options.longSide >= 160) || !(options.fps >= 1)) throw new Error("resolução ou fps inválidos");
-        return exportJob(take, options);
+        const aspects = Array.isArray(payload.aspects) ? payload.aspects.filter((aspect): aspect is Aspect => ASPECTS.some((known) => known.id === aspect)) : [];
+        return exportJob(take, options, aspects);
       }
       case "silences": {
         // Decoding audio needs the WebView, so the MCP server asks the app.

@@ -808,6 +808,18 @@
                 <label><input type="radio" name="export-format" value="mp4" checked />Vídeo MP4</label>
                 <label><input type="radio" name="export-format" value="gif" />GIF</label>
               </div>
+              <div class="field" id="export-aspects-field">
+                <span>Proporção</span>
+                <div class="chips compact" id="export-aspects" role="group" aria-label="Proporção"></div>
+              </div>
+              <div class="field" id="export-codec-field">
+                <span>Codificação</span>
+                <div class="segmented small" id="export-codec" role="radiogroup" aria-label="Codificação">
+                  <label><input type="radio" name="export-codec" value="h264" checked />H.264</label>
+                  <label title="A mesma imagem em cerca de metade do tamanho. Aparelhos antigos podem não abrir."><input type="radio" name="export-codec" value="hevc" />HEVC · menor</label>
+                </div>
+                <p class="hint" id="export-codec-hint" hidden></p>
+              </div>
               <label class="field">
                 <span>Resolução</span>
                 <select id="export-resolution"></select>
