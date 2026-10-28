@@ -29,6 +29,10 @@ anyhow = "1.0.104"
 chrono = "0.4.45"
 windows = { version = "0.62.2", features = ["Win32_Foundation", "Win32_Graphics_Dwm", "Win32_Graphics_Gdi", "Win32_Storage_FileSystem", "Win32_System_Performance", "Win32_System_Threading", "Win32_UI_HiDpi", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_WindowsAndMessaging"] }
 nnnoiseless = { version = "0.5.2", default-features = false }
+# DeepFilterNet3 with its model built in; the crates.io release is older and has no tract backend.
+deep_filter = { git = "https://github.com/Rikorose/DeepFilterNet", tag = "v0.5.6", default-features = false, features = ["tract", "default-model"] }
+# The version deep_filter takes its frames in.
+ndarray = "0.15"
 tauri-plugin-global-shortcut = "2.4.1"
 trash = "5.2.9"
 tiny_http = "0.12"
