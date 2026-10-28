@@ -229,6 +229,8 @@ export type Project = {
     /** File name inside the take folder. */
     music: string | null;
     musicVolume: number;
+    /** Lowers the music while the microphone has voice. */
+    duck: boolean;
     clickSound: boolean;
     clickTone: ClickTone;
     keySound: boolean;
@@ -393,7 +395,7 @@ export function defaultProject(take: Take, events: CursorEvent[]): Project {
     webcam: { visible: Boolean(take.webcam), size: 0.22, corner: "br", shape: "circle", position: null, mirror: true, border: 0.012, borderColor: "#ffffff", shadow: 0.35, zoom: 1 },
     cameras: [],
     media: defaultMedia(),
-    audio: { system: 1, mic: 1, music: null, musicVolume: 0.25, clickSound: false, clickTone: "tick", keySound: false, enhance: false, enhanceLevel: "medium", loudness: false },
+    audio: { system: 1, mic: 1, music: null, musicVolume: 0.25, duck: false, clickSound: false, clickTone: "tick", keySound: false, enhance: false, enhanceLevel: "medium", loudness: false },
     captions: { visible: false, size: 1, position: "bottom" },
     zoom: { defaultScale, segments: autoZooms(events, take.durationMs, defaultScale) },
     blurs: [],
