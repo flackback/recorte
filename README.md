@@ -64,7 +64,7 @@ Gravador de tela e editor para Windows, feito com Tauri 2 (Rust + TypeScript, We
 - **Limpeza automática** (aba Trechos):
   - "Pausas longas" acha as pausas pelo áudio (microfone ou som da gravação). "Encurtar" acelera cada pausa até sobrar o tempo escolhido em "Pausa que fica" (sem salto na imagem); "Cortar" tira a pausa e deixa esse respiro. Um áudio sem fala clara não é alterado;
   - "Tirar hã, hum e é longo" corta hesitações da transcrição. O "é" curto (verbo) fica.
-- **Webcam:** bolha em círculo, arredondada ou quadrada; arraste no vídeo para pôr onde quiser e puxe a alça do canto para mudar o tamanho (ou escolha um dos quatro cantos). Espelhar, aproximar, borda com cor e sombra.
+- **Webcam:** bolha em círculo, arredondada ou quadrada; arraste no vídeo para pôr onde quiser e puxe a alça do canto para mudar o tamanho (ou escolha um dos quatro cantos). Espelhar, aproximar, borda com cor e sombra. Fundo original, desfocado ou removido, sem tela verde (a pessoa fica sobre o vídeo; em tela cheia, sobre o fundo do vídeo).
 - **Layout da câmera:** na faixa "Câmera" da timeline, trechos em que a webcam fica em tela cheia, ao lado da tela (a tela vai para a esquerda) ou oculta, com a troca animada.
 - **Edição no vídeo:** além da webcam, textos, setas e destaques também se arrastam e se redimensionam direto na prévia.
 - **Áudio:**
@@ -220,6 +220,8 @@ Se você usa Mac, use o Slice original: https://github.com/rit3zh/Slice
 | [tiny_http](https://github.com/tiny-http/tiny-http) | Canal local do servidor MCP | MIT ou Apache-2.0 |
 | [Transformers.js](https://github.com/huggingface/transformers.js) | Transcrição no próprio computador | Apache-2.0 |
 | [Whisper](https://github.com/openai/whisper) (modelo `onnx-community/whisper-base_timestamped`) | Reconhecimento de fala; baixado na primeira transcrição | MIT |
+| [MediaPipe Tasks Vision](https://github.com/google-ai-edge/mediapipe) | Desfoque e remoção do fundo da webcam, no próprio computador | Apache-2.0 |
+| MediaPipe Selfie Segmenter (modelo `selfie_segmenter_landscape`, do Google) | Separa a pessoa do fundo na webcam; vem com o app | Apache-2.0 |
 | [mp4box.js](https://github.com/gpac/mp4box.js) | Leitura de MP4 na exportação | BSD-3-Clause |
 | [mp4-muxer](https://github.com/Vanilagy/mp4-muxer) | Escrita do MP4 exportado | MIT |
 | [gifenc](https://github.com/mattdesl/gifenc) | Exportação em GIF | MIT |
@@ -280,6 +282,7 @@ Para capturas de tela ou automação da interface durante o desenvolvimento, def
 | `src/overlay-app.ts` | Página da janela de área e de desenho |
 | `src/editor/editor.ts` | Editor: abas, ferramentas, reprodução, desfazer |
 | `src/editor/renderer.ts` | Composição WebGPU (shader WGSL) |
+| `src/editor/matte.ts`, `matte.worker.ts` | Recorte da pessoa na webcam (MediaPipe, num worker) |
 | `src/editor/composition.ts` | Estado de cada quadro (prévia e exportação) |
 | `src/editor/timemap.ts` | Tempo do vídeo final × tempo da gravação (cortes) |
 | `src/editor/timeline.ts` | Timeline em canvas |

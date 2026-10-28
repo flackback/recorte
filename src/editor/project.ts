@@ -114,6 +114,9 @@ export type Aspect = "auto" | "16:9" | "9:16" | "1:1" | "4:3";
 export type Frame = "none" | "window";
 export type Corner = "br" | "bl" | "tr" | "tl";
 export type WebcamShape = "circle" | "rounded" | "square";
+/** What happens behind the person in the webcam: kept, blurred, or removed (the frame shows through). */
+export type WebcamBackground = "original" | "blur" | "remove";
+export const WEBCAM_BACKGROUNDS: WebcamBackground[] = ["original", "blur", "remove"];
 
 export type EnhanceLevel = "light" | "medium" | "strong";
 /** The enhanced microphone's file for a level, written by the app next to `mic.wav`. */
@@ -218,6 +221,7 @@ export type Project = {
     shadow: number;
     /** Zooms into the camera picture inside the bubble (1 = all of it). */
     zoom: number;
+    background: WebcamBackground;
   };
   /** Stretches where the webcam leaves its bubble. */
   cameras: CameraRange[];
@@ -390,7 +394,7 @@ export function defaultProject(take: Take, events: CursorEvent[]): Project {
       spotlight: false,
     },
     keys: { visible: Boolean(take.keys), mode: "shortcuts" },
-    webcam: { visible: Boolean(take.webcam), size: 0.22, corner: "br", shape: "circle", position: null, mirror: true, border: 0.012, borderColor: "#ffffff", shadow: 0.35, zoom: 1 },
+    webcam: { visible: Boolean(take.webcam), size: 0.22, corner: "br", shape: "circle", position: null, mirror: true, border: 0.012, borderColor: "#ffffff", shadow: 0.35, zoom: 1, background: "original" },
     cameras: [],
     media: defaultMedia(),
     audio: { system: 1, mic: 1, music: null, musicVolume: 0.25, clickSound: false, clickTone: "tick", keySound: false, enhance: false, enhanceLevel: "medium", loudness: false },
@@ -440,7 +444,11 @@ export function normalizeProject(raw: unknown, fallback: Project): Project {
     tilts: list(value.tilts, []),
     cursor: { ...fallback.cursor, ...value.cursor },
     keys: { ...fallback.keys, ...value.keys },
-    webcam: { ...fallback.webcam, ...value.webcam },
+    webcam: {
+      ...fallback.webcam,
+      ...value.webcam,
+      background: WEBCAM_BACKGROUNDS.includes(value.webcam?.background as WebcamBackground) ? value.webcam!.background! : fallback.webcam.background,
+    },
     audio: { ...fallback.audio, ...value.audio },
     captions: { ...fallback.captions, ...value.captions },
     zoom: {

@@ -285,6 +285,7 @@ function webcamAt(scene: Scene, t: number, out: { width: number; height: number 
   let radius = bubble.radius;
   let opacity = 1;
   let area: FrameState["area"] = null;
+  let full = 0;
   const camera = cameraLayoutAt(project, t);
   if (camera && camera.k > 0) {
     const { layout, k } = camera;
@@ -293,6 +294,7 @@ function webcamAt(scene: Scene, t: number, out: { width: number; height: number 
     if (layout === "full") {
       rect = mixBox(rect, { x: 0, y: 0, width: out.width, height: out.height }, k);
       radius *= 1 - k;
+      full = k;
     } else if (layout === "side") {
       const panel = { x: out.width * SIDE_SCREEN, y: margin, width: out.width * (1 - SIDE_SCREEN) - margin, height: out.height - margin * 2 };
       rect = mixBox(rect, panel, k);
@@ -312,9 +314,9 @@ function webcamAt(scene: Scene, t: number, out: { width: number; height: number 
     opacity *= 1 - gone;
     if (area) area = mixBox(area, { x: 0, y: 0, width: 1, height: 1 }, gone);
   }
-  const { mirror, border, borderColor, shadow, zoom } = project.webcam;
+  const { mirror, border, borderColor, shadow, zoom, background } = project.webcam;
   return {
-    webcam: { rect, radius, opacity, mirror, border: border * Math.min(bubble.rect.width, bubble.rect.height), borderColor, shadow, zoom },
+    webcam: { rect, radius, opacity, mirror, border: border * Math.min(bubble.rect.width, bubble.rect.height), borderColor, shadow, zoom, background, full },
     area,
   };
 }

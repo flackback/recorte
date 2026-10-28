@@ -632,6 +632,15 @@
                     <label><input type="radio" name="webcam-shape" value="rounded" />Arredondado</label>
                     <label><input type="radio" name="webcam-shape" value="square" />Quadrado</label>
                   </div>
+                  <div class="field">
+                    <span>Fundo</span>
+                    <p class="hint">Desfoca ou tira o que está atrás de você, sem tela verde.</p>
+                    <div class="segmented small" id="webcam-background" role="radiogroup" aria-label="Fundo da webcam">
+                      <label><input type="radio" name="webcam-background" value="original" />Original</label>
+                      <label><input type="radio" name="webcam-background" value="blur" />Desfocar</label>
+                      <label><input type="radio" name="webcam-background" value="remove" />Remover</label>
+                    </div>
+                  </div>
                   <label class="switch"><input type="checkbox" id="webcam-mirror" /><span>Espelhar</span></label>
                   <label class="slider">
                     <span>Aproximar <output data-value-for="webcam-zoom"></output></span>
