@@ -16,6 +16,22 @@ function labelFor(hint: HTMLElement): HTMLElement | null {
   return title && !title.id ? title : null;
 }
 
+/** Appends the "i" glued to the label's last word, so a wrapping name never leaves it alone on a line. */
+function attachToLastWord(label: HTMLElement, info: HTMLElement) {
+  const last = label.lastChild;
+  const text = last?.nodeType === Node.TEXT_NODE ? (last.textContent ?? "") : "";
+  const cut = text.trimEnd().lastIndexOf(" ");
+  if (!last || cut < 0) {
+    label.append(info);
+    return;
+  }
+  const glue = document.createElement("span");
+  glue.className = "nobr";
+  glue.append(text.slice(cut + 1).trimEnd(), info);
+  last.textContent = text.slice(0, cut + 1);
+  label.append(glue);
+}
+
 export function tuckHints(root: HTMLElement) {
   for (const hint of root.querySelectorAll<HTMLElement>("p.hint:not([id])")) {
     const text = hint.textContent?.replace(/\s+/g, " ").trim();
@@ -37,7 +53,7 @@ export function tuckHints(root: HTMLElement) {
     // Before a slider's value, right after its name.
     const output = label.querySelector("output");
     if (output) label.insertBefore(info, output);
-    else label.append(info);
+    else attachToLastWord(label, info);
     hint.remove();
   }
 }

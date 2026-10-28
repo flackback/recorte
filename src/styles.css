@@ -3492,11 +3492,12 @@ html:not(.keyboard) .swatch:focus-visible {
   align-items: center;
 }
 
-/* The old ".switch span { order: -1 }" also caught the "i"; keep it after the name, on one line. */
+/* A switch's name wraps when it is long, with the "i" right after its last word; the switch keeps its room. */
 .inspector .switch > span {
-  flex-wrap: nowrap;
+  display: block;
+  flex: 1;
   min-width: 0;
-  white-space: nowrap;
+  white-space: normal;
 }
 
 .switch .info {
@@ -3508,4 +3509,9 @@ html:not(.keyboard) .swatch:focus-visible {
   min-width: 0;
   padding: 0 4px;
   font-size: 11.5px;
+}
+
+/* A name's last word and its "i" stay together. */
+.nobr {
+  white-space: nowrap;
 }
