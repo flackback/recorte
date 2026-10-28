@@ -11,6 +11,7 @@ import { openAudio, type AudioSource } from "./audio-source";
 import { ExportDialog } from "./export-dialog";
 import { openVideo } from "./exporter";
 import { thumbnails, trackSpan, waveform } from "./media";
+import { duckAt, duckGains, voiceActivity, voiceLevels } from "./duck";
 import { cursorPath } from "./motion";
 import { OverlayPainter } from "./overlay";
 import {
@@ -64,7 +65,7 @@ import { RectEditor } from "./rect-editor";
 import { cursorPreview, Renderer } from "./renderer";
 import { SoundPreview } from "./sounds";
 import { laneCutKey, laneOfCut, shiftLabel, Timeline, type ItemKey, type MediaLane, type Selection, type Track, type TrackKey } from "./timeline";
-import type { Span } from "./timemap";
+import type { Span, TimeMap } from "./timemap";
 import { LANGUAGES, preferredLanguage, rememberLanguage, SAMPLE_RATE, speech, transcribe } from "./transcribe";
 import { fillerWords, findSilences, pausePad, pauseSpeeds, type PauseMode } from "./cleanup";
 
@@ -316,6 +317,7 @@ export class Editor {
     musicRemove: $<HTMLButtonElement>("music-remove"),
     musicFile: $<HTMLInputElement>("music-file"),
     volumeMusic: $<HTMLInputElement>("volume-music"),
+    duck: $<HTMLInputElement>("duck"),
     transcribe: $<HTMLButtonElement>("transcribe"),
     transcribeLanguage: $<HTMLSelectElement>("transcribe-language"),
     transcribeStatus: $("transcript-status"),
@@ -349,6 +351,10 @@ export class Editor {
   private webcamSpan: { start: number; end: number } | undefined;
   private systemWave: Float32Array | null = null;
   private micWave: Float32Array | null = null;
+  /** Voice frames of the microphone file the music ducks under; null while they are being read. */
+  private voice: { file: string; frames: Uint8Array | null } | null = null;
+  /** The music's ducking gains, for the time map, voice and microphone lane they were worked out from. */
+  private duck: { time: TimeMap; frames: Uint8Array; shift: number; cuts: Range[]; gains: Float32Array } | null = null;
   private backgroundKey = "";
   private lastTimelineKey = "";
   /** Playhead time (whole ms) the timeline last showed. */
@@ -526,6 +532,8 @@ export class Editor {
     this.webcamSpan = undefined;
     this.systemWave = null;
     this.micWave = null;
+    this.voice = null;
+    this.duck = null;
     this.lastTimelineKey = "";
   }
 
@@ -1665,6 +1673,7 @@ export class Editor {
       this.loadMic();
     });
     toggle(ui.loudness, (p, v) => (p.audio.loudness = v));
+    toggle(ui.duck, (p, v) => (p.audio.duck = v));
     toggle(ui.captionsVisible, (p, v) => (p.captions.visible = v));
     toggle(ui.introEnabled, (p, v) => (p.cards.intro.enabled = v));
     toggle(ui.outroEnabled, (p, v) => (p.cards.outro.enabled = v));
@@ -2223,6 +2232,8 @@ export class Editor {
     ui.loudness.disabled = !take.mic && !take.systemAudio && !project.audio.music;
     ui.volumeMusic.value = String(project.audio.musicVolume);
     ui.volumeMusic.disabled = !project.audio.music;
+    ui.duck.checked = project.audio.duck;
+    ui.duck.disabled = !project.audio.music || !take.mic;
     ui.musicLabel.textContent = project.audio.music ? "Trocar música…" : "Escolher música…";
     ui.musicRemove.hidden = !project.audio.music;
 
@@ -2318,11 +2329,45 @@ export class Editor {
     volume(system, systemVolume);
     // Older takes play the system sound from the video itself.
     volume(video, systemVolume);
+    volume(this.music, Math.min(1, project.audio.musicVolume) * this.duckGain(scene, t * 1000));
     if (project.audio.music && this.music.duration) {
       const musicTime = (scene.time.toOutput(t * 1000) / 1000) % this.music.duration;
       if (start || Math.abs(this.music.currentTime - musicTime) > 0.25) this.music.currentTime = musicTime;
     }
     if (start && !video.paused && project.audio.music) void this.music.play();
+  }
+
+  /**
+   * The music's gain at take time `t` (ms) while ducking under the voice: 1 when off, and until the
+   * microphone's voice has been read in the background.
+   */
+  private duckGain(scene: Scene, t: number): number {
+    const { take, project, time } = scene;
+    if (!project.audio.duck || !project.audio.music || !take.mic || project.audio.mic <= 0) return 1;
+    // Like the export: the enhanced microphone when that is on.
+    const file = project.audio.enhance ? enhancedFile(project.audio.enhanceLevel) : take.mic;
+    if (this.voice?.file !== file) {
+      this.voice = { file, frames: null };
+      void this.loadVoice(take, file);
+    }
+    const frames = this.voice.frames;
+    if (!frames) return 1;
+    const edit = project.media.mic;
+    let duck = this.duck;
+    if (!duck || duck.time !== time || duck.frames !== frames || duck.shift !== edit.shift || duck.cuts !== edit.cuts) {
+      duck = this.duck = { time, frames, shift: edit.shift, cuts: edit.cuts, gains: duckGains(frames, time, edit) };
+    }
+    return duckAt(duck.gains, time.toOutput(t));
+  }
+
+  /** Reads the voice of a microphone file for ducking, falling back to the recording itself. */
+  private async loadVoice(take: Take, file: string) {
+    const url = (name: string) => convertFileSrc(joinPath(take.dir, name));
+    const open = (name: string) => openAudio(url(name)).catch(() => null);
+    const audio = (await open(file)) ?? (take.mic && file !== take.mic ? await open(take.mic) : null);
+    const frames = audio ? await voiceLevels(audio, take.durationMs).then(voiceActivity, () => null) : null;
+    // Without a readable voice the music stays as it is.
+    if (this.voice?.file === file && this.scene?.take === take) this.voice.frames = frames ?? new Uint8Array(0);
   }
 
   /**

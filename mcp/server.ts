@@ -935,6 +935,7 @@ const settingsShape = {
       system: z.number().min(0).max(2).optional().describe("Volume do som do sistema."),
       mic: z.number().min(0).max(2).optional().describe("Volume do microfone."),
       musicVolume: z.number().min(0).max(1).optional(),
+      duck: z.boolean().optional().describe("Abaixa a música de fundo enquanto a pessoa fala no microfone e a sobe nas pausas."),
       clickSound: z.boolean().optional(),
       clickTone: z.enum(["tick", "soft", "mech"]).optional().describe("Som do clique: clique, suave ou mecânico."),
       keySound: z.boolean().optional(),

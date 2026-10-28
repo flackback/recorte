@@ -12,6 +12,7 @@ import { joinPath, type Take } from "../types";
 import { openAudio, type AudioSource } from "./audio-source";
 import { cardLength, frameState, outputMoment, overlayText, sceneSource, totalDuration, type CardView, type Scene } from "./composition";
 import { OverlayPainter } from "./overlay";
+import { duckGains, scheduleDuck, voiceActivity, voiceLevels } from "./duck";
 import { GainLimiter, LoudnessMeter, loudnessGain } from "./loudness";
 import { defaultMedia, enhancedFile, outputSize, type Aspect, type EnhanceLevel, type MediaEdit, type Range } from "./project";
 import { Renderer } from "./renderer";
@@ -232,9 +233,10 @@ async function createMixer(scene: Scene): Promise<Mixer | null> {
     const audio = await openTrack(() => systemAudio(take), "o som do sistema");
     if (audio) tracks.push({ audio, volume: project.audio.system, edit: media.system });
   }
+  let mic: AudioSource | null = null;
   if (project.audio.mic > 0) {
-    const audio = await openTrack(() => micAudio(take, project.audio.enhance, project.audio.enhanceLevel), "o microfone");
-    if (audio) tracks.push({ audio, volume: project.audio.mic, edit: media.mic });
+    mic = await openTrack(() => micAudio(take, project.audio.enhance, project.audio.enhanceLevel), "o microfone");
+    if (mic) tracks.push({ audio: mic, volume: project.audio.mic, edit: media.mic });
   }
   // Music is a short file the user picked; it is decoded whole, once.
   let music: AudioBuffer | null = null;
@@ -242,6 +244,8 @@ async function createMixer(scene: Scene): Promise<Mixer | null> {
     const bytes = await fetchBytes(joinPath(take.dir, project.audio.music));
     music = await new OfflineAudioContext(CHANNELS, 1, SAMPLE_RATE).decodeAudioData(bytes);
   }
+  // Ducking follows the voice of the microphone that is heard (the enhanced one when that is on).
+  const duck = music && mic && project.audio.duck ? duckGains(voiceActivity(await voiceLevels(mic, take.durationMs)), time, media.mic) : null;
   /** Output moments (s) of the sounds that play (kept, at normal speed), in time order, worked out once. */
   const moments = (times: number[]) =>
     times
@@ -294,7 +298,12 @@ async function createMixer(scene: Scene): Promise<Mixer | null> {
         const node = mixer.createBufferSource();
         node.buffer = music;
         node.loop = true;
-        node.connect(gain);
+        if (duck) {
+          // The voice starts after the opening card.
+          const ducker = mixer.createGain();
+          scheduleDuck(ducker.gain, duck, (start - offset) * 1000, end - start);
+          node.connect(ducker).connect(gain);
+        } else node.connect(gain);
         node.start(0, start % music.duration);
       }
 
