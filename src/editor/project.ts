@@ -3,7 +3,18 @@ import type { CursorEvent, Take } from "../types";
 /** A stretch of the source timeline, in ms. */
 export type Range = { id: string; start: number; end: number };
 /** Shown zoomed in; `lens` magnifies around the cursor instead of moving the camera. */
-export type ZoomSegment = Range & { scale: number; mode: "zoom" | "lens" };
+export type LensShape = "circle" | "squircle" | "pill";
+export const LENS_SHAPES: { id: LensShape; name: string }[] = [
+  { id: "circle", name: "Círculo" },
+  { id: "squircle", name: "Arredondada" },
+  { id: "pill", name: "Pílula" },
+];
+export type Point = { x: number; y: number };
+/**
+ * Shown zoomed in. A zoom follows the cursor unless it has a `focus` (video pixels); with `to` as
+ * well, it glides from the one to the other while zoomed. A lens has a `shape`.
+ */
+export type ZoomSegment = Range & { scale: number; mode: "zoom" | "lens"; focus?: Point | null; to?: Point | null; shape?: LensShape };
 /** Blurred area of the recording, in video pixels, over a time range. */
 export type BlurRegion = Range & { x: number; y: number; width: number; height: number };
 /** Played faster, without sound (typing, loading screens). */
@@ -11,7 +22,7 @@ export type SpeedRange = Range & { rate: number };
 export const SPEEDS = [1.5, 2, 4, 8];
 
 /** Effects played across the seam a cut leaves: the clip before goes out, the clip after comes in. */
-export type TransitionKind = "fade" | "zoomblur" | "flip" | "burn" | "dissolve" | "wave";
+export type TransitionKind = "fade" | "zoomblur" | "flip" | "burn" | "dissolve" | "wave" | "curl";
 export type Transition = { kind: TransitionKind; durationMs: number };
 export const TRANSITIONS: { id: TransitionKind; name: string }[] = [
   { id: "fade", name: "Esmaecer" },
@@ -20,6 +31,7 @@ export const TRANSITIONS: { id: TransitionKind; name: string }[] = [
   { id: "burn", name: "Queimar" },
   { id: "dissolve", name: "Desintegrar" },
   { id: "wave", name: "Onda" },
+  { id: "curl", name: "Virar página" },
 ];
 export const DEFAULT_TRANSITION: Transition = { kind: "zoomblur", durationMs: 700 };
 /**
@@ -195,6 +207,8 @@ export type Project = {
     hideIdle: number;
     /** Glides back to where it started at the end, for videos that loop. */
     returnHome: boolean;
+    /** Smears the cursor along its path when it moves fast. */
+    motionBlur: boolean;
     /** Hand and text-beam changes shorter than this (ms) are skipped, so passing over links doesn't flicker. */
     shapeDelay: number;
     clickEffect: boolean;
@@ -383,6 +397,7 @@ export function defaultProject(take: Take, events: CursorEvent[]): Project {
       style: "classic",
       hideIdle: 0,
       returnHome: false,
+      motionBlur: true,
       shapeDelay: 300,
       clickEffect: true,
       clickStyle: "ring",

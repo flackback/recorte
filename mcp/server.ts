@@ -474,11 +474,11 @@ tool(
 
 tool(
   "set_transition",
-  "Põe, troca ou tira a transição na emenda de um corte ou de uma divisão (split_at). A transição tira o trecho de antes e traz o de depois: esmaecer (fade), zoom com desfoque (zoomblur), girar (flip), queimar (burn), desintegrar (dissolve) ou onda (wave).",
+  "Põe, troca ou tira a transição na emenda de um corte ou de uma divisão (split_at). A transição tira o trecho de antes e traz o de depois: esmaecer (fade), zoom com desfoque (zoomblur), girar (flip), queimar (burn), desintegrar (dissolve), onda (wave) ou virar página (curl).",
   {
     take: takeArg,
     cut: z.string().describe("Id do corte ou da divisão (de get_take ou split_at)."),
-    kind: z.enum(["none", "fade", "zoomblur", "flip", "burn", "dissolve", "wave"]).describe("none tira a transição."),
+    kind: z.enum(["none", "fade", "zoomblur", "flip", "burn", "dissolve", "wave", "curl"]).describe("none tira a transição."),
     durationMs: z.number().min(300).max(2000).optional().describe("Duração total, metade antes e metade depois da emenda. Padrão 700."),
   },
   ({ take, cut: id, kind, durationMs }) =>
@@ -652,10 +652,13 @@ tool(
     end: ms("Novo fim").optional(),
     scale: scaleArg.optional().describe("Só para zoom e lente."),
     mode: z.enum(["zoom", "lens"]).optional().describe("Só para zoom e lente."),
+    focus: z.object({ x: z.number(), y: z.number() }).nullable().optional().describe("Só para zoom: ponto fixo em pixels do vídeo (o zoom para de seguir o cursor). null volta a seguir o cursor."),
+    to: z.object({ x: z.number(), y: z.number() }).nullable().optional().describe("Só para zoom com focus: o zoom desliza até este ponto enquanto está aproximado. null tira."),
+    shape: z.enum(["circle", "squircle", "pill"]).optional().describe("Só para lente: círculo, quadrado arredondado ou pílula. Lentes a menos de 0,6 s uma da outra se transformam uma na outra."),
     area: z.object(areaShape).optional().describe("Só para desfoque."),
     rate: z.number().min(1.1).max(16).optional().describe("Só para trecho acelerado."),
   },
-  ({ take, id, start, end, scale, mode, area: newArea, rate }) =>
+  ({ take, id, start, end, scale, mode, focus, to, shape, area: newArea, rate }) =>
     edit(take, (project, { take: meta }) => {
       const cut = project.cuts.find((item) => item.id === id);
       const segment = project.zoom.segments.find((item) => item.id === id);
@@ -688,8 +691,13 @@ tool(
       if (segment) {
         if (scale !== undefined) segment.scale = scale;
         if (mode) segment.mode = mode;
+        if (focus !== undefined) segment.focus = focus && { x: round(focus.x), y: round(focus.y) };
+        if (to !== undefined) segment.to = to && { x: round(to.x), y: round(to.y) };
+        if (!segment.focus) segment.to = null;
+        if (shape) segment.shape = shape;
         project.zoom.segments.sort((a, b) => a.start - b.start);
-        return `${segment.mode === "lens" ? "lente" : "zoom"} ajustado: ${segment.scale}× em ${seconds(range.start)}–${seconds(range.end)}`;
+        const where = segment.mode === "lens" ? "" : segment.focus ? (segment.to ? ", área fixa que desliza" : ", área fixa") : "";
+        return `${segment.mode === "lens" ? "lente" : "zoom"} ajustado: ${segment.scale}×${where} em ${seconds(range.start)}–${seconds(range.end)}`;
       }
       if (newArea) Object.assign(blur!, area(meta, newArea));
       project.blurs.sort((a, b) => a.start - b.start);

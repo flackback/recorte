@@ -1,6 +1,6 @@
 import type { CursorEvent, KeyEvent, Take, Word } from "../types";
 import { cameraPath, cursorPath, RawPath, SpringPath, zoomAt } from "./motion";
-import { BACKGROUNDS, cardLength, sourceSize, type Cut, type Note, type Project, type TitleCard, type TransitionKind, type ZoomSegment } from "./project";
+import { LENS_SHAPES, BACKGROUNDS, cardLength, sourceSize, type Cut, type Note, type Project, type TitleCard, type TransitionKind, type ZoomSegment } from "./project";
 import type { CursorKind, FrameState } from "./renderer";
 import { TimeMap, type Span } from "./timemap";
 
@@ -176,6 +176,55 @@ function cursorKindAt(shapes: CursorEvent[], t: number): CursorKind {
 
 const lensSegments = (segments: ZoomSegment[]) => segments.filter((segment) => segment.mode === "lens");
 
+const easeInOut = (x: number) => (x < 0.5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2);
+/** Zoom ramps in and out over this long (as in motion.ts `zoomAt`). */
+const ZOOM_RAMP = 700;
+
+/** The fixed point a zoom shows at `t` (video pixels), gliding to its second point while held; null follows the cursor. */
+function zoomFocusAt(segments: ZoomSegment[], t: number): [number, number] | null {
+  const segment = segments.find((candidate) => candidate.mode !== "lens" && candidate.focus && t > candidate.start && t < candidate.end);
+  if (!segment?.focus) return null;
+  const { focus, to } = segment;
+  if (!to) return [focus.x, focus.y];
+  const ramp = Math.min(ZOOM_RAMP, (segment.end - segment.start) / 2);
+  const hold = segment.end - segment.start - ramp * 2;
+  const k = hold > 0 ? easeInOut(Math.max(0, Math.min(1, (t - segment.start - ramp) / hold))) : 0;
+  return [focus.x + (to.x - focus.x) * k, focus.y + (to.y - focus.y) * k];
+}
+
+/** Lenses closer than this hand over to each other: the glass stays and morphs instead of closing. */
+const LENS_LINK = 600;
+/** How long a morph between linked lenses lasts, around their meeting point. */
+const LENS_MORPH = 400;
+const shapeIndex = (segment: ZoomSegment) => Math.max(0, LENS_SHAPES.findIndex((shape) => shape.id === (segment.shape ?? "circle")));
+
+/** The lens at `t`: how far it is open (0–1), its magnification, and its shape (a blend of two while morphing). */
+function lensAt(segments: ZoomSegment[], t: number): { amount: number; magnification: number; shape: [number, number, number] } | null {
+  const lenses = lensSegments(segments).sort((a, b) => a.start - b.start);
+  for (let i = 0; i + 1 < lenses.length; i++) {
+    const [a, b] = [lenses[i], lenses[i + 1]];
+    if (b.start - a.end > LENS_LINK) continue;
+    const from = a.end - LENS_MORPH / 2;
+    const until = b.start + LENS_MORPH / 2;
+    if (t < from || t > until) continue;
+    const k = smooth((t - from) / (until - from));
+    return { amount: 1, magnification: a.scale + (b.scale - a.scale) * k, shape: [shapeIndex(a), shapeIndex(b), k] };
+  }
+  const index = lenses.findIndex((segment) => t > segment.start && t < segment.end);
+  if (index < 0) return null;
+  const segment = lenses[index];
+  const linkedBefore = index > 0 && segment.start - lenses[index - 1].end <= LENS_LINK;
+  const linkedAfter = index + 1 < lenses.length && lenses[index + 1].start - segment.end <= LENS_LINK;
+  const ramp = Math.min(ZOOM_RAMP, (segment.end - segment.start) / 2);
+  const opening = linkedBefore ? 1 : Math.min(1, (t - segment.start) / ramp);
+  const closing = linkedAfter ? 1 : Math.min(1, (segment.end - t) / ramp);
+  const shape = shapeIndex(segment);
+  return { amount: easeInOut(Math.max(0, Math.min(opening, closing))), magnification: segment.scale, shape: [shape, shape, 0] };
+}
+
+/** Cursor travel over the last frame (video pixels); the renderer smears the sprite along it. */
+const MOTION_WINDOW = 1000 / 60;
+
 /** 0–1 strength of the click spotlight: rises on a click, holds, then fades. */
 function spotlightAt(left: number[], t: number) {
   const index = lastTimeAt(left, t);
@@ -319,6 +368,14 @@ function webcamAt(scene: Scene, t: number, out: { width: number; height: number 
   };
 }
 
+/** How far the drawn cursor moved over the last frame, in video pixels; null when it barely moved. */
+function cursorMotion(scene: Scene, t: number, now: { x: number; y: number }): [number, number] | null {
+  const before = scene.cursor.at(Math.max(0, t - MOTION_WINDOW));
+  const dx = now.x - before[0];
+  const dy = now.y - before[1];
+  return Math.hypot(dx, dy) > 6 ? [dx, dy] : null;
+}
+
 /** Everything the renderer needs for the frame at source time `t` (ms). */
 export function frameState(scene: Scene, t: number, output: FrameState["output"], overlay = false): FrameState {
   const { take, project, raw, cursor, camera, clicks } = scene;
@@ -326,12 +383,11 @@ export function frameState(scene: Scene, t: number, output: FrameState["output"]
   const video = { width: take.width, height: take.height };
   const crop = project.crop;
   const zoom = zoomAt(project.zoom.segments.filter((segment) => segment.mode !== "lens"), t);
-  const lensLevel = zoomAt(lensSegments(project.zoom.segments), t);
-  const lensSegment = lensSegments(project.zoom.segments).find((segment) => t > segment.start && t < segment.end);
+  const lens = lensAt(project.zoom.segments, t);
   const center: [number, number] = crop ? [crop.x + crop.width / 2, crop.y + crop.height / 2] : [video.width / 2, video.height / 2];
   const bounds = crop ?? { x: 0, y: 0, width: video.width, height: video.height };
-  // The camera follows the cursor, but never past the edge of what was recorded.
-  const followed = raw.empty ? center : camera.at(t);
+  // The camera follows the cursor (or holds a zoom's own point), but never past the edge of what was recorded.
+  const followed = zoomFocusAt(project.zoom.segments, t) ?? (raw.empty ? center : camera.at(t));
   const focus: [number, number] = [
     Math.min(Math.max(followed[0], bounds.x), bounds.x + bounds.width),
     Math.min(Math.max(followed[1], bounds.y), bounds.y + bounds.height),
@@ -400,10 +456,8 @@ export function frameState(scene: Scene, t: number, output: FrameState["output"]
     clickSize: project.cursor.clickSize,
     transition: transitionAt(scene, t),
     spotlight: project.cursor.spotlight && !raw.empty ? spotlightAt(leftClicks(scene), t) * 0.85 : 0,
-    lens:
-      lensSegment && tip
-        ? { x: tip[0], y: tip[1], magnification: lensSegment.scale, amount: (lensLevel - 1) / Math.max(0.001, lensSegment.scale - 1) }
-        : null,
+    lens: lens && tip ? { x: tip[0], y: tip[1], magnification: lens.magnification, amount: lens.amount, shape: lens.shape } : null,
+    motion: cursorState && project.cursor.motionBlur ? cursorMotion(scene, t, cursorState) : null,
     blurs: project.blurs.filter((blur) => t >= blur.start && t <= blur.end),
     webcam,
     area,

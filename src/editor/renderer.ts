@@ -30,8 +30,10 @@ export type FrameState = {
   transition: { kind: TransitionKind; amount: number; phase: number } | null;
   /** 0–1 dimming of everything but the area around the cursor. */
   spotlight: number;
-  /** Magnifier at a point (video pixels); `amount` 0–1 animates it in and out. */
-  lens: { x: number; y: number; magnification: number; amount: number } | null;
+  /** Magnifier at a point (video pixels); `amount` 0–1 animates it in and out; `shape` blends two LENS_SHAPES indexes. */
+  lens: { x: number; y: number; magnification: number; amount: number; shape: [number, number, number] } | null;
+  /** Cursor travel over the last frame (video pixels), for motion blur. */
+  motion: [number, number] | null;
   /** Blurred areas in video pixels. */
   blurs: Rect[];
   /** Webcam bubble in output pixels. */
@@ -69,7 +71,11 @@ const cursorTip = (style: CursorStyle, kind: CursorKind): [number, number] =>
   style === "classic" || style === "light" ? CURSOR_TIPS[kind] : [CURSOR_BOX / 2, CURSOR_BOX / 2];
 const SPRITE = 256;
 const LENS_RADIUS = 120;
-const UNIFORM_VECS = 19 + MAX_BLURS + MAX_CLICKS;
+/** Uniform vectors before the blur and click arrays. */
+const FIXED_VECS = 21;
+const UNIFORM_VECS = FIXED_VECS + MAX_BLURS + MAX_CLICKS;
+/** Samples along the cursor's path for motion blur. */
+const MOTION_SAMPLES = 10;
 
 const SHADER = /* wgsl */ `
 struct Uniforms {
@@ -92,6 +98,8 @@ struct Uniforms {
   webcam_uv: vec4f, // bubble uv -> camera uv: scale xy, offset xy
   look: vec4f,      // cursor style row, click style (0 ring, 1 liquid), unused, transition kind (0 none)
   trans: vec4f,     // transition amount, unused x3
+  lens2: vec4f,     // lens shape from, shape to, morph (0–1), unused
+  motion: vec4f,    // cursor travel over the last frame (composed px), unused x2
   blurs: array<vec4f, ${MAX_BLURS}>,
   clicks: array<vec4f, ${MAX_CLICKS}>,
 }
@@ -141,6 +149,23 @@ fn untilt(p: vec2f) -> vec2f {
   return center + vec2f(dot(hit, right), dot(hit, up));
 }
 
+// Distance from the lens center scaled so the rim is at 1: circle, rounded square or pill.
+fn lens_shape(off: vec2f, r: f32, shape: f32) -> f32 {
+  if (shape > 1.5) {
+    let a = abs(off);
+    return length(vec2f(max(a.x - r * 0.75, 0.0), a.y)) / (r * 0.62);
+  }
+  if (shape > 0.5) {
+    let a = abs(off) / (r * 0.92);
+    return pow(pow(a.x, 4.0) + pow(a.y, 4.0), 0.25);
+  }
+  return length(off) / r;
+}
+
+fn lens_f(off: vec2f, r: f32) -> f32 {
+  return mix(lens_shape(off, r, u.lens2.x), lens_shape(off, r, u.lens2.y), u.lens2.z);
+}
+
 fn hash(p: vec2f) -> f32 {
   return fract(sin(dot(p, vec2f(127.1, 311.7))) * 43758.5453);
 }
@@ -184,7 +209,27 @@ fn trans_mask(q: vec2f) -> vec3f {
     let left = step(amount * 1.02, v);
     return vec3f(left, (1.0 - smoothstep(0.0, 0.1, v - amount)) * left * step(0.001, amount), 0.0);
   }
+  if (kind > 6.5) {
+    // Page curl: a fold sweeps from the bottom-right corner; past it the page is gone.
+    let s = curl_s(uv);
+    let fold = curl_line(amount);
+    let left = 1.0 - smoothstep(fold + CURL_R - 0.004, fold + CURL_R, s);
+    return vec3f(left, 0.0, 0.0);
+  }
   return vec3f(1.0, 0.0, 0.0);
+}
+
+const CURL_R = 0.09;
+const CURL_DIR = vec2f(0.83, 0.56);
+
+// Position along the curl's direction (0 at the top-left corner, about 1.4 at the bottom-right).
+fn curl_s(uv: vec2f) -> f32 {
+  return dot(uv, CURL_DIR);
+}
+
+// Where the fold line is for a transition amount: off the far corner at 0, past the near one at 1.
+fn curl_line(amount: f32) -> f32 {
+  return mix(1.45, -CURL_R - 0.02, amount);
 }
 
 fn sample_screen(uv: vec2f) -> vec3f {
@@ -214,7 +259,23 @@ fn sample_content(uv0: vec2f) -> vec3f {
   let kind = u.look.w;
   let amount = u.trans.x;
   var uv = uv0;
-  if (kind > 5.5) {
+  if (kind > 6.5) {
+    let fold = curl_line(amount);
+    let s = curl_s(uv);
+    if (s > fold) {
+      // The flap: the back of the page, folded over a cylinder, pale like paper seen through.
+      let x = clamp((s - fold) / CURL_R, 0.0, 1.0);
+      let back = fold + (3.14159 - asin(x)) * CURL_R;
+      let src = uv + CURL_DIR * (back - s);
+      let paper = sample_screen(clamp(src, vec2f(0.0), vec2f(1.0)));
+      let lit = 0.75 + 0.25 * (1.0 - x);
+      return mix(paper, vec3f(0.97), 0.72) * lit;
+    }
+    // Shade the page right before the fold.
+    let shade = 1.0 - 0.28 * (1.0 - smoothstep(0.0, CURL_R * 1.4, fold - s)) * step(0.001, amount);
+    return sample_screen(clamp(uv, vec2f(0.0), vec2f(1.0))) * shade;
+  }
+  if (kind > 5.5 && kind < 6.5) {
     uv.x += sin(uv.y * 28.0 + amount * 9.0) * 0.035 * amount;
     uv.y += sin(uv.x * 19.0 + amount * 7.0) * 0.02 * amount;
     let split = vec2f(0.012 * amount, 0.0);
@@ -267,7 +328,7 @@ fn fs(@builtin(position) frag: vec4f) -> @location(0) vec4f {
   if (tkind > 2.5 && tkind < 3.5) { show = 1.0 - smoothstep(0.86, 0.99, tamount); }
   let mask = trans_mask(q);
   var shadow_show = show;
-  if (tkind > 3.5 && tkind < 5.5) { shadow_show = 1.0 - tamount; }
+  if ((tkind > 3.5 && tkind < 5.5) || tkind > 6.5) { shadow_show = 1.0 - tamount; }
 
   // Shadow under the frame.
   let ds = sd_rect(q - vec2f(0.0, blur * 0.4), u.box, radius);
@@ -301,9 +362,8 @@ fn fs(@builtin(position) frag: vec4f) -> @location(0) vec4f {
     var rim = 0.0;
     if (lens_radius > 0.5) {
       let off = q - u.lens.xy;
-      let dist = length(off);
-      if (dist < lens_radius) {
-        let f = dist / lens_radius;
+      let f = lens_f(off, lens_radius);
+      if (f < 1.0) {
         let bend = 1.0 + 0.35 * pow(f, 3.0);
         sp = u.lens.xy + off / u.lens.w * bend;
         rim = smoothstep(0.82, 1.0, f);
@@ -327,12 +387,12 @@ fn fs(@builtin(position) frag: vec4f) -> @location(0) vec4f {
     let uv = (sp - u.content.xy) / u.content.zw;
     var screen = sample_content(uv);
     if (lens_radius > 0.5) {
-      let dist = length(q - u.lens.xy);
+      let f = lens_f(q - u.lens.xy, lens_radius);
       // Glassy rim highlight and a soft edge shadow.
       screen = mix(screen, vec3f(1.0), rim * 0.35);
-      let edge = abs(dist - lens_radius);
+      let edge = abs(f - 1.0) * lens_radius;
       screen = mix(screen, vec3f(1.0), (1.0 - smoothstep(0.0, px * 2.0, edge)) * 0.7);
-      let outside = dist - lens_radius;
+      let outside = (f - 1.0) * lens_radius;
       if (outside > 0.0) { screen = mix(screen, vec3f(0.0), (1.0 - smoothstep(0.0, lens_radius * 0.12, outside)) * 0.25); }
     }
 
@@ -364,10 +424,27 @@ fn fs(@builtin(position) frag: vec4f) -> @location(0) vec4f {
 
     // Cursor, from the sprite sheet: one row per style, one column per kind.
     if (u.misc.x > 0.001) {
+      let slot = u.webcam2.w;
+      let row = u.look.x;
+      let travel = u.motion.xy;
+      if (dot(travel, travel) > 1.0) {
+        // Motion blur: a fading trail of the sprite along the path it just covered, under the sharp cursor.
+        var sum = vec4f(0.0);
+        for (var k = 1; k <= ${MOTION_SAMPLES}; k++) {
+          let back = travel * (f32(k) / ${MOTION_SAMPLES}.0);
+          let cuv = (q + back - u.cursor.xy) / u.misc.y;
+          if (all(cuv >= vec2f(0.0)) && all(cuv <= vec2f(1.0))) {
+            let c = textureSampleLevel(cursor_tex, smp, vec2f((slot + cuv.x) / ${CURSOR_SLOTS.length}.0, (row + cuv.y) / ${CURSOR_STYLES.length}.0), 0.0);
+            let fade = 1.0 - f32(k) / f32(${MOTION_SAMPLES} + 1);
+            sum += vec4f(c.rgb * c.a, c.a) * fade;
+          }
+        }
+        sum /= ${MOTION_SAMPLES}.0 * 0.5;
+        let trail = min(sum.a, 1.0) * 0.6;
+        if (sum.a > 0.001) { screen = mix(screen, sum.rgb / sum.a, trail * u.misc.x); }
+      }
       let cuv = (q - u.cursor.xy) / u.misc.y;
       if (all(cuv >= vec2f(0.0)) && all(cuv <= vec2f(1.0))) {
-        let slot = u.webcam2.w;
-        let row = u.look.x;
         let c = textureSampleLevel(cursor_tex, smp, vec2f((slot + cuv.x) / ${CURSOR_SLOTS.length}.0, (row + cuv.y) / ${CURSOR_STYLES.length}.0), 0.0);
         screen = mix(screen, c.rgb, c.a * u.misc.x);
       }
@@ -686,6 +763,15 @@ export class Renderer {
     if (state.lens && state.lens.amount > 0.001) {
       const [x, y] = toComposed(state.lens.x, state.lens.y);
       vec(9, [x, y, LENS_RADIUS * k * state.lens.amount, 1 + (state.lens.magnification - 1) * state.lens.amount]);
+      vec(19, [...state.lens.shape, 0]);
+    }
+    // The sprite is smeared over at most a few cursor widths.
+    if (state.motion && cursor) {
+      const limit = cursorBox * 1.6;
+      const [dx, dy] = [state.motion[0] * k, state.motion[1] * k];
+      const length = Math.hypot(dx, dy);
+      const s = length > limit ? limit / length : 1;
+      vec(20, [dx * s, dy * s, 0, 0]);
     }
     if (webcamReady) {
       const w = state.webcam!.rect;
@@ -713,7 +799,7 @@ export class Renderer {
     const blurs = state.blurs.slice(0, MAX_BLURS);
     vec(14, [blurs.length, 0.018, (state.webcam?.shadow ?? 0) * 0.6, state.webcam?.mirror ? 1 : 0]);
     blurs.forEach((rect, index) =>
-      vec(19 + index, [rect.x / video.width, rect.y / video.height, (rect.x + rect.width) / video.width, (rect.y + rect.height) / video.height]),
+      vec(FIXED_VECS + index, [rect.x / video.width, rect.y / video.height, (rect.x + rect.width) / video.width, (rect.y + rect.height) / video.height]),
     );
 
     const liquid = state.clickStyle === "liquid";
@@ -723,7 +809,7 @@ export class Renderer {
       const [x, y] = toComposed(click.x, click.y);
       const eased = 1 - Math.pow(1 - progress, 3);
       const reach = liquid ? 8 + 46 * eased : 6 + 26 * eased;
-      vec(19 + MAX_BLURS + index, [x, y, reach * k * (cursor?.scale ?? 1) * state.clickSize, 1 - progress]);
+      vec(FIXED_VECS + MAX_BLURS + index, [x, y, reach * k * (cursor?.scale ?? 1) * state.clickSize, 1 - progress]);
     });
     u[22] = clicks.length;
     const styleRow = cursor ? Math.max(0, CURSOR_STYLES.findIndex((candidate) => candidate.id === cursor.style)) : 0;

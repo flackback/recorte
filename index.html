@@ -460,6 +460,8 @@
                     <label><input type="radio" name="cursor-idle" value="2000" />2 s</label>
                     <label><input type="radio" name="cursor-idle" value="5000" />5 s</label>
                   </div>
+                  <label class="switch"><input type="checkbox" id="cursor-motion" /><span>Rastro de movimento</span></label>
+                  <p class="hint">Borra o cursor quando ele anda rápido, como numa câmera.</p>
                   <label class="switch"><input type="checkbox" id="cursor-return" /><span>Voltar ao início no fim</span></label>
                   <p class="hint">O cursor desliza de volta ao ponto onde começou, para vídeos em loop.</p>
                   <label class="slider">
@@ -514,6 +516,19 @@
                       <span>Aumento <output data-value-for="zoom-scale"></output></span>
                       <input type="range" id="zoom-scale" min="1.2" max="4" step="0.1" />
                     </label>
+                    <div class="field" id="zoom-focus-field">
+                      <span>Foco</span>
+                      <div class="segmented small" id="zoom-focus" role="radiogroup" aria-label="Foco do zoom">
+                        <label><input type="radio" name="zoom-focus" value="cursor" />Seguir o cursor</label>
+                        <label><input type="radio" name="zoom-focus" value="point" />Área fixa</label>
+                      </div>
+                      <button class="secondary wide" id="zoom-area"><svg class="i"><use href="#i-crop" /></svg>Mudar a área…</button>
+                      <button class="secondary wide" id="zoom-glide"><svg class="i"><use href="#i-speed" /></svg><span id="zoom-glide-label">Deslizar para outra área…</span></button>
+                    </div>
+                    <div class="field" id="lens-shape-field">
+                      <span>Formato</span>
+                      <div class="segmented small" id="lens-shape" role="radiogroup" aria-label="Formato da lente"></div>
+                    </div>
                   </div>
                   <div class="selection-note" id="selection-note">
                     <div class="segmented small" id="note-kind" role="radiogroup" aria-label="Tipo">

@@ -1911,6 +1911,7 @@ input[type="range"]:focus-visible::-webkit-slider-thumb {
 .rect-toolbar span {
   margin-right: 4px;
   font-weight: 600;
+  white-space: nowrap;
 }
 
 .transport {

@@ -26,6 +26,7 @@ import {
   insertRange,
   newTiltAngle,
   isSplit,
+  LENS_SHAPES,
   mergeCuts,
   mergeRange,
   newId,
@@ -46,6 +47,7 @@ import {
   type Corner,
   type Cut,
   type Frame,
+  type LensShape,
   type MediaKey,
   type TransitionKind,
   type Note,
@@ -271,6 +273,14 @@ export class Editor {
     autoZoomHint: $("auto-zoom-hint"),
     zoomMode: $("zoom-mode"),
     zoomScale: $<HTMLInputElement>("zoom-scale"),
+    zoomFocusField: $("zoom-focus-field"),
+    zoomFocus: $("zoom-focus"),
+    zoomArea: $<HTMLButtonElement>("zoom-area"),
+    zoomGlide: $<HTMLButtonElement>("zoom-glide"),
+    zoomGlideLabel: $("zoom-glide-label"),
+    lensShapeField: $("lens-shape-field"),
+    lensShape: $("lens-shape"),
+    cursorMotion: $<HTMLInputElement>("cursor-motion"),
     blurArea: $<HTMLButtonElement>("blur-area"),
     shortcuts: $<HTMLButtonElement>("shortcuts"),
     shortcutsOpen: $<HTMLButtonElement>("shortcuts-open"),
@@ -1397,6 +1407,42 @@ export class Editor {
     });
   }
 
+  /**
+   * Picks the area a zoom shows (`focus`) or the area it glides to (`to`) on the whole recording.
+   * The box's size sets the zoom's magnification, so what is framed is what is shown.
+   */
+  private editZoomArea(which: "focus" | "to") {
+    const scene = this.scene;
+    const zoom = this.selectedItem<ZoomSegment>();
+    if (!scene || !zoom || this.selected?.track !== "zoom") return;
+    const id = zoom.id;
+    const bounds = scene.project.crop ?? { x: 0, y: 0, width: scene.take.width, height: scene.take.height };
+    const width = bounds.width / zoom.scale;
+    const height = bounds.height / zoom.scale;
+    const center = (which === "to" ? zoom.to : null) ?? zoom.focus ?? { x: bounds.x + bounds.width / 2, y: bounds.y + bounds.height / 2 };
+    const rect = { x: Math.round(center.x - width / 2), y: Math.round(center.y - height / 2), width: Math.round(width), height: Math.round(height) };
+    const title = which === "to" ? "Área para onde o zoom desliza" : "Área do zoom";
+    this.openRectEditor(title, rect, false, (result) => {
+      if (!result) {
+        // Cancelled before any point was set: back to following the cursor.
+        this.syncInspector();
+        return;
+      }
+      const point = { x: Math.round(result.x + result.width / 2), y: Math.round(result.y + result.height / 2) };
+      // The box fits inside the view: the smaller ratio wins.
+      const scale = Math.round(Math.min(4, Math.max(1.2, Math.min(bounds.width / result.width, bounds.height / result.height))) * 10) / 10;
+      this.change((p) => {
+        const segment = p.zoom.segments.find((candidate) => candidate.id === id);
+        if (!segment) return;
+        if (which === "to") segment.to = point;
+        else {
+          segment.focus = point;
+          segment.scale = scale;
+        }
+      });
+    });
+  }
+
   private editBlurArea() {
     const blur = this.selectedItem<BlurRegion>();
     if (!blur || this.selected?.track !== "blurs") return;
@@ -1559,6 +1605,7 @@ export class Editor {
 
     toggle(ui.cursorVisible, (p, v) => (p.cursor.visible = v));
     toggle(ui.cursorReturn, (p, v) => (p.cursor.returnHome = v));
+    toggle(ui.cursorMotion, (p, v) => (p.cursor.motionBlur = v));
     toggle(ui.spotlight, (p, v) => (p.cursor.spotlight = v));
     range(ui.cursorShapeDelay, (p, v) => (p.cursor.shapeDelay = v));
     range(ui.clickSize, (p, v) => (p.cursor.clickSize = v));
@@ -1641,6 +1688,41 @@ export class Editor {
         if (segment) segment.mode = value as ZoomSegment["mode"];
       }),
     );
+    ui.lensShape.replaceChildren(
+      ...LENS_SHAPES.map((shape) => {
+        const label = document.createElement("label");
+        const input = document.createElement("input");
+        input.type = "radio";
+        input.name = "lens-shape";
+        input.value = shape.id;
+        label.append(input, shape.name);
+        return label;
+      }),
+    );
+    this.radios(ui.lensShape, (value) =>
+      this.change((p) => {
+        const segment = p.zoom.segments.find((candidate) => candidate.id === this.selected?.id);
+        if (segment) segment.shape = value as LensShape;
+      }),
+    );
+    this.radios(ui.zoomFocus, (value) => {
+      if (value === "point") this.editZoomArea("focus");
+      else
+        this.change((p) => {
+          const segment = p.zoom.segments.find((candidate) => candidate.id === this.selected?.id);
+          if (segment) segment.focus = segment.to = null;
+        });
+    });
+    ui.zoomArea.addEventListener("click", () => this.editZoomArea("focus"));
+    ui.zoomGlide.addEventListener("click", () => {
+      const zoom = this.selectedItem<ZoomSegment>();
+      if (zoom?.to) {
+        this.change((p) => {
+          const segment = p.zoom.segments.find((candidate) => candidate.id === zoom.id);
+          if (segment) segment.to = null;
+        });
+      } else this.editZoomArea("to");
+    });
     range(ui.noteSize, (p, v) => {
       const note = p.notes.find((candidate) => candidate.id === this.selected?.id);
       if (note) note.size = v;
@@ -2020,6 +2102,7 @@ export class Editor {
     for (const button of ui.cursorStyles.querySelectorAll<HTMLElement>(".choice")) button.setAttribute("aria-checked", String(button.dataset.value === project.cursor.style));
     this.setRadio(ui.cursorIdle, String(project.cursor.hideIdle));
     ui.cursorReturn.checked = project.cursor.returnHome;
+    ui.cursorMotion.checked = project.cursor.motionBlur;
     ui.cursorShapeDelay.value = String(project.cursor.shapeDelay);
     this.setRadio(ui.clickStyle, project.cursor.clickEffect ? project.cursor.clickStyle : "none");
     ui.clickSizeField.hidden = !project.cursor.clickEffect;
@@ -2092,6 +2175,13 @@ export class Editor {
         const zoom = selected as ZoomSegment;
         ui.zoomScale.value = String(zoom.scale);
         this.setRadio(ui.zoomMode, zoom.mode);
+        const lens = zoom.mode === "lens";
+        ui.zoomFocusField.hidden = lens;
+        ui.lensShapeField.hidden = !lens;
+        this.setRadio(ui.lensShape, zoom.shape ?? "circle");
+        this.setRadio(ui.zoomFocus, zoom.focus ? "point" : "cursor");
+        ui.zoomArea.hidden = ui.zoomGlide.hidden = !zoom.focus;
+        ui.zoomGlideLabel.textContent = zoom.to ? "Sem deslizar" : "Deslizar para outra área…";
       }
     }
 
@@ -2664,6 +2754,7 @@ export class Editor {
           tilt: 0,
           zoom: 1,
           lens: null,
+          motion: null,
           spotlight: 0,
           webcam: null,
           area: null,
