@@ -195,6 +195,33 @@ function recentClicks(clicks: CursorEvent[], t: number): FrameState["clicks"] {
   return result;
 }
 
+/** How long the screen takes to tilt into a stretch's angle, and back. */
+const TILT_EASE = 600;
+
+/**
+ * The screen's tilt at `t` (degrees): the video's own tilt, or a stretch's, eased in and out.
+ * Stretches that touch go straight from one angle to the next.
+ */
+function tiltAt(project: Project, t: number) {
+  const base = project.tilt;
+  const ranges = project.tilts ?? [];
+  const index = ranges.findIndex((range) => t >= range.start && t <= range.end);
+  if (index < 0) return base;
+  const range = ranges[index];
+  const before = ranges.find((other) => other !== range && Math.abs(other.end - range.start) < 1);
+  const after = ranges.find((other) => other !== range && Math.abs(other.start - range.end) < 1);
+  const ease = Math.min(TILT_EASE, (range.end - range.start) / 2);
+  if (ease <= 0) return range.angle;
+  const into = Math.min(1, (t - range.start) / ease);
+  // The next stretch eases in itself, so this one holds its angle to the end.
+  const out = after ? 1 : Math.min(1, (range.end - t) / ease);
+  if (into <= out) {
+    const from = before ? before.angle : base;
+    return from + (range.angle - from) * smooth(into);
+  }
+  return base + (range.angle - base) * smooth(out);
+}
+
 /** How long the webcam takes to move between its bubble and another layout. */
 const CAMERA_EASE = 400;
 /** In "Lado a lado", the screen keeps this share of the width; the camera takes the rest. */
@@ -364,7 +391,7 @@ export function frameState(scene: Scene, t: number, output: FrameState["output"]
       shadow: project.background.shadow,
     },
     frame: project.frame,
-    tilt: project.tilt,
+    tilt: tiltAt(project, t),
     zoom,
     focus,
     cursor: cursorState,

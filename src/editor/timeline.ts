@@ -1,7 +1,7 @@
 import type { MediaKey, Range } from "./project";
 import type { Span } from "./timemap";
 
-export type TrackKey = "cuts" | "speed" | "zoom" | "notes" | "blurs" | "camera";
+export type TrackKey = "cuts" | "speed" | "zoom" | "notes" | "blurs" | "camera" | "tilts";
 /** The cuts drawn on a media lane, selectable and editable like a track's items. */
 export type LaneCutKey = `${MediaKey}Cuts`;
 /** Anything with items that can be selected: an edit track or a lane's own cuts. */

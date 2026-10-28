@@ -414,6 +414,8 @@
                     <span>Inclinação 3D <output data-value-for="tilt"></output></span>
                     <input type="range" id="tilt" min="-20" max="20" step="1" />
                   </label>
+                  <p class="hint">Para o vídeo todo. Para inclinar só um trecho, use a faixa “3D” da timeline.</p>
+                  <button class="secondary wide" id="tilt-add"><svg class="i"><use href="#i-visual" /></svg>Inclinar um trecho aqui</button>
                   <button class="secondary wide" id="crop"><svg class="i"><use href="#i-crop" /></svg><span id="crop-label">Recortar área…</span></button>
                 </section>
                 <section class="cards">
@@ -550,6 +552,13 @@
                       <label><input type="radio" name="camera-layout" value="side" />Lado a lado</label>
                       <label><input type="radio" name="camera-layout" value="hidden" />Oculta</label>
                     </div>
+                  </div>
+                  <div class="selection-tilt" id="selection-tilt">
+                    <label class="slider">
+                      <span>Inclinação <output data-value-for="tilt-angle"></output></span>
+                      <input type="range" id="tilt-angle" min="-20" max="20" step="1" />
+                    </label>
+                    <p class="hint">A tela inclina no começo do trecho e volta no fim. 0° deixa a tela plana.</p>
                   </div>
                   <div class="selection-speed" id="selection-speed">
                     <div class="segmented small" id="speed-rate" role="radiogroup" aria-label="Velocidade">

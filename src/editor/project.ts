@@ -129,6 +129,11 @@ export const CAMERA_LAYOUTS: { id: CameraLayout; name: string }[] = [
   { id: "hidden", name: "Oculta" },
 ];
 
+/** A stretch where the screen tilts to `angle` degrees (0 is flat), easing in and back out. */
+export type TiltRange = Range & { angle: number };
+/** A new stretch tilts when the video is flat, and goes flat when the whole video is tilted. */
+export const newTiltAngle = (base: number) => (base ? 0 : 12);
+
 /** Recorded tracks that can be moved in time and cut on their own, without touching the screen. */
 export type MediaKey = "webcam" | "system" | "mic";
 export const MEDIA_KEYS: MediaKey[] = ["webcam", "system", "mic"];
@@ -179,6 +184,8 @@ export type Project = {
   frame: Frame;
   /** 3D tilt of the screen in degrees; 0 is flat. */
   tilt: number;
+  /** Stretches tilted differently from `tilt`. */
+  tilts: TiltRange[];
   cursor: {
     visible: boolean;
     size: number;
@@ -368,6 +375,7 @@ export function defaultProject(take: Take, events: CursorEvent[]): Project {
     background: { kind: "gradient", preset: "aurora", image: null, blur: 0, padding: 0.07, radius: 14, shadow: 0.6 },
     frame: "none",
     tilt: 0,
+    tilts: [],
     cursor: {
       visible: !take.cursorInVideo,
       size: 1.4,
@@ -429,6 +437,7 @@ export function normalizeProject(raw: unknown, fallback: Project): Project {
     // The laptop frame was removed; such projects show the recording without a frame.
     frame: value.frame === "window" || value.frame === "none" ? value.frame : fallback.frame,
     tilt: value.tilt ?? fallback.tilt,
+    tilts: list(value.tilts, []),
     cursor: { ...fallback.cursor, ...value.cursor },
     keys: { ...fallback.keys, ...value.keys },
     webcam: { ...fallback.webcam, ...value.webcam },

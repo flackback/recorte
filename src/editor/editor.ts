@@ -24,6 +24,7 @@ import {
   defaultProject,
   enhancedFile,
   insertRange,
+  newTiltAngle,
   isSplit,
   mergeCuts,
   mergeRange,
@@ -53,6 +54,7 @@ import {
   type Range,
   type Rect,
   type SpeedRange,
+  type TiltRange,
   type ZoomSegment,
 } from "./project";
 import { DirectEdit, type DirectTarget } from "./direct-edit";
@@ -68,7 +70,9 @@ const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as 
 
 const UNDO_LIMIT = 100;
 /** Default lengths of items added at the playhead, in ms. */
-const LENGTHS: Record<TrackKey, number> = { cuts: 1000, speed: 3000, zoom: 2000, notes: 3000, blurs: 3000, camera: 4000 };
+const LENGTHS: Record<TrackKey, number> = { cuts: 1000, speed: 3000, zoom: 2000, notes: 3000, blurs: 3000, camera: 4000, tilts: 4000 };
+/** How a tilt reads on the timeline and in the panel. */
+const tiltLabel = (angle: number) => (angle ? `3D ${angle}°` : "Plana");
 const NOTE_NAMES: Record<NoteKind, string> = { text: "Texto", arrow: "Seta", box: "Destaque" };
 /** Words for cutting a media lane on its own: the webcam hides, a sound goes silent. */
 const LANE_WORDS: Record<MediaKey, { here: string; range: string; done: string; title: string; restored: string; icon: string }> = {
@@ -284,6 +288,9 @@ export class Editor {
     webcamBorderColors: $("webcam-border-colors"),
     webcamShadow: $<HTMLInputElement>("webcam-shadow"),
     cameraAdd: $("camera-add"),
+    tiltAdd: $<HTMLButtonElement>("tilt-add"),
+    selectionTilt: $("selection-tilt"),
+    tiltAngle: $<HTMLInputElement>("tilt-angle"),
     selectionCamera: $("selection-camera"),
     cameraLayout: $("camera-layout"),
     volumeSystem: $<HTMLInputElement>("volume-system"),
@@ -733,6 +740,7 @@ export class Editor {
     else if (track === "notes") project.notes = items as Note[];
     else if (track === "zoom") project.zoom.segments = items as ZoomSegment[];
     else if (track === "camera") project.cameras = items as CameraRange[];
+    else if (track === "tilts") project.tilts = items as TiltRange[];
     else project.blurs = items as BlurRegion[];
   }
 
@@ -741,6 +749,7 @@ export class Editor {
     if (lane) return project.media[lane].cuts;
     if (track === "notes") return project.notes;
     if (track === "camera") return project.cameras;
+    if (track === "tilts") return project.tilts;
     return track === "cuts" ? project.cuts : track === "speed" ? project.speed : track === "zoom" ? project.zoom.segments : project.blurs;
   }
 
@@ -853,6 +862,7 @@ export class Editor {
       if (track === "speed") return { ...range, rate: DEFAULT_SPEED } as SpeedRange;
       if (track === "notes") return newNote(range);
       if (track === "camera") return { ...range, layout: this.nextLayout } as CameraRange;
+      if (track === "tilts") return { ...range, angle: newTiltAngle(project.tilt) } as TiltRange;
       if (track === "blurs") {
         const source = sceneSource(scene);
         const area = project.crop ?? { x: 0, y: 0, width: take.width, height: take.height };
@@ -1030,16 +1040,18 @@ export class Editor {
       systemCut: LANE_WORDS.system.restored,
       micCut: LANE_WORDS.mic.restored,
       camera: "A webcam voltou à bolha",
+      tilt: "Inclinação removida",
       cut: "Corte removido", split: "Divisão removida", zoom: "Zoom removido", lens: "Lente removida", blur: "Desfoque removido", speed: "Trecho voltou à velocidade normal", text: "Texto removido", arrow: "Seta removida", box: "Destaque removido" };
     toast(names[removed], { label: "Desfazer", run: () => this.undo() });
   }
 
   /** The kind of a selected item, for labels: cut, split, speed, zoom, lens, blur, a note kind or a lane cut. */
-  private selectedKind(selection: Selection): "cut" | "split" | "speed" | "zoom" | "lens" | "blur" | "camera" | NoteKind | `${MediaKey}Cut` {
+  private selectedKind(selection: Selection): "cut" | "split" | "speed" | "zoom" | "lens" | "blur" | "camera" | "tilt" | NoteKind | `${MediaKey}Cut` {
     if (!selection) return "cut";
     const lane = laneOfCut(selection.track);
     if (lane) return `${lane}Cut`;
     if (selection.track === "camera") return "camera";
+    if (selection.track === "tilts") return "tilt";
     if (selection.track === "cuts") {
       const cut = this.scene?.project.cuts.find((candidate) => candidate.id === selection.id);
       return cut && isSplit(cut) ? "split" : "cut";
@@ -1162,6 +1174,22 @@ export class Editor {
         { label: "Voltar à bolha", icon: "trash", danger: true, shortcut: "Delete", action: () => this.deleteSelected() },
       ];
     }
+    if (track === "tilts") {
+      const angle = (item as TiltRange).angle;
+      const set = (value: number) => this.change((p) => {
+        const range = p.tilts.find((candidate) => candidate.id === id);
+        if (range) range.angle = value;
+      });
+      return [
+        ...go,
+        "separator",
+        { label: "Inclinar para a esquerda", icon: "visual", disabled: angle < 0 ? "Já está assim" : false, action: () => set(-Math.abs(angle || 12)) },
+        { label: "Inclinar para a direita", icon: "visual", disabled: angle > 0 ? "Já está assim" : false, action: () => set(Math.abs(angle || 12)) },
+        { label: "Deixar plana neste trecho", icon: "visual", disabled: angle === 0 ? "Já está assim" : false, action: () => set(0) },
+        "separator",
+        { label: "Remover inclinação", icon: "trash", danger: true, shortcut: "Delete", action: () => this.deleteSelected() },
+      ];
+    }
     if (isSplit(item)) {
       return [
         { label: "Ir para a divisão", icon: "play", action: () => this.seek(item.start) },
@@ -1180,6 +1208,7 @@ export class Editor {
       zoom: { label: "Adicionar zoom aqui", icon: "zoom", shortcut: "Z", action: () => this.addAt("zoom", time) },
       blurs: { label: "Desfocar uma área aqui", icon: "blur", shortcut: "B", action: () => this.addAt("blurs", time) },
       camera: { label: "Webcam em tela cheia aqui", icon: "camera", action: () => this.addCameraAt("full", time) },
+      tilts: { label: "Inclinar a tela aqui", icon: "visual", action: () => this.addAt("tilts", time) },
     };
     const items: MenuItem[] = [add[track]];
     if (track === "cuts") items.push({ label: "Dividir aqui, sem cortar", icon: "cut", shortcut: "D", action: () => this.splitAt(time) });
@@ -1496,6 +1525,11 @@ export class Editor {
         return swatch;
       }),
     );
+    ui.tiltAdd.addEventListener("click", () => this.addAt("tilts", this.ui.video.currentTime * 1000));
+    range(ui.tiltAngle, (p, v) => {
+      const tilt = p.tilts.find((candidate) => candidate.id === this.selected?.id);
+      if (tilt) tilt.angle = v;
+    });
     for (const button of ui.cameraAdd.querySelectorAll<HTMLButtonElement>("button")) {
       button.addEventListener("click", () => this.addCameraAt(button.dataset.layout as CameraLayout, this.ui.video.currentTime * 1000));
     }
@@ -1932,7 +1966,7 @@ export class Editor {
       ? `${Math.round(value * 100)}%`
       : input.id === "radius" || input.id === "bg-blur"
         ? `${value}px`
-        : input.id === "tilt"
+        : input.id === "tilt" || input.id === "tilt-angle"
           ? `${value}°`
           : input.id === "webcam-border"
             ? `${(value * 100).toFixed(1).replace(".", ",")}%`
@@ -2014,8 +2048,8 @@ export class Editor {
     ui.selection.hidden = !selected;
     if (selected) {
       const kind = this.selectedKind(this.selected);
-      const titles = { webcamCut: LANE_WORDS.webcam.title, systemCut: LANE_WORDS.system.title, micCut: LANE_WORDS.mic.title, camera: "Câmera neste trecho", cut: "Corte selecionado", split: "Divisão selecionada", speed: "Trecho acelerado", zoom: "Zoom selecionado", lens: "Lente selecionada", blur: "Desfoque selecionado", text: "Texto selecionado", arrow: "Seta selecionada", box: "Destaque selecionado" };
-      const removes = { webcamCut: "Restaurar", systemCut: "Restaurar", micCut: "Restaurar", camera: "Voltar à bolha", cut: "Remover corte", split: "Remover divisão", speed: "Voltar à velocidade normal", zoom: "Remover zoom", lens: "Remover lente", blur: "Remover desfoque", text: "Remover texto", arrow: "Remover seta", box: "Remover destaque" };
+      const titles = { webcamCut: LANE_WORDS.webcam.title, systemCut: LANE_WORDS.system.title, micCut: LANE_WORDS.mic.title, camera: "Câmera neste trecho", tilt: "Inclinação neste trecho", cut: "Corte selecionado", split: "Divisão selecionada", speed: "Trecho acelerado", zoom: "Zoom selecionado", lens: "Lente selecionada", blur: "Desfoque selecionado", text: "Texto selecionado", arrow: "Seta selecionada", box: "Destaque selecionado" };
+      const removes = { webcamCut: "Restaurar", systemCut: "Restaurar", micCut: "Restaurar", camera: "Voltar à bolha", tilt: "Remover inclinação", cut: "Remover corte", split: "Remover divisão", speed: "Voltar à velocidade normal", zoom: "Remover zoom", lens: "Remover lente", blur: "Remover desfoque", text: "Remover texto", arrow: "Remover seta", box: "Remover destaque" };
       ui.selectionTitle.textContent = titles[kind];
       ui.selectionDeleteLabel.textContent = removes[kind];
       const seconds = (selected.end - selected.start) / 1000;
@@ -2035,6 +2069,8 @@ export class Editor {
       ui.selectionSpeed.hidden = kind !== "speed";
       ui.selectionCamera.hidden = kind !== "camera";
       if (kind === "camera") this.setRadio(ui.cameraLayout, (selected as CameraRange).layout);
+      ui.selectionTilt.hidden = kind !== "tilt";
+      if (kind === "tilt") ui.tiltAngle.value = String((selected as TiltRange).angle);
       ui.selectionNote.hidden = this.selected?.track !== "notes";
       if (this.selected?.track === "notes") {
         const note = selected as Note;
@@ -2118,7 +2154,7 @@ export class Editor {
       if (document.activeElement !== input) input.value = value;
     }
     ui.cardsDuration.value = String(intro.durationMs / 1000);
-    for (const input of [ui.cardsDuration, ui.noteSize, ui.silenceMin, ui.pauseKeep, ui.padding, ui.radius, ui.shadow, ui.tilt, ui.bgBlur, ui.cursorSize, ui.smoothing, ui.cursorShapeDelay, ui.clickSize, ui.transitionDuration, ui.zoomDefault, ui.zoomScale, ui.webcamSize, ui.webcamZoom, ui.webcamBorder, ui.webcamShadow, ui.volumeSystem, ui.volumeMic, ui.volumeMusic, ui.captionsSize]) {
+    for (const input of [ui.cardsDuration, ui.noteSize, ui.silenceMin, ui.pauseKeep, ui.padding, ui.radius, ui.shadow, ui.tilt, ui.tiltAngle, ui.bgBlur, ui.cursorSize, ui.smoothing, ui.cursorShapeDelay, ui.clickSize, ui.transitionDuration, ui.zoomDefault, ui.zoomScale, ui.webcamSize, ui.webcamZoom, ui.webcamBorder, ui.webcamShadow, ui.volumeSystem, ui.volumeMic, ui.volumeMusic, ui.captionsSize]) {
       this.showValue(input);
     }
     this.video.volume = Math.min(1, project.audio.system);
@@ -2796,6 +2832,7 @@ export class Editor {
           },
         },
         { key: "blurs", label: "Desfoque", color: "#bf5af2", items: project.blurs, text: () => "Desfocado" },
+        { key: "tilts", label: "3D", color: "#ff375f", items: project.tilts, text: (item) => tiltLabel((item as TiltRange).angle) },
         // Only with a webcam: where it leaves its bubble.
         ...(take.webcam
           ? [{ key: "camera" as const, label: "Câmera", color: "#5ac8fa", items: project.cameras, text: (item: Range) => CAMERA_LAYOUTS.find((layout) => layout.id === (item as CameraRange).layout)?.name ?? "" }]

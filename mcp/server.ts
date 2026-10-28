@@ -405,6 +405,31 @@ tool(
     }),
 );
 
+tool(
+  "set_tilt",
+  "Inclina a tela em 3D só num trecho (angle em graus, de -20 a 20; negativo inclina para o outro lado; 0 deixa plana). A tela inclina no começo do trecho e volta no fim, animada. Trechos que se tocam passam direto de um ângulo ao outro. Para inclinar o vídeo todo, use update_settings (tilt). Com remove, tira os trechos indicados (ids) ou todos.",
+  {
+    take: takeArg,
+    start: ms("Início do trecho").optional(),
+    end: ms("Fim do trecho").optional(),
+    angle: z.number().min(-20).max(20).optional().describe("Graus. 0 é plana."),
+    remove: z.array(z.string()).optional().describe("Ids de trechos a tirar (de get_take, campo tilts)."),
+    removeAll: z.boolean().optional(),
+  },
+  ({ take, start, end, angle, remove, removeAll }) =>
+    edit(take, (project, { take: meta }) => {
+      project.tilts ??= [];
+      if (removeAll) project.tilts = [];
+      if (remove?.length) project.tilts = project.tilts.filter((range) => !remove.includes(range.id));
+      if (start === undefined && end === undefined) return removeAll || remove?.length ? "inclinações removidas" : "nada mudou";
+      if (start === undefined || end === undefined || angle === undefined) throw new Error("Informe start, end e angle.");
+      const range = span(meta, start, end);
+      // A new stretch replaces the ones it overlaps.
+      project.tilts = [...project.tilts.filter((other) => other.end <= range.start || other.start >= range.end), { id: newId(), ...range, angle: Math.round(angle) }].sort((a, b) => a.start - b.start);
+      return `inclinação de ${Math.round(angle)}° de ${seconds(range.start)} a ${seconds(range.end)}`;
+    }),
+);
+
 const MEDIA_NAMES: Record<MediaKey, string> = { webcam: "webcam", system: "som do sistema", mic: "microfone" };
 
 tool(
