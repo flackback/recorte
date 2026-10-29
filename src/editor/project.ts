@@ -83,7 +83,17 @@ export const CURSOR_STYLES: { id: CursorStyle; name: string }[] = [
   { id: "melon", name: "Melancia" },
   { id: "rocket", name: "Foguete" },
 ];
-export type ClickStyle = "ring" | "liquid";
+export type ClickStyle = "ring" | "liquid" | "pulse" | "confetti";
+export const CLICK_STYLES: ClickStyle[] = ["ring", "liquid", "pulse", "confetti"];
+/** How long each click effect plays, in ms; preview and export both read it. */
+export const CLICK_DURATIONS: Record<ClickStyle, number> = { ring: 450, liquid: 450, pulse: 520, confetti: 650 };
+/** Ready-made cursor smoothing values, from following the mouse exactly to gliding lazily. */
+export const CURSOR_MOVEMENTS: { id: string; name: string; smoothing: number }[] = [
+  { id: "precise", name: "Preciso", smoothing: 0 },
+  { id: "subtle", name: "Sutil", smoothing: 0.35 },
+  { id: "smooth", name: "Suave", smoothing: 0.6 },
+  { id: "fluid", name: "Fluido", smoothing: 0.85 },
+];
 export type ClickTone = "tick" | "soft" | "mech";
 export const CLICK_TONES: { id: ClickTone; name: string }[] = [
   { id: "tick", name: "Clique" },
@@ -205,6 +215,10 @@ export type Project = {
     visible: boolean;
     size: number;
     smoothing: number;
+    /** 0–1 springy overshoot when the cursor stops or turns; 0 settles without bouncing. */
+    bounce: number;
+    /** 0–1 lean of the sprite into its direction of travel; 1 tilts up to about 25°. */
+    tilt: number;
     style: CursorStyle;
     /** Fades the cursor out after it rests this long (ms); 0 never hides it. */
     hideIdle: number;
@@ -218,6 +232,8 @@ export type Project = {
     clickStyle: ClickStyle;
     clickSize: number;
     spotlight: boolean;
+    /** Keeps everything but a soft circle around the cursor dimmed and blurred, all the time. */
+    focus: boolean;
   };
   keys: { visible: boolean; mode: "shortcuts" | "all" };
   webcam: {
@@ -480,6 +496,8 @@ export function defaultProject(take: Take, events: CursorEvent[]): Project {
       visible: !take.cursorInVideo,
       size: 1.4,
       smoothing: 0.6,
+      bounce: 0,
+      tilt: 0,
       style: "classic",
       hideIdle: 0,
       returnHome: false,
@@ -489,6 +507,7 @@ export function defaultProject(take: Take, events: CursorEvent[]): Project {
       clickStyle: "ring",
       clickSize: 1,
       spotlight: false,
+      focus: false,
     },
     keys: { visible: Boolean(take.keys), mode: "shortcuts" },
     webcam: { visible: Boolean(take.webcam), size: 0.22, corner: "br", shape: "circle", position: null, mirror: true, border: 0.012, borderColor: "#ffffff", shadow: 0.35, zoom: 1, background: "original", light: 0, warmth: 0 },
@@ -519,6 +538,21 @@ function normalizeMedia(raw: unknown): Record<MediaKey, MediaEdit> {
   return media;
 }
 
+const fraction = (value: unknown, fallback: number) => (typeof value === "number" && Number.isFinite(value) ? Math.max(0, Math.min(1, value)) : fallback);
+
+/** Older projects lack the newer cursor fields; out-of-range values fall back to the defaults. */
+function normalizeCursor(raw: Partial<Project["cursor"]> | undefined, fallback: Project["cursor"]): Project["cursor"] {
+  const cursor = { ...fallback, ...raw };
+  return {
+    ...cursor,
+    smoothing: fraction(cursor.smoothing, fallback.smoothing),
+    bounce: fraction(cursor.bounce, fallback.bounce),
+    tilt: fraction(cursor.tilt, fallback.tilt),
+    clickStyle: CLICK_STYLES.includes(cursor.clickStyle) ? cursor.clickStyle : fallback.clickStyle,
+    focus: typeof cursor.focus === "boolean" ? cursor.focus : fallback.focus,
+  };
+}
+
 /** Fills in anything an older or hand-edited `project.json` lacks. */
 export function normalizeProject(raw: unknown, fallback: Project): Project {
   if (!raw || typeof raw !== "object") return fallback;
@@ -539,7 +573,7 @@ export function normalizeProject(raw: unknown, fallback: Project): Project {
     frame: value.frame === "window" || value.frame === "none" ? value.frame : fallback.frame,
     tilt: value.tilt ?? fallback.tilt,
     tilts: list(value.tilts, []),
-    cursor: { ...fallback.cursor, ...value.cursor },
+    cursor: normalizeCursor(value.cursor, fallback.cursor),
     keys: { ...fallback.keys, ...value.keys },
     webcam: {
       ...fallback.webcam,

@@ -1,12 +1,11 @@
 import type { CursorEvent, KeyEvent, Take, Word } from "../types";
 import { cameraPath, cursorPath, RawPath, SpringPath, zoomAt } from "./motion";
-import { LENS_SHAPES, BACKGROUNDS, cardLength, sourceSize, type Cut, type Note, type Project, type TitleCard, type TransitionKind, type ZoomSegment } from "./project";
+import { LENS_SHAPES, BACKGROUNDS, CLICK_DURATIONS, cardLength, sourceSize, type Cut, type Note, type Project, type TitleCard, type TransitionKind, type ZoomSegment } from "./project";
 import type { CursorKind, FrameState } from "./renderer";
 import { TimeMap, type Span } from "./timemap";
 
 /** How long the cursor shrinks when it clicks, in ms. */
 const PRESS = 160;
-const CLICK_EFFECT = 450;
 const SPOTLIGHT_HOLD = 1400;
 const SPOTLIGHT_FADE = 300;
 const KEY_HOLD = 1300;
@@ -94,7 +93,7 @@ export function createScene(take: Take, project: Project, events: CursorEvent[],
     keys,
     words,
     raw,
-    cursor: cursorPath(raw, take.durationMs, project.cursor.smoothing),
+    cursor: cursorPath(raw, take.durationMs, project.cursor.smoothing, project.cursor.bounce),
     camera: cameraPath(raw, take.durationMs),
     time: new TimeMap(project),
   };
@@ -235,13 +234,28 @@ function spotlightAt(left: number[], t: number) {
   return Math.max(0, 1 - (age - SPOTLIGHT_HOLD) / SPOTLIGHT_FADE);
 }
 
-/** Clicks whose effect is still playing at `t`, oldest first. */
-function recentClicks(clicks: CursorEvent[], t: number): FrameState["clicks"] {
+/** Clicks whose effect (lasting `length` ms) is still playing at `t`, oldest first. */
+function recentClicks(clicks: CursorEvent[], t: number, length: number): FrameState["clicks"] {
   let first = lastAt(clicks, t) + 1;
-  while (first > 0 && t - clicks[first - 1].t < CLICK_EFFECT) first--;
+  while (first > 0 && t - clicks[first - 1].t < length) first--;
   const result: FrameState["clicks"] = [];
-  for (let i = first; i < clicks.length && clicks[i].t <= t; i++) result.push({ x: clicks[i].x, y: clicks[i].y, age: t - clicks[i].t });
+  for (let i = first; i < clicks.length && clicks[i].t <= t; i++) result.push({ x: clicks[i].x, y: clicks[i].y, age: t - clicks[i].t, at: clicks[i].t });
   return result;
+}
+
+/** The cursor leans this far (radians) at full tilt, like a kite pulled by its tip. */
+const MAX_LEAN = (25 * Math.PI) / 180;
+/** Velocity is averaged over this long (ms), so the lean swings smoothly instead of jittering. */
+const LEAN_WINDOW = 120;
+
+/** Lean of the cursor at `t` (radians, positive clockwise) from how fast it moves sideways. */
+function cursorLean(scene: Scene, t: number, amount: number) {
+  if (amount <= 0) return 0;
+  const now = scene.cursor.at(t)[0];
+  const before = scene.cursor.at(Math.max(0, t - LEAN_WINDOW))[0];
+  // Screen widths per second; about one gives most of the lean.
+  const speed = ((now - before) / LEAN_WINDOW) * 1000 / Math.max(1, scene.take.width);
+  return MAX_LEAN * Math.tanh(speed * 1.2) * amount;
 }
 
 /** How long the screen takes to tilt into a stretch's angle, and back. */
@@ -428,6 +442,7 @@ export function frameState(scene: Scene, t: number, output: FrameState["output"]
         kind: returning ? "arrow" : cursorKindAt(stableShapes(scene), t),
         style: project.cursor.style,
         opacity,
+        angle: returning ? 0 : cursorLean(scene, t, project.cursor.tilt),
       };
     }
   }
@@ -453,11 +468,13 @@ export function frameState(scene: Scene, t: number, output: FrameState["output"]
     zoom,
     focus,
     cursor: cursorState,
-    clicks: project.cursor.clickEffect ? recentClicks(clicks, t) : [],
+    clicks: project.cursor.clickEffect ? recentClicks(clicks, t, CLICK_DURATIONS[project.cursor.clickStyle]) : [],
     clickStyle: project.cursor.clickStyle,
     clickSize: project.cursor.clickSize,
     transition: transitionAt(scene, t),
     spotlight: project.cursor.spotlight && !raw.empty ? spotlightAt(leftClicks(scene), t) * 0.85 : 0,
+    // Focus follows the cursor, so it fades out with it when it hides.
+    focusMode: project.cursor.focus && cursorState ? cursorState.opacity : 0,
     lens: lens && tip ? { x: tip[0], y: tip[1], magnification: lens.magnification, amount: lens.amount, shape: lens.shape } : null,
     motion: cursorState && project.cursor.motionBlur ? cursorMotion(scene, t, cursorState) : null,
     blurs: project.blurs.filter((blur) => t >= blur.start && t <= blur.end),

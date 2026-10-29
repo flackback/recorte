@@ -5,7 +5,7 @@
  */
 
 import type { Matte } from "./matte";
-import { CURSOR_STYLES, TRANSITIONS, type ClickStyle, type CursorStyle, type Frame, type Rect, type TransitionKind, type WebcamBackground } from "./project";
+import { CLICK_DURATIONS, CLICK_STYLES, CURSOR_STYLES, TRANSITIONS, type ClickStyle, type CursorStyle, type Frame, type Rect, type TransitionKind, type WebcamBackground } from "./project";
 
 export type CursorKind = "arrow" | "hand" | "text";
 
@@ -22,15 +22,18 @@ export type FrameState = {
   /** Camera zoom (1 = whole frame) and the point it centers on, in video pixels. */
   zoom: number;
   focus: [number, number];
-  /** Cursor tip in video pixels; `scale` is relative to a normal-size cursor. */
-  cursor: { x: number; y: number; scale: number; kind: CursorKind; style: CursorStyle; opacity: number } | null;
-  clicks: { x: number; y: number; age: number }[];
+  /** Cursor tip in video pixels; `scale` is relative to a normal-size cursor; `angle` turns it around the tip (radians, clockwise). */
+  cursor: { x: number; y: number; scale: number; kind: CursorKind; style: CursorStyle; opacity: number; angle: number } | null;
+  /** Clicks still playing: where, how long ago, and when they happened (source ms, which seeds confetti). */
+  clicks: { x: number; y: number; age: number; at: number }[];
   clickStyle: ClickStyle;
   clickSize: number;
   /** Effect across a cut: `amount` rises to 1 at the seam and falls back; `phase` is -1 before it, 1 after. */
   transition: { kind: TransitionKind; amount: number; phase: number } | null;
   /** 0–1 dimming of everything but the area around the cursor. */
   spotlight: number;
+  /** 0–1 strength of focus mode: a steady dim and blur of everything but a soft circle around the cursor. */
+  focusMode: number;
   /** Magnifier at a point (video pixels); `amount` 0–1 animates it in and out; `shape` blends two LENS_SHAPES indexes. */
   lens: { x: number; y: number; magnification: number; amount: number; shape: [number, number, number] } | null;
   /** Cursor travel over the last frame (video pixels), for motion blur. */
@@ -68,7 +71,8 @@ export type Layout = { content: Rect; box: Rect };
 
 const MAX_CLICKS = 8;
 const MAX_BLURS = 4;
-const CLICK_DURATION = 450;
+/** Specks in a confetti burst. */
+const CONFETTI = 14;
 /** Each cursor sprite covers this many video pixels at scale 1, with the hotspot at its TIP. */
 const CURSOR_BOX = 40;
 const CURSOR_TIPS: Record<CursorKind, [number, number]> = { arrow: [8, 6], hand: [15, 7], text: [20, 20] };
@@ -104,10 +108,10 @@ struct Uniforms {
   extra: vec4f,     // blur count, blur strength (uv), webcam shadow, webcam mirrored
   cam_style: vec4f, // webcam border rgb, border width (output px)
   webcam_uv: vec4f, // bubble uv -> camera uv: scale xy, offset xy
-  look: vec4f,      // cursor style row, click style (0 ring, 1 liquid), unused, transition kind (0 none)
+  look: vec4f,      // cursor style row, click style (0 ring, 1 liquid, 2 pulse, 3 confetti), focus mode, transition kind (0 none)
   trans: vec4f,     // transition amount, unused x3
   lens2: vec4f,     // lens shape from, shape to, morph (0–1), unused
-  motion: vec4f,    // cursor travel over the last frame (composed px), unused x2
+  motion: vec4f,    // cursor travel over the last frame (composed px), cursor lean (radians), unused
   blurs: array<vec4f, ${MAX_BLURS}>,
   clicks: array<vec4f, ${MAX_CLICKS}>,
 }
@@ -139,6 +143,23 @@ fn rounded_rect(p: vec2f, half: vec2f, r: f32) -> f32 {
 fn sd_rect(p: vec2f, rect: vec4f, r: f32) -> f32 {
   let half = rect.zw * 0.5;
   return rounded_rect(p - rect.xy - half, half, min(r, min(half.x, half.y)));
+}
+
+// Where a composed-space point falls on the cursor sprite (0–1), with the sprite turned around its tip.
+fn cursor_uv(p: vec2f) -> vec2f {
+  let a = u.motion.z;
+  let d = p - u.cursor.zw;
+  let turned = vec2f(cos(a) * d.x + sin(a) * d.y, cos(a) * d.y - sin(a) * d.x);
+  return (u.cursor.zw + turned - u.cursor.xy) / u.misc.y;
+}
+
+// Three 0–1 random numbers for speck j of a confetti burst: the same every frame and in export.
+fn speck_rand(seed: f32, j: i32) -> vec3f {
+  var x = u32(seed) * 64u + u32(j);
+  x = x * 747796405u + 2891336453u;
+  x = ((x >> ((x >> 28u) + 4u)) ^ x) * 277803737u;
+  x = (x >> 22u) ^ x;
+  return vec3f(f32(x & 1023u), f32((x >> 10u) & 1023u), f32((x >> 20u) & 1023u)) / 1023.0;
 }
 
 // Where a composed-space point lands on the tilted screen plane, in flat composed coordinates.
@@ -401,7 +422,8 @@ fn fs(@builtin(position) frag: vec4f) -> @location(0) vec4f {
     }
     // Liquid clicks: a ripple that bends the picture as it spreads.
     let clicks = i32(u.misc.z);
-    let liquid = u.look.y > 0.5;
+    let click_style = u.look.y;
+    let liquid = click_style > 0.5 && click_style < 1.5;
     if (liquid) {
       for (var i = 0; i < clicks; i++) {
         let c = u.clicks[i];
@@ -433,11 +455,53 @@ fn fs(@builtin(position) frag: vec4f) -> @location(0) vec4f {
       screen = mix(screen, screen * 0.35, u.misc.w * smoothstep(r * 0.85, r * 1.15, dc));
     }
 
-    // Click rings (or the light catching a liquid ripple).
+    // Focus mode: everything but a soft circle around the cursor stays dimmed and slightly blurred.
+    let focus = u.look.z;
+    if (focus > 0.0) {
+      let r = min(u.content.z, u.content.w) * 0.15 + u.misc.y;
+      let away = focus * smoothstep(r * 0.7, r * 1.4, length(q - u.cursor.zw));
+      if (away > 0.001) {
+        let spread = min(u.content.z, u.content.w) * 0.004;
+        var sum = screen;
+        for (var k = 0; k < 8; k++) {
+          let a = f32(k) * 0.785398;
+          sum += sample_content((sp + vec2f(cos(a), sin(a)) * spread - u.content.xy) / u.content.zw);
+        }
+        screen = mix(screen, sum / 9.0 * 0.42, away);
+      }
+    }
+
+    // Click effects: rings, the light catching a liquid ripple, a swelling disc or a burst of confetti.
     for (var i = 0; i < clicks; i++) {
       let c = u.clicks[i];
       let ring = abs(length(q - c.xy) - c.z);
-      if (liquid) {
+      if (click_style > 2.5) {
+        // Specks fly out, slow down, fall and spin, then fade. w packs the seed with the progress.
+        let seed = floor(c.w);
+        let t = c.w - seed;
+        if (length(q - c.xy) < c.z * 2.2) {
+          let fly = 1.0 - pow(1.0 - t, 2.5);
+          let fade = 1.0 - smoothstep(0.55, 1.0, t);
+          for (var j = 0; j < ${CONFETTI}; j++) {
+            let h = speck_rand(seed, j);
+            let a = (f32(j) + h.x * 0.8) / ${CONFETTI}.0 * 6.28318;
+            let pos = c.xy + (vec2f(cos(a), sin(a) - 0.35) * (0.3 + 0.75 * h.y * h.y) * fly + vec2f(0.0, (0.7 + 0.6 * h.z) * t * t)) * c.z;
+            let spin = h.z * 6.28318 + t * (5.0 + 7.0 * h.y) * (h.x - 0.5) * 2.0;
+            let d = q - pos;
+            let local = vec2f(cos(spin) * d.x + sin(spin) * d.y, cos(spin) * d.y - sin(spin) * d.x);
+            let half = c.z * vec2f(0.09, 0.05) * (1.0 - 0.35 * t);
+            let dist = rounded_rect(local, half, half.y * 0.4);
+            let hue = 0.55 + 0.45 * cos(6.28318 * (h.x * 0.9 + vec3f(0.0, 0.33, 0.67)));
+            screen = mix(screen, hue, clamp(0.5 - dist / px, 0.0, 1.0) * fade);
+          }
+        }
+      } else if (click_style > 1.5) {
+        // A soft white disc that swells and fades, with a faint dark rim so it reads on white screens.
+        let dist = length(q - c.xy);
+        let rim = smoothstep(c.z * 0.55, c.z, dist) * (1.0 - smoothstep(c.z, c.z * 1.3, dist));
+        screen = mix(screen, vec3f(0.0), rim * c.w * 0.12);
+        screen = mix(screen, vec3f(1.0), (1.0 - smoothstep(c.z * 0.5, c.z, dist)) * c.w * 0.5);
+      } else if (liquid) {
         // Lit on the inside of the swell, shaded on the outside, so it reads on light and dark screens.
         let band = c.z * 0.35 + px;
         let side = (length(q - c.xy) - c.z) / band;
@@ -462,7 +526,7 @@ fn fs(@builtin(position) frag: vec4f) -> @location(0) vec4f {
         var sum = vec4f(0.0);
         for (var k = 1; k <= ${MOTION_SAMPLES}; k++) {
           let back = travel * (f32(k) / ${MOTION_SAMPLES}.0);
-          let cuv = (q + back - u.cursor.xy) / u.misc.y;
+          let cuv = cursor_uv(q + back);
           if (all(cuv >= vec2f(0.0)) && all(cuv <= vec2f(1.0))) {
             let c = textureSampleLevel(cursor_tex, smp, vec2f((slot + cuv.x) / ${CURSOR_SLOTS.length}.0, (row + cuv.y) / ${CURSOR_STYLES.length}.0), 0.0);
             let fade = 1.0 - f32(k) / f32(${MOTION_SAMPLES} + 1);
@@ -473,7 +537,7 @@ fn fs(@builtin(position) frag: vec4f) -> @location(0) vec4f {
         let trail = min(sum.a, 1.0) * 0.6;
         if (sum.a > 0.001) { screen = mix(screen, sum.rgb / sum.a, trail * u.misc.x); }
       }
-      let cuv = (q - u.cursor.xy) / u.misc.y;
+      let cuv = cursor_uv(q);
       if (all(cuv >= vec2f(0.0)) && all(cuv <= vec2f(1.0))) {
         let c = textureSampleLevel(cursor_tex, smp, vec2f((slot + cuv.x) / ${CURSOR_SLOTS.length}.0, (row + cuv.y) / ${CURSOR_STYLES.length}.0), 0.0);
         screen = mix(screen, c.rgb, c.a * u.misc.x);
@@ -849,13 +913,15 @@ export class Renderer {
       vec(19, [...state.lens.shape, 0]);
     }
     // The sprite is smeared over at most a few cursor widths.
+    let trail = [0, 0];
     if (state.motion && cursor) {
       const limit = cursorBox * 1.6;
       const [dx, dy] = [state.motion[0] * k, state.motion[1] * k];
       const length = Math.hypot(dx, dy);
       const s = length > limit ? limit / length : 1;
-      vec(20, [dx * s, dy * s, 0, 0]);
+      trail = [dx * s, dy * s];
     }
+    vec(20, [...trail, cursor?.angle ?? 0, 0]);
     if (webcamReady) {
       const w = state.webcam!.rect;
       vec(10, [w.x, w.y, w.width, w.height]);
@@ -885,19 +951,29 @@ export class Renderer {
       vec(FIXED_VECS + index, [rect.x / video.width, rect.y / video.height, (rect.x + rect.width) / video.width, (rect.y + rect.height) / video.height]),
     );
 
-    const liquid = state.clickStyle === "liquid";
-    const clicks = state.clicks.filter((click) => click.age >= 0 && click.age < CLICK_DURATION).slice(-MAX_CLICKS);
+    const clickStyle = state.clickStyle;
+    const clickLength = CLICK_DURATIONS[clickStyle];
+    const clicks = state.clicks.filter((click) => click.age >= 0 && click.age < clickLength).slice(-MAX_CLICKS);
     clicks.forEach((click, index) => {
-      const progress = click.age / CLICK_DURATION;
+      const progress = click.age / clickLength;
       const [x, y] = toComposed(click.x, click.y);
       const eased = 1 - Math.pow(1 - progress, 3);
-      const reach = liquid ? 8 + 46 * eased : 6 + 26 * eased;
-      vec(FIXED_VECS + MAX_BLURS + index, [x, y, reach * k * (cursor?.scale ?? 1) * state.clickSize, 1 - progress]);
+      const unit = k * (cursor?.scale ?? 1) * state.clickSize;
+      // Confetti needs its progress and a per-click seed instead of a radius and fade: the burst
+      // size goes in z, the seed's whole part plus the progress in w.
+      const seed = Math.abs(Math.round(click.x * 7 + click.y * 13 + click.at)) % 997;
+      const values =
+        clickStyle === "confetti"
+          ? [x, y, 70 * unit, seed + Math.min(progress, 0.999)]
+          : clickStyle === "pulse"
+            ? [x, y, (5 + 23 * eased) * unit, Math.pow(1 - progress, 1.5)]
+            : [x, y, (clickStyle === "liquid" ? 8 + 46 * eased : 6 + 26 * eased) * unit, 1 - progress];
+      vec(FIXED_VECS + MAX_BLURS + index, values);
     });
     u[22] = clicks.length;
     const styleRow = cursor ? Math.max(0, CURSOR_STYLES.findIndex((candidate) => candidate.id === cursor.style)) : 0;
     const transitionKind = transition ? TRANSITIONS.findIndex((candidate) => candidate.id === transition.kind) + 1 : 0;
-    vec(17, [styleRow, liquid ? 1 : 0, 0, transitionKind]);
+    vec(17, [styleRow, CLICK_STYLES.indexOf(clickStyle), state.focusMode * 0.85, transitionKind]);
     vec(18, [transition?.amount ?? 0, 0, 0, 0]);
 
     this.device.queue.writeBuffer(this.uniformBuffer, 0, u);

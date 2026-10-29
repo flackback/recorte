@@ -465,10 +465,27 @@
                     <span>Tamanho <output data-value-for="cursor-size"></output></span>
                     <input type="range" id="cursor-size" min="0.6" max="3" step="0.05" />
                   </label>
+                  <span class="field-label">Movimento</span>
+                  <div class="segmented small" id="cursor-movement" role="radiogroup" aria-label="Movimento do cursor">
+                    <label><input type="radio" name="cursor-movement" value="precise" />Preciso</label>
+                    <label><input type="radio" name="cursor-movement" value="subtle" />Sutil</label>
+                    <label><input type="radio" name="cursor-movement" value="smooth" />Suave</label>
+                    <label><input type="radio" name="cursor-movement" value="fluid" />Fluido</label>
+                  </div>
                   <label class="slider">
                     <span>Suavização <output data-value-for="cursor-smoothing"></output></span>
                     <input type="range" id="cursor-smoothing" min="0" max="1" step="0.05" />
                   </label>
+                  <label class="slider">
+                    <span>Quique <output data-value-for="cursor-bounce"></output></span>
+                    <input type="range" id="cursor-bounce" min="0" max="1" step="0.05" />
+                  </label>
+                  <p class="hint">O cursor passa um pouco do ponto e volta com elasticidade ao parar ou virar.</p>
+                  <label class="slider">
+                    <span>Inclinação <output data-value-for="cursor-tilt"></output></span>
+                    <input type="range" id="cursor-tilt" min="0" max="1" step="0.05" />
+                  </label>
+                  <p class="hint">O cursor se inclina na direção em que anda, como uma pipa puxada pela ponta.</p>
                   <span class="field-label">Esconder quando parado</span>
                   <div class="segmented small" id="cursor-idle" role="radiogroup" aria-label="Esconder quando parado">
                     <label><input type="radio" name="cursor-idle" value="0" />Nunca</label>
@@ -479,6 +496,8 @@
                   </div>
                   <label class="switch"><input type="checkbox" id="cursor-motion" /><span>Rastro de movimento</span></label>
                   <p class="hint">Borra o cursor quando ele anda rápido, como numa câmera.</p>
+                  <label class="switch"><input type="checkbox" id="cursor-focus" /><span>Modo foco</span></label>
+                  <p class="hint">Escurece e desfoca a tela, menos um círculo em volta do cursor.</p>
                   <label class="switch"><input type="checkbox" id="cursor-return" /><span>Voltar ao início no fim</span></label>
                   <p class="hint">O cursor desliza de volta ao ponto onde começou, para vídeos em loop.</p>
                   <label class="slider">
@@ -494,6 +513,8 @@
                     <label><input type="radio" name="click-style" value="none" />Nenhum</label>
                     <label><input type="radio" name="click-style" value="ring" />Anel</label>
                     <label><input type="radio" name="click-style" value="liquid" />Líquido</label>
+                    <label><input type="radio" name="click-style" value="pulse" />Pulso</label>
+                    <label><input type="radio" name="click-style" value="confetti" />Confete</label>
                   </div>
                   <label class="slider" id="click-size-field">
                     <span>Tamanho do efeito <output data-value-for="click-size"></output></span>

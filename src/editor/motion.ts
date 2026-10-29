@@ -40,14 +40,15 @@ export class RawPath {
 }
 
 /**
- * A critically damped spring chasing the raw path, run once over the whole take so any time can
- * be looked up instantly while scrubbing. `omega` (rad/s) sets how tightly it follows.
+ * A spring chasing the raw path, run once over the whole take so any time can be looked up
+ * instantly while scrubbing. `omega` (rad/s) sets how tightly it follows; `damping` is the damping
+ * ratio: 1 settles without overshoot, lower values overshoot and wobble before settling.
  */
 export class SpringPath {
   private xs: Float32Array;
   private ys: Float32Array;
 
-  constructor(raw: RawPath, durationMs: number, omega: number) {
+  constructor(raw: RawPath, durationMs: number, omega: number, damping = 1) {
     const count = Math.max(2, Math.ceil((durationMs / 1000) * RATE) + 2);
     this.xs = new Float32Array(count);
     this.ys = new Float32Array(count);
@@ -60,8 +61,8 @@ export class SpringPath {
       this.ys[i] = y;
       for (let step = 1; step <= SUBSTEPS; step++) {
         const [tx, ty] = raw.at(((i + step / SUBSTEPS) / RATE) * 1000);
-        vx += (omega * omega * (tx - x) - 2 * omega * vx) * dt;
-        vy += (omega * omega * (ty - y) - 2 * omega * vy) * dt;
+        vx += (omega * omega * (tx - x) - 2 * damping * omega * vx) * dt;
+        vy += (omega * omega * (ty - y) - 2 * damping * omega * vy) * dt;
         x += vx * dt;
         y += vy * dt;
       }
@@ -79,11 +80,15 @@ export class SpringPath {
   }
 }
 
-/** Maps the smoothing slider (0–1) to spring stiffness; 0 returns the raw path untouched. */
-export function cursorPath(raw: RawPath, durationMs: number, smoothing: number): { at(t: number): [number, number] } {
-  if (smoothing <= 0.001) return raw;
+/**
+ * Maps the smoothing slider (0–1) to spring stiffness and bounce (0–1) to a lower damping ratio,
+ * so the cursor overshoots its stops and turns; with neither, the raw path is returned untouched.
+ */
+export function cursorPath(raw: RawPath, durationMs: number, smoothing: number, bounce = 0): { at(t: number): [number, number] } {
+  if (smoothing <= 0.001 && bounce <= 0.001) return raw;
   const omega = 70 * Math.pow(10 / 70, smoothing);
-  return new SpringPath(raw, durationMs, omega);
+  // The square root makes the middle of the slider already visibly springy.
+  return new SpringPath(raw, durationMs, omega, 1 - 0.55 * Math.sqrt(Math.min(1, Math.max(0, bounce))));
 }
 
 /** The camera drifts after the cursor much more lazily than the cursor itself. */

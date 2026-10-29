@@ -20,6 +20,7 @@ import {
   autoZooms,
   BACKGROUNDS,
   CAMERA_LAYOUTS,
+  CURSOR_MOVEMENTS,
   CURSOR_STYLES,
   DEFAULT_TRANSITION,
   defaultProject,
@@ -246,6 +247,10 @@ export class Editor {
     cursorVisible: $<HTMLInputElement>("cursor-visible"),
     cursorSize: $<HTMLInputElement>("cursor-size"),
     smoothing: $<HTMLInputElement>("cursor-smoothing"),
+    cursorMovement: $("cursor-movement"),
+    cursorBounce: $<HTMLInputElement>("cursor-bounce"),
+    cursorTilt: $<HTMLInputElement>("cursor-tilt"),
+    cursorFocus: $<HTMLInputElement>("cursor-focus"),
     cursorStyles: $("cursor-styles"),
     cursorIdle: $("cursor-idle"),
     cursorReturn: $<HTMLInputElement>("cursor-return"),
@@ -821,9 +826,7 @@ export class Editor {
     if (!scene) return;
     const before = scene.project;
     scene.project = JSON.parse(json);
-    if (scene.project.cursor.smoothing !== before.cursor.smoothing) {
-      scene.cursor = cursorPath(scene.raw, scene.take.durationMs, scene.project.cursor.smoothing);
-    }
+    if (scene.project.cursor.smoothing !== before.cursor.smoothing || scene.project.cursor.bounce !== before.cursor.bounce) this.rebuildCursorPath();
     refreshTime(scene);
     if (this.selected && !this.trackItems(scene.project, this.selected.track).some((item) => item.id === this.selected!.id)) this.selected = null;
     this.syncInspector();
@@ -1651,16 +1654,29 @@ export class Editor {
     });
     ui.smoothing.addEventListener("input", () => this.showValue(ui.smoothing));
     ui.smoothing.addEventListener("change", () => {
-      const scene = this.scene;
-      if (!scene) return;
+      if (!this.scene) return;
       this.change((p) => (p.cursor.smoothing = Number(ui.smoothing.value)));
-      scene.cursor = cursorPath(scene.raw, scene.take.durationMs, scene.project.cursor.smoothing);
+      this.rebuildCursorPath();
     });
+    this.radios(ui.cursorMovement, (value) => {
+      const movement = CURSOR_MOVEMENTS.find((candidate) => candidate.id === value);
+      if (!movement || !this.scene) return;
+      this.change((p) => (p.cursor.smoothing = movement.smoothing));
+      this.rebuildCursorPath();
+    });
+    ui.cursorBounce.addEventListener("input", () => this.showValue(ui.cursorBounce));
+    ui.cursorBounce.addEventListener("change", () => {
+      if (!this.scene) return;
+      this.change((p) => (p.cursor.bounce = Number(ui.cursorBounce.value)));
+      this.rebuildCursorPath();
+    });
+    range(ui.cursorTilt, (p, v) => (p.cursor.tilt = v));
 
     toggle(ui.cursorVisible, (p, v) => (p.cursor.visible = v));
     toggle(ui.cursorReturn, (p, v) => (p.cursor.returnHome = v));
     toggle(ui.cursorMotion, (p, v) => (p.cursor.motionBlur = v));
     toggle(ui.spotlight, (p, v) => (p.cursor.spotlight = v));
+    toggle(ui.cursorFocus, (p, v) => (p.cursor.focus = v));
     range(ui.cursorShapeDelay, (p, v) => (p.cursor.shapeDelay = v));
     range(ui.clickSize, (p, v) => (p.cursor.clickSize = v));
     this.radios(ui.cursorIdle, (value) => this.change((p) => (p.cursor.hideIdle = Number(value))));
@@ -2094,6 +2110,12 @@ export class Editor {
     }
   }
 
+  /** Reruns the cursor's spring after smoothing or bounce changed. */
+  private rebuildCursorPath() {
+    const scene = this.scene;
+    if (scene) scene.cursor = cursorPath(scene.raw, scene.take.durationMs, scene.project.cursor.smoothing, scene.project.cursor.bounce);
+  }
+
   private showValue(input: HTMLInputElement) {
     const min = Number(input.min || 0);
     const max = Number(input.max || 1);
@@ -2101,7 +2123,7 @@ export class Editor {
     const output = document.querySelector<HTMLElement>(`[data-value-for="${input.id}"]`);
     if (!output) return;
     const value = Number(input.value);
-    const percent = ["padding", "shadow", "cursor-smoothing", "webcam-size", "webcam-shadow", "volume-system", "volume-mic", "volume-music"];
+    const percent = ["padding", "shadow", "cursor-smoothing", "cursor-bounce", "cursor-tilt", "webcam-size", "webcam-shadow", "volume-system", "volume-mic", "volume-music"];
     output.textContent = percent.includes(input.id)
       ? `${Math.round(value * 100)}%`
       : input.id === "webcam-light" || input.id === "webcam-warmth"
@@ -2151,7 +2173,7 @@ export class Editor {
     ui.cursorNote.textContent = take.cursorInVideo
       ? "O cursor foi gravado dentro do vídeo, então mostrar, tamanho e suavização não se aplicam. Grave com “Cursor no vídeo” desligado para usá-los."
       : "Esta gravação não tem dados do mouse.";
-    const cursorControls = [ui.cursorVisible, ui.cursorSize, ui.smoothing, ui.cursorReturn, ui.cursorShapeDelay, ...ui.cursorIdle.querySelectorAll("input"), ...ui.cursorStyles.querySelectorAll("button")];
+    const cursorControls = [ui.cursorVisible, ui.cursorSize, ui.smoothing, ui.cursorBounce, ui.cursorTilt, ui.cursorFocus, ...ui.cursorMovement.querySelectorAll("input"), ui.cursorReturn, ui.cursorShapeDelay, ...ui.cursorIdle.querySelectorAll("input"), ...ui.cursorStyles.querySelectorAll("button")];
     for (const control of cursorControls) (control as HTMLInputElement).disabled = !redrawable;
     const hasClicks = scene.clicks.length > 0;
     for (const control of [ui.spotlight, ui.clickSize, ...ui.clickStyle.querySelectorAll("input"), ...ui.clickTone.querySelectorAll("input")]) control.disabled = !hasClicks;
@@ -2159,6 +2181,11 @@ export class Editor {
     ui.cursorVisible.checked = project.cursor.visible;
     ui.cursorSize.value = String(project.cursor.size);
     ui.smoothing.value = String(project.cursor.smoothing);
+    // A preset lights up only while the slider sits exactly on its value.
+    this.setRadio(ui.cursorMovement, CURSOR_MOVEMENTS.find((movement) => Math.abs(movement.smoothing - project.cursor.smoothing) < 0.001)?.id ?? "");
+    ui.cursorBounce.value = String(project.cursor.bounce);
+    ui.cursorTilt.value = String(project.cursor.tilt);
+    ui.cursorFocus.checked = project.cursor.focus;
     for (const button of ui.cursorStyles.querySelectorAll<HTMLElement>(".choice")) button.setAttribute("aria-checked", String(button.dataset.value === project.cursor.style));
     this.setRadio(ui.cursorIdle, String(project.cursor.hideIdle));
     ui.cursorReturn.checked = project.cursor.returnHome;
@@ -2309,7 +2336,7 @@ export class Editor {
       if (document.activeElement !== input) input.value = value;
     }
     ui.cardsDuration.value = String(intro.durationMs / 1000);
-    for (const input of [ui.cardsDuration, ui.noteSize, ui.silenceMin, ui.pauseKeep, ui.padding, ui.radius, ui.shadow, ui.tilt, ui.tiltAngle, ui.bgBlur, ui.cursorSize, ui.smoothing, ui.cursorShapeDelay, ui.clickSize, ui.transitionDuration, ui.zoomDefault, ui.zoomScale, ui.webcamSize, ui.webcamZoom, ui.webcamLight, ui.webcamWarmth, ui.webcamBorder, ui.webcamShadow, ui.volumeSystem, ui.volumeMic, ui.volumeMusic, ui.captionsSize]) {
+    for (const input of [ui.cardsDuration, ui.noteSize, ui.silenceMin, ui.pauseKeep, ui.padding, ui.radius, ui.shadow, ui.tilt, ui.tiltAngle, ui.bgBlur, ui.cursorSize, ui.smoothing, ui.cursorBounce, ui.cursorTilt, ui.cursorShapeDelay, ui.clickSize, ui.transitionDuration, ui.zoomDefault, ui.zoomScale, ui.webcamSize, ui.webcamZoom, ui.webcamLight, ui.webcamWarmth, ui.webcamBorder, ui.webcamShadow, ui.volumeSystem, ui.volumeMic, ui.volumeMusic, ui.captionsSize]) {
       this.showValue(input);
     }
     this.video.volume = Math.min(1, project.audio.system);
@@ -2894,6 +2921,7 @@ export class Editor {
           lens: null,
           motion: null,
           spotlight: 0,
+          focusMode: 0,
           webcam: null,
           area: null,
           overlay: false,
