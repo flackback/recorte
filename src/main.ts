@@ -17,7 +17,8 @@ import { CamLook, MicPanel, OptionsPanel, SoundPanel } from "./cardpanels";
 import { joinPath, levelFill, takeName, type Levels, type Take } from "./types";
 
 type MonitorInfo = { index: number; name: string; width: number; height: number; primary: boolean; x: number; y: number; refreshRate: number };
-type WindowInfo = { hwnd: string; title: string; process: string; width: number; height: number };
+/** `page`: a browser whose page can be recorded without its tabs and address bar. */
+type WindowInfo = { hwnd: string; title: string; process: string; width: number; height: number; page: boolean };
 type Sources = { monitors: MonitorInfo[]; windows: WindowInfo[] };
 /** `error` is set when the capture failed (disk full, encoder error, monitor unplugged). */
 type Status = { recording: boolean; elapsedMs: number; frames: number; closed: boolean; paused: boolean; error?: string | null };
@@ -45,6 +46,8 @@ const ui = {
   record: $<HTMLButtonElement>("record"),
   recordLabel: $("record-label"),
   sidebarToggle: $<HTMLButtonElement>("sidebar-toggle"),
+  pageOnly: $<HTMLInputElement>("page-only"),
+  pageOnlyRow: $("page-only-row"),
   railRecord: $<HTMLButtonElement>("rail-record"),
   railTakes: $<HTMLButtonElement>("rail-takes"),
   railExpand: $<HTMLButtonElement>("rail-expand"),
@@ -154,6 +157,7 @@ function loadSettings() {
       ["showCursor", ui.showCursor],
       ["countdown", ui.countdown],
       ["drawZoom", ui.drawZoom],
+      ["pageOnly", ui.pageOnly],
     ] as const) {
       if (typeof saved[key] === "boolean") input.checked = saved[key];
     }
@@ -183,6 +187,7 @@ function saveSettings() {
         showCursor: ui.showCursor.checked,
         countdown: ui.countdown.checked,
         drawZoom: ui.drawZoom.checked,
+        pageOnly: ui.pageOnly.checked,
         fps: selectedFps(),
       }),
     );
@@ -416,7 +421,7 @@ function renderWindows() {
       const title = document.createElement("strong");
       title.textContent = window.title;
       const app = document.createElement("span");
-      app.textContent = `${window.process.replace(/\.exe$/i, "")} · ${window.width}×${window.height}`;
+      app.textContent = `${window.process.replace(/\.exe$/i, "")} · ${window.width}×${window.height}${window.page ? " · navegador" : ""}`;
       button.append(title, app);
       button.addEventListener("click", () => {
         picker.window = window.hwnd;
@@ -475,6 +480,10 @@ function renderPicker() {
   ui.monitorMap.hidden = showWindows;
   ui.areaHint.hidden = picker.kind !== "a";
   ui.windowList.hidden = !showWindows;
+  // A browser can be recorded without its tabs and address bar.
+  const browser = showWindows && picker.sources.windows.some((window) => window.hwnd === picker.window && window.page);
+  ui.pageOnlyRow.hidden = !browser;
+  ui.pageOnly.disabled = recording;
   if (showWindows) renderWindows();
   else renderMonitors();
 }
@@ -909,6 +918,7 @@ async function startRecording() {
     keystrokes: ui.keystrokes.checked,
     drawZoom: ui.drawZoom.checked,
     crop,
+    pageOnly: source.kind === "window" && !ui.pageOnlyRow.hidden && ui.pageOnly.checked,
     fps: selectedFps(),
   };
   recordedMonitor = source.kind === "monitor" ? (source as { index: number }).index : picker.monitor || 1;
@@ -1773,6 +1783,7 @@ function updateOptionsSummary() {
 for (const control of [ui.keystrokes, ui.showCursor, ui.countdown, ui.drawZoom, ui.fps]) control.addEventListener("change", updateOptionsSummary);
 const optionsPanel = new OptionsPanel(ui.optionsOpen, ui.optionsBody);
 ui.optionsOpen.addEventListener("click", () => optionsPanel.toggle());
+ui.pageOnly.addEventListener("change", saveSettings);
 try {
   setSidebarCollapsed(localStorage.getItem(SIDEBAR_KEY) === "1");
 } catch {

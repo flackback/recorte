@@ -1,9 +1,10 @@
 use serde::Serialize;
-use windows::Win32::Foundation::{HWND, RECT};
+use windows::Win32::Foundation::{HWND, LPARAM, RECT};
+use windows::core::BOOL;
 use windows::Win32::Graphics::Dwm::{DWMWA_EXTENDED_FRAME_BOUNDS, DwmGetWindowAttribute};
 use windows::Win32::Graphics::Gdi::{GetMonitorInfoW, HMONITOR, MONITORINFO};
 use windows::Win32::UI::HiDpi::{DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, SetThreadDpiAwarenessContext};
-use windows::Win32::UI::WindowsAndMessaging::MONITORINFOF_PRIMARY;
+use windows::Win32::UI::WindowsAndMessaging::{EnumChildWindows, GetClassNameW, GetWindowRect, IsWindowVisible, MONITORINFOF_PRIMARY};
 use windows_capture::monitor::Monitor;
 use windows_capture::window::Window;
 
@@ -32,6 +33,8 @@ pub struct WindowInfo {
     pub process: String,
     pub width: i32,
     pub height: i32,
+    /// A browser whose page area is known, so it can be recorded without tabs and address bar.
+    pub page: bool,
 }
 
 #[derive(Serialize)]
@@ -66,6 +69,41 @@ pub fn window_rect(window: &Window) -> Option<RECT> {
     }
     .ok()?;
     Some(rect)
+}
+
+/// Chromium browsers. Apps built on Chromium (Electron, WebView2) have the same page window but no
+/// tabs or address bar to leave out.
+const BROWSERS: [&str; 7] = ["chrome.exe", "msedge.exe", "brave.exe", "opera.exe", "opera_gx.exe", "vivaldi.exe", "chromium.exe"];
+
+/// The page area of a Chromium browser window (Chrome, Edge, Brave, Opera…), on the desktop: the
+/// largest visible web contents child window. None for other windows, and for Firefox, which draws
+/// its pages without one.
+pub fn page_rect(window: &Window) -> Option<RECT> {
+    let process = window.process_name().ok()?.to_lowercase();
+    if !BROWSERS.contains(&process.as_str()) {
+        return None;
+    }
+    unsafe extern "system" fn visit(child: HWND, found: LPARAM) -> BOOL {
+        let mut class = [0u16; 64];
+        let length = unsafe { GetClassNameW(child, &mut class) } as usize;
+        if String::from_utf16_lossy(&class[..length]) == "Chrome_RenderWidgetHostHWND" && unsafe { IsWindowVisible(child) }.as_bool() {
+            let mut rect = RECT::default();
+            if unsafe { GetWindowRect(child, &mut rect) }.is_ok() {
+                let best = unsafe { &mut *(found.0 as *mut Option<RECT>) };
+                let area = |rect: &RECT| (rect.right - rect.left) as i64 * (rect.bottom - rect.top) as i64;
+                if best.as_ref().is_none_or(|best| area(&rect) > area(best)) {
+                    *best = Some(rect);
+                }
+            }
+        }
+        true.into()
+    }
+    let mut found: Option<RECT> = None;
+    unsafe {
+        let _ = EnumChildWindows(Some(HWND(window.as_raw_hwnd())), Some(visit), LPARAM(&raw mut found as isize));
+    }
+    // A sliver (a hidden tab's leftover, a tiny popup) is not the page.
+    found.filter(|rect| rect.right - rect.left >= 100 && rect.bottom - rect.top >= 100)
 }
 
 pub fn list() -> anyhow::Result<Sources> {
@@ -103,6 +141,7 @@ pub fn list() -> anyhow::Result<Sources> {
                 process: window.process_name().unwrap_or_default(),
                 width: rect.right - rect.left,
                 height: rect.bottom - rect.top,
+                page: page_rect(window).is_some(),
             })
         })
         .filter(|window| window.width > 0 && window.height > 0)

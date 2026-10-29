@@ -2753,6 +2753,12 @@ input[type="range"]:focus-visible {
   text-overflow: ellipsis;
 }
 
+/* Under the window list: a browser recorded without its tabs and address bar. */
+.page-only {
+  padding: 2px 4px;
+  font-size: 12.5px;
+}
+
 .window-list {
   display: flex;
   flex-direction: column;

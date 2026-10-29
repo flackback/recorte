@@ -79,6 +79,9 @@ pub struct StartOptions {
     /// Area picked before recording, in video pixels; becomes the take's initial crop.
     #[serde(default)]
     pub crop: Option<CropRect>,
+    /// For a browser window: only its page, without tabs and address bar (as the initial crop).
+    #[serde(default)]
+    pub page_only: bool,
     pub fps: u32,
 }
 
@@ -455,6 +458,17 @@ pub struct Recording {
     paused_since: Option<f64>,
 }
 
+/// `page` (on the desktop) as a crop of the recorded window `window`, in video pixels, with even
+/// sides; None when they hardly overlap.
+fn page_crop(window: &RECT, page: &RECT, width: u32, height: u32) -> Option<CropRect> {
+    let x = (page.left - window.left).clamp(0, width as i32);
+    let y = (page.top - window.top).clamp(0, height as i32);
+    let right = (page.right - window.left).clamp(0, width as i32);
+    let bottom = (page.bottom - window.top).clamp(0, height as i32);
+    let (crop_width, crop_height) = ((right - x) & !1, (bottom - y) & !1);
+    (crop_width >= 100 && crop_height >= 100).then_some(CropRect { x, y, width: crop_width, height: crop_height })
+}
+
 struct Target {
     kind: &'static str,
     name: String,
@@ -491,6 +505,12 @@ impl Recording {
         if width < 2 || height < 2 {
             bail!("área de captura vazia");
         }
+        // A browser's page: the whole window is recorded, and the crop leaves out its tabs and
+        // address bar (the editor can still widen it).
+        let crop = match (&item, options.page_only) {
+            (Item::Window(window), true) => sources::page_rect(window).and_then(|page| page_crop(&target.rect, &page, width, height)).or(options.crop),
+            _ => options.crop,
+        };
 
         let created = chrono::Local::now();
         let (id, dir) = create_take_dir(root, &format!("take-{}", created.format("%Y%m%d-%H%M%S")))?;
@@ -591,7 +611,7 @@ impl Recording {
             webcam_offset_ms: None,
             thumbnail: None,
             title: None,
-            crop: options.crop,
+            crop,
             pauses: Vec::new(),
             markers: Vec::new(),
             start_hns: 0,
