@@ -393,6 +393,12 @@
                 <section>
                   <h3>Fundo</h3>
                   <div class="swatches" id="bg-presets"></div>
+                  <span class="field-label">Animado</span>
+                  <div class="swatches" id="bg-animated"></div>
+                  <label class="slider" id="bg-speed-row" hidden>
+                    <span>Velocidade do movimento <output data-value-for="bg-speed"></output></span>
+                    <input type="range" id="bg-speed" min="0.25" max="3" step="0.25" />
+                  </label>
                   <div class="row">
                     <button class="secondary wide" id="bg-image"><svg class="i"><use href="#i-image" /></svg>Usar imagem…</button>
                     <input type="file" id="bg-file" accept="image/*" hidden />

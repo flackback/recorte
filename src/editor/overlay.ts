@@ -1,4 +1,4 @@
-import { BACKGROUNDS, type Note, type Project } from "./project";
+import { backgroundColors, type Note, type Project } from "./project";
 import type { CardView, OverlayContent } from "./composition";
 
 type Text = OverlayContent;
@@ -27,7 +27,7 @@ export class OverlayPainter {
   /** Returns true when the canvas changed and must be uploaded again. */
   paint(text: Text, project: Project, card: CardView | null = null): boolean {
     const notes = text.notes.map(({ note, opacity }) => [note.kind, note.x, note.y, note.width, note.height, note.text, note.color, note.size, note.direction, Math.round(opacity * 20)]);
-    const cardKey = card && [card.card.title, card.card.subtitle, Math.round(card.opacity * 30), project.background.preset];
+    const cardKey = card && [card.card.title, card.card.subtitle, Math.round(card.opacity * 30), project.background.kind, project.background.preset, project.background.animation];
     const key = JSON.stringify([text.keys, text.caption?.words.map((word) => word.i), text.caption?.current, project.captions, notes, cardKey, this.canvas.width, this.canvas.height]);
     if (key === this.lastKey) return false;
     this.lastKey = key;
@@ -195,9 +195,9 @@ function drawNote(context: OffscreenCanvasRenderingContext2D, note: Note, width:
   context.textAlign = "start";
 }
 
-/** A full-frame title screen on the style's gradient. */
+/** A full-frame title screen on the style's gradient (an animated background's colors, held still). */
 function drawCard(context: OffscreenCanvasRenderingContext2D, card: CardView["card"], project: Project, width: number, height: number, blur = 1) {
-  const preset = BACKGROUNDS.find((background) => background.id === project.background.preset) ?? BACKGROUNDS[0];
+  const preset = backgroundColors(project.background);
   const angle = (preset.angle * Math.PI) / 180;
   const reach = (Math.abs(Math.cos(angle)) * width + Math.abs(Math.sin(angle)) * height) / 2;
   const gradient = context.createLinearGradient(width / 2 - Math.cos(angle) * reach, height / 2 - Math.sin(angle) * reach, width / 2 + Math.cos(angle) * reach, height / 2 + Math.sin(angle) * reach);

@@ -10,6 +10,8 @@ import {
   absorbSplits,
   ASPECTS,
   autoZooms,
+  ANIMATED_BACKGROUNDS,
+  ANIMATED_SPEED,
   BACKGROUNDS,
   cardLength,
   defaultProject,
@@ -216,6 +218,7 @@ tool(
       available: {
         styles: STYLES.map(({ id, name, description }) => ({ id, name, description })),
         backgrounds: BACKGROUNDS.map(({ id, name }) => ({ id, name })),
+        animatedBackgrounds: ANIMATED_BACKGROUNDS.map(({ id, name }) => ({ id, name })),
         aspects: ASPECTS.map(({ id }) => id),
         speeds: SPEEDS,
         noteColors: NOTE_COLORS,
@@ -894,7 +897,12 @@ const settingsShape = {
   crop: z.object(areaShape).nullable().optional().describe("Parte da gravação que fica no vídeo, em pixels. null mostra tudo."),
   background: z
     .object({
-      preset: z.enum(BACKGROUNDS.map((background) => background.id) as [string, ...string[]]).optional().describe("Fundo em degradê. Escolher um preset troca um fundo de imagem pelo degradê."),
+      preset: z.enum(BACKGROUNDS.map((background) => background.id) as [string, ...string[]]).optional().describe("Fundo em degradê. Escolher um preset troca um fundo de imagem ou animado pelo degradê."),
+      animation: z
+        .enum(ANIMATED_BACKGROUNDS.map((background) => background.id) as [string, ...string[]])
+        .optional()
+        .describe("Fundo animado, que se move sem parar: aurora-live (Aurora viva), lava (Lava), waves (Ondas), grain (Granulado) ou nebula (Nebulosa). Troca o degradê ou a imagem por ele."),
+      speed: z.number().min(ANIMATED_SPEED.min).max(ANIMATED_SPEED.max).optional().describe("Velocidade do fundo animado: 1 é normal (um ciclo lento a cada 12 s), 0,25 bem lento, 3 rápido."),
       padding: z.number().min(0).max(0.2).optional().describe("Margem em volta do vídeo, de 0 a 0,2."),
       radius: z.number().min(0).max(48).optional().describe("Cantos arredondados, em px."),
       shadow: z.number().min(0).max(1).optional(),
@@ -982,6 +990,7 @@ tool(
         const background = defined(settings.background);
         project.background = { ...project.background, ...background };
         if (background.preset) project.background.kind = "gradient";
+        if (background.animation) project.background.kind = "animated";
         changes.push("fundo");
       }
       if (settings.frame) {

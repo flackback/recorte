@@ -18,6 +18,7 @@ import {
   absorbSplits,
   ASPECTS,
   autoZooms,
+  ANIMATED_BACKGROUNDS,
   BACKGROUNDS,
   CAMERA_LAYOUTS,
   CURSOR_MOVEMENTS,
@@ -230,6 +231,9 @@ export class Editor {
     tabs: [...document.querySelectorAll<HTMLButtonElement>(".tabs [data-tab]")],
     panels: [...document.querySelectorAll<HTMLElement>(".tab-panel")],
     backgrounds: $("bg-presets"),
+    animatedBackgrounds: $("bg-animated"),
+    bgSpeedRow: $("bg-speed-row"),
+    bgSpeed: $<HTMLInputElement>("bg-speed"),
     styles: $("styles"),
     bgImage: $<HTMLButtonElement>("bg-image"),
     bgFile: $<HTMLInputElement>("bg-file"),
@@ -1548,6 +1552,23 @@ export class Editor {
         return swatch;
       }),
     );
+    ui.animatedBackgrounds.replaceChildren(
+      ...ANIMATED_BACKGROUNDS.map((preset) => {
+        const swatch = document.createElement("button");
+        swatch.className = "swatch animated";
+        swatch.title = `${preset.name} (animado)`;
+        swatch.setAttribute("aria-label", `Fundo animado ${preset.name}`);
+        swatch.dataset.id = preset.id;
+        swatch.style.backgroundImage = `radial-gradient(circle at 30% 30%, ${preset.accent}, transparent 60%), linear-gradient(${preset.angle + 90}deg, ${preset.from}, ${preset.to})`;
+        swatch.addEventListener("click", () =>
+          this.change((project) => {
+            project.background.kind = "animated";
+            project.background.animation = preset.id;
+          }),
+        );
+        return swatch;
+      }),
+    );
     ui.styles.replaceChildren(
       ...STYLES.map((style) => {
         const card = document.createElement("button");
@@ -1602,6 +1623,7 @@ export class Editor {
       input.addEventListener("change", () => this.change((project) => apply(project, input.checked)));
 
     range(ui.padding, (p, v) => (p.background.padding = v));
+    range(ui.bgSpeed, (p, v) => (p.background.speed = v));
     range(ui.radius, (p, v) => (p.background.radius = v));
     range(ui.shadow, (p, v) => (p.background.shadow = v));
     range(ui.tilt, (p, v) => (p.tilt = v));
@@ -2136,6 +2158,8 @@ export class Editor {
             ? `${(value * 100).toFixed(1).replace(".", ",")}%`
             : input.id === "silence-min" || input.id === "pause-keep" || input.id === "cards-duration" || input.id === "transition-duration"
               ? `${value.toFixed(1).replace(".", ",")} s`
+              : input.id === "bg-speed"
+                ? `${String(value).replace(".", ",")}×`
               : input.id === "cursor-shape-delay"
                 ? value
                   ? `${value} ms`
@@ -2157,8 +2181,14 @@ export class Editor {
     for (const swatch of ui.backgrounds.querySelectorAll<HTMLElement>(".swatch")) {
       swatch.classList.toggle("selected", gradient && swatch.dataset.id === project.background.preset);
     }
-    ui.bgImage.classList.toggle("selected", !gradient);
-    ui.bgBlurRow.hidden = gradient;
+    const animated = project.background.kind === "animated";
+    for (const swatch of ui.animatedBackgrounds.querySelectorAll<HTMLElement>(".swatch")) {
+      swatch.classList.toggle("selected", animated && swatch.dataset.id === project.background.animation);
+    }
+    ui.bgSpeedRow.hidden = !animated;
+    ui.bgSpeed.value = String(project.background.speed);
+    ui.bgImage.classList.toggle("selected", project.background.kind === "image");
+    ui.bgBlurRow.hidden = project.background.kind !== "image";
     ui.bgBlur.value = String(project.background.blur);
     ui.padding.value = String(project.background.padding);
     ui.radius.value = String(project.background.radius);
@@ -2336,7 +2366,7 @@ export class Editor {
       if (document.activeElement !== input) input.value = value;
     }
     ui.cardsDuration.value = String(intro.durationMs / 1000);
-    for (const input of [ui.cardsDuration, ui.noteSize, ui.silenceMin, ui.pauseKeep, ui.padding, ui.radius, ui.shadow, ui.tilt, ui.tiltAngle, ui.bgBlur, ui.cursorSize, ui.smoothing, ui.cursorBounce, ui.cursorTilt, ui.cursorShapeDelay, ui.clickSize, ui.transitionDuration, ui.zoomDefault, ui.zoomScale, ui.webcamSize, ui.webcamZoom, ui.webcamLight, ui.webcamWarmth, ui.webcamBorder, ui.webcamShadow, ui.volumeSystem, ui.volumeMic, ui.volumeMusic, ui.captionsSize]) {
+    for (const input of [ui.cardsDuration, ui.noteSize, ui.silenceMin, ui.pauseKeep, ui.padding, ui.radius, ui.shadow, ui.tilt, ui.tiltAngle, ui.bgBlur, ui.bgSpeed, ui.cursorSize, ui.smoothing, ui.cursorBounce, ui.cursorTilt, ui.cursorShapeDelay, ui.clickSize, ui.transitionDuration, ui.zoomDefault, ui.zoomScale, ui.webcamSize, ui.webcamZoom, ui.webcamLight, ui.webcamWarmth, ui.webcamBorder, ui.webcamShadow, ui.volumeSystem, ui.volumeMic, ui.volumeMusic, ui.captionsSize]) {
       this.showValue(input);
     }
     this.video.volume = Math.min(1, project.audio.system);

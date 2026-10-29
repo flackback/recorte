@@ -15,7 +15,17 @@ export type FrameState = {
   /** Full recording size, and the part of it kept (video pixels). */
   video: { width: number; height: number };
   crop: Rect | null;
-  background: { kind: "gradient" | "image"; from: string; to: string; angle: number; padding: number; radius: number; shadow: number };
+  background: {
+    kind: "gradient" | "image" | "animated";
+    from: string;
+    to: string;
+    angle: number;
+    /** Pattern drawn from time (ANIMATED_BACKGROUNDS style), its third color, the fraction of its cycle and a frame count for grain. */
+    animation: { style: number; accent: string; phase: number; tick: number } | null;
+    padding: number;
+    radius: number;
+    shadow: number;
+  };
   frame: Frame;
   /** Degrees of 3D tilt; 0 is flat. */
   tilt: number;
@@ -84,7 +94,7 @@ const cursorTip = (style: CursorStyle, kind: CursorKind): [number, number] =>
 const SPRITE = 256;
 const LENS_RADIUS = 120;
 /** Uniform vectors before the blur and click arrays. */
-const FIXED_VECS = 21;
+const FIXED_VECS = 23;
 const UNIFORM_VECS = FIXED_VECS + MAX_BLURS + MAX_CLICKS;
 /** Samples along the cursor's path for motion blur. */
 const MOTION_SAMPLES = 10;
@@ -112,6 +122,8 @@ struct Uniforms {
   trans: vec4f,     // transition amount, unused x3
   lens2: vec4f,     // lens shape from, shape to, morph (0–1), unused
   motion: vec4f,    // cursor travel over the last frame (composed px), cursor lean (radians), unused
+  anim: vec4f,      // animated background style (0 none), cycle phase (0–1), grain frame, unused
+  anim_c: vec4f,    // animated background third color rgb, unused
   blurs: array<vec4f, ${MAX_BLURS}>,
   clicks: array<vec4f, ${MAX_CLICKS}>,
 }
@@ -221,6 +233,99 @@ fn fbm(p: vec2f) -> f32 {
     a *= 0.5;
   }
   return v;
+}
+
+// Integer hash for grain: steady at any coordinate size, unlike the sin hash.
+fn ihash(x: u32) -> u32 {
+  var v = x * 747796405u + 2891336453u;
+  v = ((v >> ((v >> 28u) + 4u)) ^ v) * 277803737u;
+  return (v >> 22u) ^ v;
+}
+
+fn grain(p: vec2f, tick: f32) -> f32 {
+  let q = vec2u(max(floor(p), vec2f(0.0)));
+  return f32(ihash(q.x + ihash(q.y + ihash(u32(tick))))) / 4294967295.0 - 0.5;
+}
+
+// Animated backgrounds, drawn from the cycle angle with whole-number harmonics only, so the end of
+// a cycle meets its start. c is centered and divided by the short side (aspect-correct).
+fn animated_bg(p: vec2f, size: vec2f) -> vec3f {
+  let style = u.anim.x;
+  let th = u.anim.y * 6.2831853;
+  let c = (p - size * 0.5) / min(size.x, size.y);
+  let a = u.bg_from.rgb;
+  let b = u.bg_to.rgb;
+  let k = u.anim_c.rgb;
+  var color: vec3f;
+  if (style < 1.5) {
+    // Aurora viva: a mesh gradient of four color points drifting on slow loops.
+    let w = c + 0.05 * vec2f(sin(c.y * 3.0 + th), cos(c.x * 3.0 - th));
+    let p1 = vec2f(-0.55, -0.3) + 0.28 * vec2f(cos(th), sin(2.0 * th));
+    let p2 = vec2f(0.55, -0.25) + 0.25 * vec2f(sin(th + 1.3), cos(th + 0.4));
+    let p3 = vec2f(0.1, 0.35) + 0.3 * vec2f(cos(2.0 * th + 2.0), sin(th + 0.5));
+    let p4 = vec2f(-0.5, 0.45) + 0.22 * vec2f(sin(th + 4.0), cos(2.0 * th + 1.0));
+    let w1 = exp(-dot(w - p1, w - p1) * 4.0);
+    let w2 = exp(-dot(w - p2, w - p2) * 4.0);
+    let w3 = exp(-dot(w - p3, w - p3) * 4.0);
+    let w4 = exp(-dot(w - p4, w - p4) * 4.0);
+    let base = mix(a, b, 0.5) * 0.45;
+    color = (a * w1 + b * w2 + k * w3 + mix(a, k, 0.5) * w4 + base * 0.15) / (w1 + w2 + w3 + w4 + 0.15);
+  } else if (style < 2.5) {
+    // Lava: soft blobs rising and sinking over a dark gradient.
+    var field = 0.0;
+    for (var i = 0; i < 6; i++) {
+      let f = f32(i);
+      let center = vec2f(
+        (f - 2.5) * 0.3 + 0.12 * sin(th * f32(1 + i % 2) + f * 1.7),
+        0.45 * sin(th + f * 2.1) + 0.08 * cos(2.0 * th + f),
+      );
+      let r = 0.13 + 0.04 * sin(f * 3.1);
+      let d = c - center;
+      field += r * r / (dot(d, d) + 0.0004);
+    }
+    let ground = mix(a, mix(a, b, 0.35), clamp(c.y + 0.5, 0.0, 1.0));
+    let blob = mix(b, k, clamp(0.5 - c.y * 0.9, 0.0, 1.0));
+    color = ground + mix(a, b, 0.5) * 0.25 * min(field, 2.0) * 0.25;
+    color = mix(color, blob, smoothstep(0.7, 1.7, field));
+  } else if (style < 3.5) {
+    // Ondas: layered waves flowing sideways, each a shade deeper, with a light crest.
+    color = mix(a, b, 0.15);
+    for (var i = 0; i < 5; i++) {
+      let f = f32(i);
+      let edge = -0.32 + f * 0.17
+        + 0.055 * sin(c.x * (2.2 + f * 0.4) + th * f32(1 + i % 2) + f * 1.3)
+        + 0.025 * sin(c.x * (5.0 + f) - th * 2.0 + f * 2.7);
+      let shade = mix(mix(a, b, 0.25), b, f / 4.0);
+      let soft = 0.004 + 0.002 * f;
+      color = mix(color, shade, smoothstep(edge - soft, edge + soft, c.y));
+      color += k * 0.18 * exp(-abs(c.y - edge) * 60.0) * (1.0 - f / 6.0);
+    }
+  } else if (style < 4.5) {
+    // Granulado: a gradient that sways, a warm glow drifting across it, and film grain.
+    let angle = u.bg_to.w + 0.35 * sin(th);
+    let dir = vec2f(cos(angle), sin(angle));
+    color = mix(a, b, clamp(dot(c, dir) * 0.9 + 0.5, 0.0, 1.0));
+    let glow = vec2f(0.45 * cos(th), 0.25 * sin(2.0 * th));
+    color = mix(color, k, 0.55 * exp(-dot(c - glow, c - glow) * 5.0));
+    color += grain(p, u.anim.z) * 0.09;
+  } else {
+    // Nebulosa: drifting clouds of color with twinkling stars.
+    let o = 0.6 * vec2f(cos(th), sin(th));
+    let warp = fbm(c * 1.6 - o);
+    let n = fbm(c * 2.4 + o + vec2f(warp * 1.4));
+    color = mix(a, b, smoothstep(0.35, 0.8, n));
+    color = mix(color, k, smoothstep(0.55, 0.9, n * (0.6 + warp)) * 0.75);
+    let cell = floor(c * 55.0);
+    let h = hash(cell);
+    if (h > 0.975) {
+      let jitter = vec2f(hash(cell + 7.1), hash(cell + 3.7)) - 0.5;
+      let d = length(fract(c * 55.0) - 0.5 - jitter * 0.6);
+      let twinkle = 0.55 + 0.45 * sin(th * 3.0 + h * 80.0);
+      color += vec3f(smoothstep(0.14, 0.0, d) * twinkle);
+    }
+  }
+  // A touch of noise keeps smooth gradients from banding.
+  return clamp(color + grain(p, 0.0) / 255.0, vec3f(0.0), vec3f(1.0));
 }
 
 // Transition mask at a composed point: x is how much of the frame is left, y a glowing edge, z a scorch.
@@ -340,10 +445,11 @@ fn cam_grade(c: vec3f) -> vec3f {
   return clamp(g, vec3f(0.0), vec3f(1.0));
 }
 
-// The frame's background at an output point, without zoom: what stands behind a removed webcam background in full frame.
-fn cam_backdrop(p: vec2f) -> vec3f {
+// The frame's background at a composed point (also what stands behind a removed webcam background in full frame).
+fn backdrop(p: vec2f) -> vec3f {
   let size = u.frame.xy;
   if (u.bg_from.w > 0.5) { return textureSampleLevel(bg_tex, smp, (p / size) * u.bg_image.xy + u.bg_image.zw, 0.0).rgb; }
+  if (u.anim.x > 0.5) { return animated_bg(p, size); }
   let dir = vec2f(cos(u.bg_to.w), sin(u.bg_to.w));
   return mix(u.bg_from.rgb, u.bg_to.rgb, clamp(dot(p / size - 0.5, dir) + 0.5, 0.0, 1.0));
 }
@@ -357,14 +463,7 @@ fn fs(@builtin(position) frag: vec4f) -> @location(0) vec4f {
   let px = u.frame.z / zoom;
 
   // Background (not tilted).
-  var color: vec3f;
-  if (u.bg_from.w > 0.5) {
-    color = textureSampleLevel(bg_tex, smp, (p / size) * u.bg_image.xy + u.bg_image.zw, 0.0).rgb;
-  } else {
-    let dir = vec2f(cos(u.bg_to.w), sin(u.bg_to.w));
-    let g = clamp(dot(p / size - 0.5, dir) + 0.5, 0.0, 1.0);
-    color = mix(u.bg_from.rgb, u.bg_to.rgb, g);
-  }
+  var color = backdrop(p);
 
   let q = untilt(p);
   let radius = u.camera.z;
@@ -577,7 +676,7 @@ fn fs(@builtin(position) frag: vec4f) -> @location(0) vec4f {
       if (cam_bg.x > 0.5) {
         let person = smoothstep(0.25, 0.75, textureSampleLevel(cam_mask, smp, cam_uv, 0.0).r);
         var behind = cam_grade(textureSampleLevel(cam_blur, smp, cam_uv, 0.0).rgb);
-        if (removed) { behind = mix(color, cam_backdrop(out_px), cam_bg.y); }
+        if (removed) { behind = mix(color, backdrop(out_px), cam_bg.y); }
         cam_color = mix(behind, cam_color, person);
       }
       // Border along the inside of the edge.
@@ -892,6 +991,11 @@ export class Renderer {
     const image = state.background.kind === "image" && this.backgroundTexture ? 1 : 0;
     vec(3, [...hexColor(state.background.from), image]);
     vec(4, [...hexColor(state.background.to), (state.background.angle * Math.PI) / 180]);
+    const animation = !image && state.background.kind === "animated" ? state.background.animation : null;
+    if (animation) {
+      vec(21, [animation.style, animation.phase, animation.tick, 0]);
+      vec(22, [...hexColor(animation.accent), 0]);
+    }
 
     const cursor = state.cursor;
     const cursorBox = cursor ? CURSOR_BOX * cursor.scale * k : 0;

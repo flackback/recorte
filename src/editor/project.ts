@@ -197,8 +197,12 @@ export type Project = {
   /** Part of the recording to keep, in video pixels; null keeps all of it. */
   crop: Rect | null;
   background: {
-    kind: "gradient" | "image";
+    kind: "gradient" | "image" | "animated";
     preset: string;
+    /** ANIMATED_BACKGROUNDS id, drawn while kind is "animated". */
+    animation: string;
+    /** How fast it moves: 1 is one slow cycle about every 12 s. */
+    speed: number;
     /** File name inside the take folder. */
     image: string | null;
     blur: number;
@@ -302,6 +306,30 @@ export const BACKGROUNDS: BackgroundPreset[] = [
   { id: "black", name: "Preto", from: "#000000", to: "#000000", angle: 0 },
   { id: "white", name: "Branco", from: "#ffffff", to: "#ffffff", angle: 0 },
 ];
+
+/**
+ * Backgrounds drawn in the shader from the output time: `style` picks the pattern, the three
+ * colors feed it (and stand in as a still gradient on title cards and swatch previews).
+ */
+export type AnimatedBackground = { id: string; name: string; style: number; from: string; to: string; accent: string; angle: number };
+
+export const ANIMATED_BACKGROUNDS: AnimatedBackground[] = [
+  { id: "aurora-live", name: "Aurora viva", style: 1, from: "#3b5bdb", to: "#9b4dff", accent: "#2ee6c5", angle: 35 },
+  { id: "lava", name: "Lava", style: 2, from: "#2a0f3d", to: "#ff5f6d", accent: "#ffc371", angle: 120 },
+  { id: "waves", name: "Ondas", style: 3, from: "#0b2a4a", to: "#1fa2ff", accent: "#a6ffcb", angle: 90 },
+  { id: "grain", name: "Granulado", style: 4, from: "#ff7a59", to: "#7b5bff", accent: "#ffd1a1", angle: 45 },
+  { id: "nebula", name: "Nebulosa", style: 5, from: "#07071a", to: "#5a2d91", accent: "#ff6ec7", angle: 60 },
+];
+export const ANIMATED_SPEED = { min: 0.25, max: 3 };
+
+/** The two colors a background shows as a still gradient (title cards, previews). */
+export function backgroundColors(background: Pick<Project["background"], "kind" | "preset" | "animation">): { from: string; to: string; angle: number } {
+  if (background.kind === "animated") {
+    const animated = ANIMATED_BACKGROUNDS.find((candidate) => candidate.id === background.animation);
+    if (animated) return animated;
+  }
+  return BACKGROUNDS.find((candidate) => candidate.id === background.preset) ?? BACKGROUNDS[0];
+}
 
 export const ASPECTS: { id: Aspect; name: string }[] = [
   { id: "auto", name: "Original" },
@@ -488,7 +516,7 @@ export function defaultProject(take: Take, events: CursorEvent[]): Project {
     deletedWords: [],
     aspect: "auto",
     crop: take.crop ?? null,
-    background: { kind: "gradient", preset: "aurora", image: null, blur: 0, padding: 0.07, radius: 14, shadow: 0.6 },
+    background: { kind: "gradient", preset: "aurora", animation: ANIMATED_BACKGROUNDS[0].id, speed: 1, image: null, blur: 0, padding: 0.07, radius: 14, shadow: 0.6 },
     frame: "none",
     tilt: 0,
     tilts: [],
@@ -553,6 +581,16 @@ function normalizeCursor(raw: Partial<Project["cursor"]> | undefined, fallback: 
   };
 }
 
+function normalizeBackground(saved: Partial<Project["background"]> | undefined, fallback: Project["background"]): Project["background"] {
+  const merged = { ...fallback, ...saved };
+  return {
+    ...merged,
+    kind: merged.kind === "image" || merged.kind === "animated" ? merged.kind : "gradient",
+    animation: ANIMATED_BACKGROUNDS.some((candidate) => candidate.id === merged.animation) ? merged.animation : fallback.animation,
+    speed: typeof merged.speed === "number" && Number.isFinite(merged.speed) ? Math.min(ANIMATED_SPEED.max, Math.max(ANIMATED_SPEED.min, merged.speed)) : fallback.speed,
+  };
+}
+
 /** Fills in anything an older or hand-edited `project.json` lacks. */
 export function normalizeProject(raw: unknown, fallback: Project): Project {
   if (!raw || typeof raw !== "object") return fallback;
@@ -568,7 +606,7 @@ export function normalizeProject(raw: unknown, fallback: Project): Project {
     deletedWords: list(value.deletedWords, []),
     aspect: ASPECTS.some((aspect) => aspect.id === value.aspect) ? value.aspect! : fallback.aspect,
     crop: value.crop ?? null,
-    background: { ...fallback.background, ...value.background },
+    background: normalizeBackground(value.background, fallback.background),
     // The laptop frame was removed; such projects show the recording without a frame.
     frame: value.frame === "window" || value.frame === "none" ? value.frame : fallback.frame,
     tilt: value.tilt ?? fallback.tilt,

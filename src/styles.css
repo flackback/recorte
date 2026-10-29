@@ -2290,6 +2290,24 @@ input[type="range"]:focus-visible {
   box-shadow: 0 0 0 2.5px var(--surface-2), 0 0 0 5px color-mix(in srgb, var(--accent) 70%, transparent);
 }
 
+/* Animated backgrounds drift inside their swatch too. */
+.swatch.animated {
+  background-size: 220% 220%;
+  animation: swatch-drift 4s ease-in-out infinite alternate;
+}
+
+@keyframes swatch-drift {
+  to {
+    background-position: 100% 100%;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .swatch.animated {
+    animation: none;
+  }
+}
+
 .corners {
   display: grid;
   grid-template-columns: repeat(2, 1fr);

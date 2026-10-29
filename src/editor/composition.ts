@@ -1,6 +1,6 @@
 import type { CursorEvent, KeyEvent, Take, Word } from "../types";
 import { cameraPath, cursorPath, RawPath, SpringPath, zoomAt } from "./motion";
-import { LENS_SHAPES, BACKGROUNDS, CLICK_DURATIONS, cardLength, sourceSize, type Cut, type Note, type Project, type TitleCard, type TransitionKind, type ZoomSegment } from "./project";
+import { LENS_SHAPES, ANIMATED_BACKGROUNDS, BACKGROUNDS, CLICK_DURATIONS, cardLength, sourceSize, type Cut, type Note, type Project, type TitleCard, type TransitionKind, type ZoomSegment } from "./project";
 import type { CursorKind, FrameState } from "./renderer";
 import { TimeMap, type Span } from "./timemap";
 
@@ -392,10 +392,27 @@ function cursorMotion(scene: Scene, t: number, now: { x: number; y: number }): [
   return Math.hypot(dx, dy) > 6 ? [dx, dy] : null;
 }
 
+/** One slow cycle of an animated background at speed 1. */
+const BACKGROUND_CYCLE = 12000;
+
+/**
+ * Where an animated background is at source time `t`, from the output time so preview and export
+ * agree: `phase` is the fraction of one cycle, with a whole number of cycles over the edit so a
+ * looping video wraps around seamlessly; `tick` counts frames for grain.
+ */
+function backgroundPhase(scene: Pick<Scene, "time">, t: number, speed: number) {
+  const duration = Math.max(1, scene.time.duration);
+  const output = Math.min(Math.max(scene.time.toOutput(t), 0), duration);
+  const cycles = Math.max(1, Math.round((duration * speed) / BACKGROUND_CYCLE));
+  const turns = (output / duration) * cycles;
+  return { phase: turns - Math.floor(turns), tick: Math.floor(output / (1000 / 30)) };
+}
+
 /** Everything the renderer needs for the frame at source time `t` (ms). */
 export function frameState(scene: Scene, t: number, output: FrameState["output"], overlay = false): FrameState {
   const { take, project, raw, cursor, camera, clicks } = scene;
   const preset = BACKGROUNDS.find((candidate) => candidate.id === project.background.preset) ?? BACKGROUNDS[0];
+  const animated = project.background.kind === "animated" ? ANIMATED_BACKGROUNDS.find((candidate) => candidate.id === project.background.animation) : undefined;
   const video = { width: take.width, height: take.height };
   const crop = project.crop;
   const zoom = zoomAt(project.zoom.segments.filter((segment) => segment.mode !== "lens"), t);
@@ -455,10 +472,11 @@ export function frameState(scene: Scene, t: number, output: FrameState["output"]
     video,
     crop,
     background: {
-      kind: project.background.kind,
-      from: preset.from,
-      to: preset.to,
-      angle: preset.angle,
+      kind: animated ? "animated" : project.background.kind === "image" ? "image" : "gradient",
+      from: (animated ?? preset).from,
+      to: (animated ?? preset).to,
+      angle: (animated ?? preset).angle,
+      animation: animated ? { style: animated.style, accent: animated.accent, ...backgroundPhase(scene, t, project.background.speed) } : null,
       padding: project.background.padding,
       radius: project.background.radius,
       shadow: project.background.shadow,
