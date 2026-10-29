@@ -4,6 +4,7 @@ mod ai;
 mod control;
 mod cursor;
 mod export;
+mod hevc;
 mod import;
 mod meter;
 mod overlay;
@@ -342,6 +343,10 @@ pub fn run() {
             export::export_write,
             export::export_finish,
             export::export_cancel,
+            hevc::hevc_available,
+            hevc::hevc_open,
+            hevc::hevc_finish,
+            hevc::hevc_cancel,
             export::asset_create,
             clock_now,
             take_set_webcam,

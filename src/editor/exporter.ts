@@ -175,8 +175,16 @@ function hevcConfigs(width: number, height: number, fps: number, bitrate: number
   );
 }
 
-/** Whether this computer reports an HEVC encoder for every size at `fps` (a quick check, no encoding). */
+/** Whether Windows' own HEVC encoder works here (checked once by the app with a tiny file). */
+let windowsHevc: Promise<boolean> | null = null;
+const windowsHevcAvailable = () => (windowsHevc ??= invoke<boolean>("hevc_available").catch(() => false));
+
+/**
+ * Whether HEVC can be exported for every size at `fps`: by Windows' encoder (any size), or else by
+ * the WebView's (a quick check, no encoding).
+ */
 export async function hevcSupported(sizes: { width: number; height: number }[], fps: number): Promise<boolean> {
+  if (await windowsHevcAvailable()) return true;
   if (typeof VideoEncoder === "undefined") return false;
   for (const { width, height } of sizes) {
     let found = false;
@@ -764,7 +772,17 @@ export async function exportVideo(
   return (await exportOne(scene, options, onProgress, signal)).path;
 }
 
-function exportOne(scene: Scene, options: ExportOptions, onProgress: (progress: ExportProgress) => void, signal: AbortSignal) {
+async function exportOne(scene: Scene, options: ExportOptions, onProgress: (progress: ExportProgress) => void, signal: AbortSignal) {
+  // HEVC goes through Windows' encoder when it has one: the WebView usually can't encode HEVC.
+  if (options.format !== "gif" && options.codec === "hevc" && (await windowsHevcAvailable())) {
+    try {
+      return await exportWindowsHevc(scene, options, onProgress, signal);
+    } catch (error) {
+      if (error instanceof ExportCancelled) throw error;
+      // The WebView's own HEVC encoder, or else H.264, takes over.
+      console.warn("HEVC do Windows falhou; tentando outro codificador", error);
+    }
+  }
   return options.format === "gif"
     ? exportGif(scene, options, onProgress, signal).then((path) => ({ path, codec: null }))
     : exportMp4(scene, options, onProgress, signal);
@@ -940,6 +958,120 @@ async function exportMp4(
     for (const encoder of [videoEncoder, audioEncoder]) {
       if (encoder && encoder.state !== "closed") encoder.close();
     }
+  }
+}
+
+/**
+ * HEVC MP4 through Windows' encoder: the page renders each frame as now, reads its pixels back and
+ * sends them with the mixed sound to the app, which encodes and writes the file.
+ */
+async function exportWindowsHevc(
+  scene: Scene,
+  options: ExportOptions,
+  onProgress: (progress: ExportProgress) => void,
+  signal: AbortSignal,
+): Promise<{ path: string; codec: VideoCodec }> {
+  const { take } = scene;
+  const check = () => {
+    if (signal.aborted) throw new ExportCancelled();
+  };
+  const output = outputSize(options.aspect ?? scene.project.aspect, sceneSource(scene), options.longSide);
+  const fps = options.fps;
+  const totalFrames = Math.max(1, Math.round((totalDuration(scene) / 1000) * fps));
+
+  onProgress({ phase: "preparing", done: 0, total: totalFrames });
+  const mixer = hasAudio(scene) ? await abortable(createMixer(scene), signal) : null;
+  const cap = options.maxBytes ? cappedBitrate(options.maxBytes, totalDuration(scene) / 1000, Boolean(mixer)) : null;
+  const full = videoBitrate(output.width, output.height, fps, "hevc");
+  const bitrate = cap === null ? full : Math.min(full, cap);
+  check();
+
+  const created = await invoke<{ id: number; path: string; url: string }>("hevc_open", {
+    takeId: take.id,
+    stamp: options.stamp,
+    suffix: options.suffix,
+    width: output.width,
+    height: output.height,
+    fps,
+    bitrate,
+    audio: Boolean(mixer),
+  });
+  const frames = new FrameRenderer(scene, output);
+  /** Sends bytes to the app's encoder; resolves once it took them (it waits while busy). */
+  const send = async (kind: "frame" | "audio", body: Uint8Array<ArrayBuffer>, query: Record<string, string | number> = {}) => {
+    const params = new URLSearchParams({ id: String(created.id), ...Object.fromEntries(Object.entries(query).map(([key, value]) => [key, String(value)])) });
+    const response = await fetch(`${created.url}/${kind}?${params}`, { method: "POST", body, signal });
+    if (!response.ok) throw new Error(await response.text());
+  };
+  // Two buffers: one frame is read back while the one before is still being sent.
+  const buffers = [new Uint8Array(0), new Uint8Array(0)];
+  let sending: Promise<void> | null = null;
+
+  try {
+    // Sound first, as 16-bit PCM: the encoder makes it AAC.
+    if (mixer) {
+      onProgress({ phase: "audio", done: 0, total: totalFrames });
+      let limiter: GainLimiter | null = null;
+      if (scene.project.audio.loudness) {
+        const meter = new LoudnessMeter(SAMPLE_RATE);
+        for (let index = 0; index < mixer.blocks; index++) {
+          meter.add(await abortable(mixer.block(index), signal));
+          check();
+        }
+        limiter = new GainLimiter(loudnessGain(meter.lufs()), SAMPLE_RATE);
+      }
+      for (let index = 0; index < mixer.blocks; index++) {
+        const mixed = await abortable(mixer.block(index), signal);
+        check();
+        limiter?.process(Array.from({ length: mixed.numberOfChannels }, (_, channel) => mixed.getChannelData(channel)));
+        const left = mixed.getChannelData(0);
+        const right = mixed.numberOfChannels > 1 ? mixed.getChannelData(1) : left;
+        const pcm = new Int16Array(mixed.length * CHANNELS);
+        for (let i = 0; i < mixed.length; i++) {
+          pcm[i * 2] = Math.max(-32768, Math.min(32767, Math.round(left[i] * 32767)));
+          pcm[i * 2 + 1] = Math.max(-32768, Math.min(32767, Math.round(right[i] * 32767)));
+        }
+        await send("audio", new Uint8Array(pcm.buffer));
+      }
+    }
+    check();
+
+    await frames.start(signal);
+    for (let index = 0; index < totalFrames; index++) {
+      check();
+      const moment = outputMoment(scene, (index * 1000) / fps);
+      await frames.draw(moment.t, signal, moment.card);
+      const frame = new VideoFrame(frames.canvas, { timestamp: Math.round((index * 1e6) / fps) });
+      try {
+        // Read back as BGRA when the browser can convert; otherwise in the frame's own layout.
+        const rgb = frame.format === "RGBA" || frame.format === "RGBX" || frame.format === "BGRA" || frame.format === "BGRX";
+        const wanted: VideoFrameCopyToOptions = rgb ? {} : ({ format: "BGRA" } as VideoFrameCopyToOptions);
+        const size = frame.allocationSize(wanted);
+        if (buffers[index % 2].length !== size) buffers[index % 2] = new Uint8Array(size);
+        const pixels = buffers[index % 2];
+        const [plane] = await frame.copyTo(pixels, wanted);
+        const format = rgb ? frame.format! : "BGRA";
+        // Frames reach the encoder in order: this one goes once the previous one is in.
+        await sending;
+        sending = send("frame", pixels, { index, stride: plane.stride, format });
+        // Marks it handled, so a failure surfaces at the next await instead of as an unhandled rejection.
+        sending.catch(() => undefined);
+      } finally {
+        frame.close();
+      }
+      if (index % 5 === 0 || index === totalFrames - 1) onProgress({ phase: "video", done: index + 1, total: totalFrames });
+    }
+
+    await sending;
+    onProgress({ phase: "finishing", done: totalFrames, total: totalFrames });
+    check();
+    return { path: await invoke<string>("hevc_finish", { id: created.id }), codec: "hevc" };
+  } catch (error) {
+    await sending?.catch(() => undefined);
+    await invoke("hevc_cancel", { id: created.id }).catch(() => undefined);
+    throw error;
+  } finally {
+    frames.close();
   }
 }
 

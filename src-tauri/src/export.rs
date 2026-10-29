@@ -43,7 +43,14 @@ pub fn export_create(
     stamp: Option<String>,
     suffix: Option<String>,
 ) -> Result<Created, String> {
-    if !matches!(extension.as_str(), "mp4" | "gif") {
+    let target = export_target(&app, &take_id, &extension, stamp, suffix)?;
+    remove_leftovers(target.parent().unwrap_or(std::path::Path::new(".")), &exports);
+    open(&exports, target)
+}
+
+/// Where an export of `take_id` goes: `<takes>/Exportados/<take>-<stamp><suffix>.<extension>`.
+pub(crate) fn export_target(app: &AppHandle, take_id: &str, extension: &str, stamp: Option<String>, suffix: Option<String>) -> Result<PathBuf, String> {
+    if !matches!(extension, "mp4" | "gif") {
         return Err("formato inválido".into());
     }
     if take_id.is_empty() || !take_id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
@@ -57,12 +64,9 @@ pub fn export_create(
     if suffix.len() > 16 || !suffix.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
         return Err("sufixo inválido".into());
     }
-    let dir = crate::takes_root(&app)?.join(EXPORT_DIR);
+    let dir = crate::takes_root(app)?.join(EXPORT_DIR);
     fs::create_dir_all(&dir).map_err(|error| error.to_string())?;
-    remove_leftovers(&dir, &exports);
-
-    let target = dir.join(format!("{take_id}-{stamp}{suffix}.{extension}"));
-    open(&exports, target)
+    Ok(dir.join(format!("{take_id}-{stamp}{suffix}.{extension}")))
 }
 
 /// Starts writing `name` into a take's folder (webcam recording, background image, music).

@@ -73,7 +73,7 @@ fn control_path(app: &AppHandle) -> Option<PathBuf> {
 }
 
 /// 128 random bits from the standard library's OS-seeded hasher keys.
-fn token() -> String {
+pub(crate) fn token() -> String {
     (0..2)
         .map(|_| {
             let mut hasher = std::collections::hash_map::RandomState::new().build_hasher();
