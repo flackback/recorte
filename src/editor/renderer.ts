@@ -54,6 +54,9 @@ export type FrameState = {
     background: WebcamBackground;
     /** How far the webcam fills the frame (0–1); a removed background shows the frame's background there, not the screen. */
     full: number;
+    /** Light and color temperature of the camera picture, each −1 to 1 (see webcamGrade). */
+    light: number;
+    warmth: number;
   } | null;
   /** Part of the output the screen is laid out in, as fractions; null is all of it. */
   area: Rect | null;
@@ -117,7 +120,7 @@ struct Uniforms {
 @group(0) @binding(5) var overlay_tex: texture_2d<f32>;
 @group(0) @binding(6) var bg_tex: texture_2d<f32>;
 // Webcam matte: person confidence, a blurred copy of the camera, and the mode
-// (x: 0 original, 1 blur, 2 remove; y: how far the webcam fills the frame).
+// (x: 0 original, 1 blur, 2 remove; y: how far the webcam fills the frame; z: light; w: warmth).
 @group(0) @binding(7) var cam_mask: texture_2d<f32>;
 @group(0) @binding(8) var cam_blur: texture_2d<f32>;
 @group(0) @binding(9) var<uniform> cam_bg: vec4f;
@@ -305,6 +308,15 @@ fn sample_content(uv0: vec2f) -> vec3f {
     return mix(sum / 12.0, vec3f(1.0), amount * amount * 0.55);
   }
   return sample_screen(clamp(uv, vec2f(0.0), vec2f(1.0)));
+}
+
+// Light and color temperature of the camera picture (see webcamGrade, which must match).
+fn cam_grade(c: vec3f) -> vec3f {
+  // A gamma: lifts shadows and midtones and keeps white white, so a dim face brightens without washing out.
+  var g = pow(max(c, vec3f(0.0)), vec3f(exp2(-cam_bg.z * 0.9)));
+  let warm = cam_bg.w;
+  g = g * vec3f(1.0 + 0.14 * warm, 1.0 + 0.03 * warm, 1.0 - 0.14 * warm);
+  return clamp(g, vec3f(0.0), vec3f(1.0));
 }
 
 // The frame's background at an output point, without zoom: what stands behind a removed webcam background in full frame.
@@ -495,12 +507,12 @@ fn fs(@builtin(position) frag: vec4f) -> @location(0) vec4f {
       var cx = cam.x;
       if (u.extra.w > 0.5) { cx = 1.0 - cam.x; }
       let cam_uv = vec2f(cx, cam.y);
-      var cam_color = textureSampleBaseClampToEdge(webcam_tex, smp, cam_uv).rgb;
+      var cam_color = cam_grade(textureSampleBaseClampToEdge(webcam_tex, smp, cam_uv).rgb);
       // Behind the person: the blurred camera, or what lies under the bubble (in full frame, the
       // frame's background rather than the screen).
       if (cam_bg.x > 0.5) {
         let person = smoothstep(0.25, 0.75, textureSampleLevel(cam_mask, smp, cam_uv, 0.0).r);
-        var behind = textureSampleLevel(cam_blur, smp, cam_uv, 0.0).rgb;
+        var behind = cam_grade(textureSampleLevel(cam_blur, smp, cam_uv, 0.0).rgb);
         if (removed) { behind = mix(color, cam_backdrop(out_px), cam_bg.y); }
         cam_color = mix(behind, cam_color, person);
       }
@@ -660,6 +672,16 @@ export function layout(output: { width: number; height: number }, source: { widt
  * frame; as it zooms in, the allowed area shrinks smoothly from the frame to the screen itself,
  * so a zoom shows the recording rather than the background around it.
  */
+/** The shader's cam_grade as one 256-entry table per channel (red, green, blue), for drawing the camera outside WebGPU. */
+export function webcamGrade(light: number, warmth: number): Uint8ClampedArray[] {
+  const gamma = 2 ** (-light * 0.9);
+  return [1 + 0.14 * warmth, 1 + 0.03 * warmth, 1 - 0.14 * warmth].map((gain) => {
+    const table = new Uint8ClampedArray(256);
+    for (let i = 0; i < 256; i++) table[i] = Math.round(Math.pow(i / 255, gamma) * gain * 255);
+    return table;
+  });
+}
+
 export function cameraOrigin(output: FrameState["output"], rect: Rect, zoom: number, focus: [number, number]): [number, number] {
   const axis = (frame: number, start: number, length: number, focusAt: number) => {
     const view = frame / zoom;
@@ -882,7 +904,7 @@ export class Renderer {
     // The webcam's background mode, only with a matte to draw it from.
     const camBackground = webcamReady && this.matteMask ? state.webcam!.background : "original";
     const camMode = camBackground === "remove" ? 2 : camBackground === "blur" && this.matteHasBlur ? 1 : 0;
-    this.device.queue.writeBuffer(this.matteBuffer, 0, new Float32Array([camMode, state.webcam?.full ?? 0, 0, 0]));
+    this.device.queue.writeBuffer(this.matteBuffer, 0, new Float32Array([camMode, state.webcam?.full ?? 0, state.webcam?.light ?? 0, state.webcam?.warmth ?? 0]));
     const screen = this.device.importExternalTexture({ source });
     const bindGroup = this.device.createBindGroup({
       layout: this.pipeline.getBindGroupLayout(0),

@@ -38,6 +38,8 @@ import {
   TRANSITIONS,
   normalizeProject,
   outputSize,
+  lookText,
+  withWebcamLook,
   type Aspect,
   type BlurRegion,
   type CameraLayout,
@@ -300,6 +302,8 @@ export class Editor {
     webcamMirror: $<HTMLInputElement>("webcam-mirror"),
     webcamBackground: $("webcam-background"),
     webcamZoom: $<HTMLInputElement>("webcam-zoom"),
+    webcamLight: $<HTMLInputElement>("webcam-light"),
+    webcamWarmth: $<HTMLInputElement>("webcam-warmth"),
     webcamBorder: $<HTMLInputElement>("webcam-border"),
     webcamBorderColors: $("webcam-border-colors"),
     webcamShadow: $<HTMLInputElement>("webcam-shadow"),
@@ -475,7 +479,8 @@ export class Editor {
     const events = cursor?.events ?? [];
 
     const fallback = defaultProject(take, events);
-    let project = fallback;
+    // A recording opened for the first time starts with the webcam look picked before recording.
+    let project = withWebcamLook(fallback);
     try {
       const saved = await invoke<string | null>("load_project", { dir: take.dir });
       if (gen !== this.openGen) return;
@@ -1598,6 +1603,8 @@ export class Editor {
     });
     range(ui.webcamSize, (p, v) => (p.webcam.size = v));
     range(ui.webcamZoom, (p, v) => (p.webcam.zoom = v));
+    range(ui.webcamLight, (p, v) => (p.webcam.light = v));
+    range(ui.webcamWarmth, (p, v) => (p.webcam.warmth = v));
     range(ui.webcamBorder, (p, v) => (p.webcam.border = v));
     range(ui.webcamShadow, (p, v) => (p.webcam.shadow = v));
     ui.webcamBorderColors.replaceChildren(
@@ -2088,6 +2095,8 @@ export class Editor {
     const percent = ["padding", "shadow", "cursor-smoothing", "webcam-size", "webcam-shadow", "volume-system", "volume-mic", "volume-music"];
     output.textContent = percent.includes(input.id)
       ? `${Math.round(value * 100)}%`
+      : input.id === "webcam-light" || input.id === "webcam-warmth"
+        ? lookText(input.id === "webcam-light" ? "light" : "warmth", value)
       : input.id === "radius" || input.id === "bg-blur"
         ? `${value}px`
         : input.id === "tilt" || input.id === "tilt-angle"
@@ -2230,7 +2239,7 @@ export class Editor {
     const hasWebcam = Boolean(take.webcam);
     ui.webcamNote.hidden = hasWebcam;
     const webcamControls = [
-      ui.webcamVisible, ui.webcamSize, ui.webcamMirror, ui.webcamZoom, ui.webcamBorder, ui.webcamShadow,
+      ui.webcamVisible, ui.webcamSize, ui.webcamMirror, ui.webcamZoom, ui.webcamLight, ui.webcamWarmth, ui.webcamBorder, ui.webcamShadow,
       ...ui.webcamCorner.querySelectorAll("input"), ...ui.webcamShape.querySelectorAll("input"), ...ui.webcamBackground.querySelectorAll("input"),
       ...ui.webcamBorderColors.querySelectorAll("button"), ...ui.cameraAdd.querySelectorAll("button"),
     ];
@@ -2243,6 +2252,8 @@ export class Editor {
     this.setRadio(ui.webcamBackground, project.webcam.background);
     ui.webcamMirror.checked = project.webcam.mirror;
     ui.webcamZoom.value = String(project.webcam.zoom);
+    ui.webcamLight.value = String(project.webcam.light);
+    ui.webcamWarmth.value = String(project.webcam.warmth);
     ui.webcamBorder.value = String(project.webcam.border);
     ui.webcamShadow.value = String(project.webcam.shadow);
     for (const swatch of ui.webcamBorderColors.querySelectorAll<HTMLElement>(".swatch")) swatch.classList.toggle("selected", swatch.dataset.color === project.webcam.borderColor);
@@ -2289,7 +2300,7 @@ export class Editor {
       if (document.activeElement !== input) input.value = value;
     }
     ui.cardsDuration.value = String(intro.durationMs / 1000);
-    for (const input of [ui.cardsDuration, ui.noteSize, ui.silenceMin, ui.pauseKeep, ui.padding, ui.radius, ui.shadow, ui.tilt, ui.tiltAngle, ui.bgBlur, ui.cursorSize, ui.smoothing, ui.cursorShapeDelay, ui.clickSize, ui.transitionDuration, ui.zoomDefault, ui.zoomScale, ui.webcamSize, ui.webcamZoom, ui.webcamBorder, ui.webcamShadow, ui.volumeSystem, ui.volumeMic, ui.volumeMusic, ui.captionsSize]) {
+    for (const input of [ui.cardsDuration, ui.noteSize, ui.silenceMin, ui.pauseKeep, ui.padding, ui.radius, ui.shadow, ui.tilt, ui.tiltAngle, ui.bgBlur, ui.cursorSize, ui.smoothing, ui.cursorShapeDelay, ui.clickSize, ui.transitionDuration, ui.zoomDefault, ui.zoomScale, ui.webcamSize, ui.webcamZoom, ui.webcamLight, ui.webcamWarmth, ui.webcamBorder, ui.webcamShadow, ui.volumeSystem, ui.volumeMic, ui.volumeMusic, ui.captionsSize]) {
       this.showValue(input);
     }
     this.video.volume = Math.min(1, project.audio.system);

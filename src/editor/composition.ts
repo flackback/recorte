@@ -363,9 +363,9 @@ function webcamAt(scene: Scene, t: number, out: { width: number; height: number 
     opacity *= 1 - gone;
     if (area) area = mixBox(area, { x: 0, y: 0, width: 1, height: 1 }, gone);
   }
-  const { mirror, border, borderColor, shadow, zoom, background } = project.webcam;
+  const { mirror, border, borderColor, shadow, zoom, background, light, warmth } = project.webcam;
   return {
-    webcam: { rect, radius, opacity, mirror, border: border * Math.min(bubble.rect.width, bubble.rect.height), borderColor, shadow, zoom, background, full },
+    webcam: { rect, radius, opacity, mirror, border: border * Math.min(bubble.rect.width, bubble.rect.height), borderColor, shadow, zoom, background, light, warmth, full },
     area,
   };
 }

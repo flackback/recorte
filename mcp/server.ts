@@ -935,6 +935,8 @@ const settingsShape = {
         .enum(["original", "blur", "remove"])
         .optional()
         .describe("Fundo atrás da pessoa, sem tela verde: original, blur (desfocado) ou remove (removido; em tela cheia aparece o fundo do vídeo)."),
+      light: z.number().min(-1).max(1).optional().describe("Luz na imagem da câmera: acima de 0 clareia as sombras do rosto, abaixo escurece. 0 é o original."),
+      warmth: z.number().min(-1).max(1).optional().describe("Cor da imagem da câmera: acima de 0 mais quente (amarelada), abaixo mais fria (azulada). 0 é a original."),
     })
     .optional(),
   audio: z

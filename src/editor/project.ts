@@ -236,6 +236,10 @@ export type Project = {
     /** Zooms into the camera picture inside the bubble (1 = all of it). */
     zoom: number;
     background: WebcamBackground;
+    /** Light on the camera picture, −1 to 1: above 0 lifts the shadows and midtones, below 0 darkens. */
+    light: number;
+    /** Color temperature, −1 (cooler) to 1 (warmer). */
+    warmth: number;
   };
   /** Stretches where the webcam leaves its bubble. */
   cameras: CameraRange[];
@@ -382,6 +386,49 @@ export function autoZooms(events: CursorEvent[], duration: number, scale: number
   return segments;
 }
 
+/** How the webcam looks, picked before recording; new recordings start with it. */
+export type WebcamLook = Pick<Project["webcam"], "background" | "light" | "warmth" | "mirror">;
+export const NEUTRAL_LOOK: WebcamLook = { background: "original", light: 0, warmth: 0, mirror: true };
+const LOOK_KEY = "recorte.webcamLook";
+
+/** A number from −1 to 1, or `fallback`. */
+const unit = (value: unknown, fallback: number) => (typeof value === "number" && Number.isFinite(value) ? Math.max(-1, Math.min(1, value)) : fallback);
+
+export function loadWebcamLook(): WebcamLook {
+  try {
+    const saved = JSON.parse(localStorage.getItem(LOOK_KEY) ?? "{}");
+    return {
+      background: WEBCAM_BACKGROUNDS.includes(saved.background) ? saved.background : NEUTRAL_LOOK.background,
+      light: unit(saved.light, NEUTRAL_LOOK.light),
+      warmth: unit(saved.warmth, NEUTRAL_LOOK.warmth),
+      mirror: typeof saved.mirror === "boolean" ? saved.mirror : NEUTRAL_LOOK.mirror,
+    };
+  } catch {
+    return { ...NEUTRAL_LOOK };
+  }
+}
+
+export function saveWebcamLook(look: WebcamLook) {
+  try {
+    localStorage.setItem(LOOK_KEY, JSON.stringify(look));
+  } catch {
+    // Not kept; the look still applies until the app closes.
+  }
+}
+
+/** How a light or color value reads: "+20%", "quente 30%", "neutra". */
+export function lookText(kind: "light" | "warmth", value: number) {
+  const percent = Math.round(Math.abs(value) * 100);
+  if (!percent) return kind === "light" ? "0%" : "neutra";
+  if (kind === "light") return `${value > 0 ? "+" : "−"}${percent}%`;
+  return `${value > 0 ? "quente" : "fria"} ${percent}%`;
+}
+
+/** A new recording's project, with the webcam look picked before recording. */
+export function withWebcamLook(project: Project): Project {
+  return { ...project, webcam: { ...project.webcam, ...loadWebcamLook() } };
+}
+
 export function defaultProject(take: Take, events: CursorEvent[]): Project {
   const defaultScale = 2;
   return {
@@ -411,7 +458,7 @@ export function defaultProject(take: Take, events: CursorEvent[]): Project {
       spotlight: false,
     },
     keys: { visible: Boolean(take.keys), mode: "shortcuts" },
-    webcam: { visible: Boolean(take.webcam), size: 0.22, corner: "br", shape: "circle", position: null, mirror: true, border: 0.012, borderColor: "#ffffff", shadow: 0.35, zoom: 1, background: "original" },
+    webcam: { visible: Boolean(take.webcam), size: 0.22, corner: "br", shape: "circle", position: null, mirror: true, border: 0.012, borderColor: "#ffffff", shadow: 0.35, zoom: 1, background: "original", light: 0, warmth: 0 },
     cameras: [],
     media: defaultMedia(),
     audio: { system: 1, mic: 1, music: null, musicVolume: 0.25, duck: false, clickSound: false, clickTone: "tick", keySound: false, enhance: false, enhanceLevel: "medium", loudness: false },
@@ -465,6 +512,8 @@ export function normalizeProject(raw: unknown, fallback: Project): Project {
       ...fallback.webcam,
       ...value.webcam,
       background: WEBCAM_BACKGROUNDS.includes(value.webcam?.background as WebcamBackground) ? value.webcam!.background! : fallback.webcam.background,
+      light: unit(value.webcam?.light, fallback.webcam.light),
+      warmth: unit(value.webcam?.warmth, fallback.webcam.warmth),
     },
     audio: { ...fallback.audio, ...value.audio },
     captions: { ...fallback.captions, ...value.captions },

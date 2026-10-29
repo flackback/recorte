@@ -226,7 +226,7 @@
                 </span>
                 <svg class="i device-chevron"><use href="#i-chevron" /></svg>
               </button>
-              <button class="device-card" id="cam-pick" aria-haspopup="menu" aria-expanded="false" hidden>
+              <button class="device-card" id="cam-pick" aria-haspopup="dialog" aria-expanded="false" hidden>
                 <span class="device-badge">
                   <svg class="i"><use href="#i-camera" /></svg>
                   <span class="cam-preview" id="cam-preview" hidden><video id="cam-preview-video" muted playsinline aria-label="Prévia da webcam"></video></span>
@@ -660,6 +660,14 @@
                       <label><input type="radio" name="webcam-background" value="remove" />Remover</label>
                     </div>
                   </div>
+                  <label class="slider">
+                    <span>Luz <output data-value-for="webcam-light"></output></span>
+                    <input type="range" id="webcam-light" min="-1" max="1" step="0.05" />
+                  </label>
+                  <label class="slider">
+                    <span>Cor <output data-value-for="webcam-warmth"></output></span>
+                    <input type="range" id="webcam-warmth" min="-1" max="1" step="0.05" />
+                  </label>
                   <label class="switch"><input type="checkbox" id="webcam-mirror" /><span>Espelhar</span></label>
                   <label class="slider">
                     <span>Aproximar <output data-value-for="webcam-zoom"></output></span>

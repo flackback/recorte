@@ -13,6 +13,7 @@ import { resetTips, showTour } from "./tips";
 import { toast } from "./toast";
 import { Settings } from "./settings";
 import { Updates } from "./updates";
+import { CamLook } from "./camlook";
 import { joinPath, levelFill, takeName, type Levels, type Take } from "./types";
 
 type MonitorInfo = { index: number; name: string; width: number; height: number; primary: boolean; x: number; y: number; refreshRate: number };
@@ -488,6 +489,14 @@ const deviceLists = {
   cam: { choices: [] as DeviceChoice[], value: "", devices: 0 },
 };
 
+/** The webcam card opens the camera's look (background, light, color) and the camera choice. */
+const camLook = new CamLook({
+  anchor: ui.camPick,
+  video: ui.camVideo,
+  camera: () => ({ name: ui.camName.textContent ?? "", devices: deviceLists.cam.devices }),
+  pickCamera: (anchor) => openDeviceMenu("cam", anchor),
+});
+
 /** Keeps the pick while it is plugged in; otherwise the first choice. */
 function fillDevices(kind: "mic" | "cam", choices: DeviceChoice[], devices: number) {
   const list = deviceLists[kind];
@@ -498,9 +507,15 @@ function fillDevices(kind: "mic" | "cam", choices: DeviceChoice[], devices: numb
   const name = kind === "mic" ? ui.micName : ui.camName;
   const current = choices.find((choice) => choice.value === list.value);
   name.textContent = current?.shown ?? "";
+  if (kind === "cam") {
+    // The camera card always opens its panel; the camera is picked there.
+    card.title = "Ajustes da webcam";
+    camLook.refresh();
+    return;
+  }
   // One device: nothing to choose, the card only says which one records.
   card.classList.toggle("single", devices < 2);
-  card.title = devices < 2 ? `${kind === "mic" ? "Microfone" : "Webcam"}: ${current?.shown ?? ""}` : `Trocar ${kind === "mic" ? "o microfone" : "a webcam"}`;
+  card.title = devices < 2 ? `Microfone: ${current?.shown ?? ""}` : "Trocar o microfone";
 }
 
 /** Lists the microphones (names from Windows) and the cameras (names show once a camera was allowed). */
@@ -532,11 +547,11 @@ function showPicks() {
   ui.camPick.hidden = !allowed || !ui.webcam.checked || !deviceLists.cam.choices.length;
 }
 
-/** Opens the device menu under its card. */
-function openDeviceMenu(kind: "mic" | "cam") {
+/** Opens the device menu under its card, or under `anchor`. */
+function openDeviceMenu(kind: "mic" | "cam", anchor?: HTMLElement) {
   const list = deviceLists[kind];
-  const card = kind === "mic" ? ui.micPick : ui.camPick;
-  if (list.devices < 2 || card.disabled) return;
+  const card = anchor ?? (kind === "mic" ? ui.micPick : ui.camPick);
+  if (list.devices < 2 || (card as HTMLButtonElement).disabled) return;
   const rect = card.getBoundingClientRect();
   const items: MenuItem[] = list.choices.map((choice) => ({
     label: choice.label,
@@ -713,7 +728,10 @@ function updateLive() {
   }
 
   if (cam) void openPreview();
-  else closePreview();
+  else {
+    closePreview();
+    camLook.close();
+  }
 }
 
 async function pollLevels() {
@@ -1801,7 +1819,7 @@ for (const control of [ui.systemAudio, ui.microphone, ui.webcam, ui.keystrokes, 
 }
 for (const control of [ui.systemAudio, ui.microphone, ui.webcam]) control.addEventListener("change", () => updateLive());
 ui.micPick.addEventListener("click", () => openDeviceMenu("mic"));
-ui.camPick.addEventListener("click", () => openDeviceMenu("cam"));
+ui.camPick.addEventListener("click", () => camLook.toggle());
 // The live check stops while the window is minimized or hidden.
 document.addEventListener("visibilitychange", () => void checkMinimized());
 window.addEventListener("focus", () => void checkMinimized());
