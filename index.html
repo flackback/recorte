@@ -211,14 +211,15 @@
           <div class="live" id="live" hidden>
             <div class="meters">
               <!-- One card per source: the sound level, which microphone and camera record, and the camera preview. -->
-              <div class="device-card static" id="meter-system" data-label="Som do sistema" title="Som do sistema" hidden>
+              <button class="device-card" id="meter-system" data-label="Som do sistema" title="Ajustes do som do sistema" aria-haspopup="dialog" aria-expanded="false" hidden>
                 <span class="device-badge"><svg class="i"><use href="#i-audio" /></svg></span>
                 <span class="device-text">
                   <span class="device-name">Som do sistema</span>
                   <span class="meter"><span class="meter-track"><span class="meter-cover"></span></span></span>
                 </span>
-              </div>
-              <button class="device-card" id="mic-pick" aria-haspopup="menu" aria-expanded="false" hidden>
+                <svg class="i device-chevron"><use href="#i-chevron" /></svg>
+              </button>
+              <button class="device-card" id="mic-pick" title="Ajustes do microfone" aria-haspopup="dialog" aria-expanded="false" hidden>
                 <span class="device-badge"><svg class="i"><use href="#i-mic" /></svg></span>
                 <span class="device-text">
                   <span class="device-name" id="mic-name"></span>

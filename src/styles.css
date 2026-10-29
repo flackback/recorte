@@ -854,14 +854,9 @@ input[type="range"]:focus-visible::-webkit-slider-thumb {
   transition: background var(--fast) var(--ease);
 }
 
-.device-card:hover:not(.single):not(:disabled),
+.device-card:hover:not(:disabled),
 .device-card[aria-expanded="true"] {
   background: var(--surface-3);
-}
-
-.device-card.single,
-.device-card.static {
-  cursor: default;
 }
 
 .device-card.off .device-text {
@@ -925,13 +920,9 @@ input[type="range"]:focus-visible::-webkit-slider-thumb {
   transform: rotate(-90deg);
 }
 
-.device-card.single .device-chevron {
-  display: none;
-}
-
-/* The webcam card's panel opens beside it. */
-#cam-pick .device-chevron,
-#cam-pick[aria-expanded="true"] .device-chevron {
+/* The source cards' panels open beside them. */
+.live .device-card .device-chevron,
+.live .device-card[aria-expanded="true"] .device-chevron {
   transform: none;
 }
 
@@ -1001,8 +992,8 @@ input[type="range"]:focus-visible::-webkit-slider-thumb {
   flex-basis: 100%;
 }
 
-/* The webcam card's panel: the camera's look for new recordings, shown live. */
-.cam-look {
+/* A source card's panel: the device, and how it records in new recordings (the webcam shown live). */
+.card-panel {
   position: fixed;
   z-index: 30;
   display: flex;
@@ -1017,19 +1008,19 @@ input[type="range"]:focus-visible::-webkit-slider-thumb {
   animation: menu-in 140ms var(--ease);
 }
 
-.cam-look-stage {
+.card-panel-stage {
   overflow: hidden;
   border-radius: var(--r-md);
   background: var(--surface-2);
 }
 
-.cam-look-stage canvas {
+.card-panel-stage canvas {
   display: block;
   width: 100%;
   height: auto;
 }
 
-.cam-look-device {
+.card-panel-device {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -1046,12 +1037,12 @@ input[type="range"]:focus-visible::-webkit-slider-thumb {
   transition: background var(--fast) var(--ease);
 }
 
-.cam-look-device:hover,
-.cam-look-device[aria-expanded="true"] {
+.card-panel-device:hover,
+.card-panel-device[aria-expanded="true"] {
   background: var(--surface-3);
 }
 
-.cam-look-device span {
+.card-panel-device span {
   flex: 1;
   min-width: 0;
   overflow: hidden;
@@ -1059,31 +1050,45 @@ input[type="range"]:focus-visible::-webkit-slider-thumb {
   white-space: nowrap;
 }
 
-.cam-look-device .i {
+.card-panel-device .i {
   width: 15px;
   height: 15px;
   flex: none;
   color: var(--muted);
 }
 
-.cam-look .field > span {
+.card-panel .field > span {
   font-size: 12px;
   color: var(--muted);
 }
 
-.cam-look-foot {
+.card-panel-foot {
   display: flex;
   align-items: flex-start;
   gap: 10px;
 }
 
-.cam-look-foot .hint {
+.card-panel-foot .hint {
   flex: 1;
   margin: 0;
 }
 
-.cam-look-foot .link-button {
+.card-panel-foot .link-button {
   flex: none;
+}
+
+.card-panel-meter {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.card-panel-meter .meter-track {
+  height: 10px;
+}
+
+.card-panel-meter .hint {
+  margin: 0;
 }
 
 @media (prefers-reduced-motion: reduce) {

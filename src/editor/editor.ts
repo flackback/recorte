@@ -39,7 +39,8 @@ import {
   normalizeProject,
   outputSize,
   lookText,
-  withWebcamLook,
+  loadSoundLook,
+  withSavedLook,
   type Aspect,
   type BlurRegion,
   type CameraLayout,
@@ -479,12 +480,16 @@ export class Editor {
     const events = cursor?.events ?? [];
 
     const fallback = defaultProject(take, events);
-    // A recording opened for the first time starts with the webcam look picked before recording.
-    let project = withWebcamLook(fallback);
+    // A recording opened for the first time starts with the look and sound picked before recording.
+    let project = withSavedLook(fallback);
+    let firstOpen = true;
     try {
       const saved = await invoke<string | null>("load_project", { dir: take.dir });
       if (gen !== this.openGen) return;
-      if (saved) project = normalizeProject(JSON.parse(saved), fallback);
+      if (saved) {
+        project = normalizeProject(JSON.parse(saved), fallback);
+        firstOpen = false;
+      }
     } catch (error) {
       if (gen !== this.openGen) return;
       console.warn("projeto não carregado", error);
@@ -522,6 +527,9 @@ export class Editor {
     await this.ensureRenderer();
     if (gen !== this.openGen) return;
     void this.loadBackground();
+    // Voice enhancement picked before recording: the microphone is processed once, then heard.
+    const sound = loadSoundLook();
+    if (firstOpen && sound.enhance && take.mic) void this.setEnhance(true, sound.enhanceLevel);
     // First time in the editor: a short tour of the essentials.
     window.setTimeout(() => {
       if (this.ui.root.hidden) return;
@@ -1958,6 +1966,8 @@ export class Editor {
       this.enhancing = false;
       ui.enhance.disabled = false;
       for (const input of ui.enhanceLevel.querySelectorAll("input")) input.disabled = false;
+      // Another recording was opened meanwhile; the processed file stays for this one.
+      if (this.scene !== scene) return;
     }
     this.change((p) => {
       p.audio.enhance = on;

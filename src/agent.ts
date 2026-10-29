@@ -7,7 +7,7 @@ import type { Editor } from "./editor/editor";
 import { findSilences } from "./editor/cleanup";
 import { PRESETS } from "./editor/export-dialog";
 import { ExportCancelled, exportBatch, maxFps, type ExportOptions } from "./editor/exporter";
-import { ASPECTS, defaultProject, normalizeProject, withWebcamLook, type Aspect } from "./editor/project";
+import { ASPECTS, defaultProject, normalizeProject, withSavedLook, type Aspect } from "./editor/project";
 import { LANGUAGES, preferredLanguage, SAMPLE_RATE, speech, transcribe } from "./editor/transcribe";
 import { toast } from "./toast";
 import { joinPath, takeName, type CursorEvent, type KeyEvent, type Take, type Word } from "./types";
@@ -64,7 +64,7 @@ async function loadScene(take: Take): Promise<Scene> {
   const events = cursor?.events ?? [];
   const fallback = defaultProject(take, events);
   const saved = await invoke<string | null>("load_project", { dir: take.dir });
-  const project = saved ? normalizeProject(JSON.parse(saved), fallback) : withWebcamLook(fallback);
+  const project = saved ? normalizeProject(JSON.parse(saved), fallback) : withSavedLook(fallback);
   const scene = createScene(take, project, events, keys?.events ?? [], transcript?.words ?? []);
   refreshTime(scene);
   return scene;

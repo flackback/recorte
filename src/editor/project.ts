@@ -416,6 +416,35 @@ export function saveWebcamLook(look: WebcamLook) {
   }
 }
 
+/** How the sound is set before recording: volumes, and the microphone's voice enhancement. */
+export type SoundLook = Pick<Project["audio"], "system" | "mic" | "enhance" | "enhanceLevel">;
+export const NEUTRAL_SOUND: SoundLook = { system: 1, mic: 1, enhance: false, enhanceLevel: "medium" };
+const SOUND_KEY = "recorte.soundLook";
+const ENHANCE_LEVELS: EnhanceLevel[] = ["light", "medium", "strong"];
+const volume = (value: unknown, fallback: number) => (typeof value === "number" && Number.isFinite(value) ? Math.max(0, Math.min(2, value)) : fallback);
+
+export function loadSoundLook(): SoundLook {
+  try {
+    const saved = JSON.parse(localStorage.getItem(SOUND_KEY) ?? "{}");
+    return {
+      system: volume(saved.system, NEUTRAL_SOUND.system),
+      mic: volume(saved.mic, NEUTRAL_SOUND.mic),
+      enhance: typeof saved.enhance === "boolean" ? saved.enhance : NEUTRAL_SOUND.enhance,
+      enhanceLevel: ENHANCE_LEVELS.includes(saved.enhanceLevel) ? saved.enhanceLevel : NEUTRAL_SOUND.enhanceLevel,
+    };
+  } catch {
+    return { ...NEUTRAL_SOUND };
+  }
+}
+
+export function saveSoundLook(look: SoundLook) {
+  try {
+    localStorage.setItem(SOUND_KEY, JSON.stringify(look));
+  } catch {
+    // Not kept; the choice still applies until the app closes.
+  }
+}
+
 /** How a light or color value reads: "+20%", "quente 30%", "neutra". */
 export function lookText(kind: "light" | "warmth", value: number) {
   const percent = Math.round(Math.abs(value) * 100);
@@ -424,9 +453,13 @@ export function lookText(kind: "light" | "warmth", value: number) {
   return `${value > 0 ? "quente" : "fria"} ${percent}%`;
 }
 
-/** A new recording's project, with the webcam look picked before recording. */
-export function withWebcamLook(project: Project): Project {
-  return { ...project, webcam: { ...project.webcam, ...loadWebcamLook() } };
+/**
+ * A new recording's project, with the webcam look and the volumes picked before recording. Voice
+ * enhancement is left off: the editor turns it on once the microphone is processed.
+ */
+export function withSavedLook(project: Project): Project {
+  const { system, mic } = loadSoundLook();
+  return { ...project, webcam: { ...project.webcam, ...loadWebcamLook() }, audio: { ...project.audio, system, mic } };
 }
 
 export function defaultProject(take: Take, events: CursorEvent[]): Project {
