@@ -9,7 +9,7 @@ import { CARD_FADE, cardLength, createScene, frameState, leftClicks, overlayText
 import { confirmDialog, onContextMenu, type MenuItem } from "../menu";
 import { openAudio, type AudioSource } from "./audio-source";
 import { ExportDialog } from "./export-dialog";
-import { openVideo } from "./exporter";
+import { exportStill, openVideo } from "./exporter";
 import { thumbnails, trackSpan, waveform } from "./media";
 import { duckAt, duckGains, voiceActivity, voiceLevels } from "./duck";
 import { cursorPath } from "./motion";
@@ -203,6 +203,7 @@ export class Editor {
     redo: $<HTMLButtonElement>("redo"),
     reveal: $<HTMLButtonElement>("reveal"),
     exportButton: $<HTMLButtonElement>("export"),
+    saveFrame: $<HTMLButtonElement>("save-frame"),
     addCut: $<HTMLButtonElement>("add-cut"),
     addSplit: $<HTMLButtonElement>("add-split"),
     addZoom: $<HTMLButtonElement>("add-zoom"),
@@ -1463,6 +1464,7 @@ export class Editor {
       { label: "Mostrar o vídeo inteiro", icon: "monitor", disabled: scene.project.crop ? false : "Não há recorte", action: () => this.change((p) => (p.crop = null)) },
       "separator",
       { label: "Exportar…", icon: "export", shortcut: "Ctrl+E", action: () => this.openExport() },
+      { label: "Salvar o quadro como imagem", icon: "image", shortcut: "Ctrl+Shift+S", action: () => void this.saveFrame() },
     ];
   }
 
@@ -1979,6 +1981,7 @@ export class Editor {
       if (this.scene) void revealItemInDir(joinPath(this.scene.take.dir, this.scene.take.video));
     });
     ui.exportButton.addEventListener("click", () => this.openExport());
+    ui.saveFrame.addEventListener("click", () => void this.saveFrame());
     ui.addCut.addEventListener("click", () => this.useTool("cuts"));
     ui.addSplit.addEventListener("click", () => this.splitAt(this.ui.video.currentTime * 1000));
     this.showPreviewSpeed();
@@ -2598,6 +2601,10 @@ export class Editor {
       const t = this.ui.video.currentTime * 1000;
       const key = event.code;
       if (ctrl && key === "KeyE") this.openExport();
+      else if (ctrl && event.shiftKey && key === "KeyS") {
+        event.preventDefault();
+        void this.saveFrame();
+      }
       else if (ctrl && (key === "KeyY" || (key === "KeyZ" && event.shiftKey))) this.redo();
       else if (ctrl && key === "KeyZ") this.undo();
       else if (ctrl) return;
@@ -2947,6 +2954,36 @@ export class Editor {
 
   setTitle(title: string) {
     this.ui.title.textContent = title;
+  }
+
+  /** Where the finished video is at the playhead (ms), title cards included. */
+  private outputNow(scene: Scene) {
+    const intro = cardLength(scene.project.cards.intro);
+    if (this.card) {
+      const elapsed = Math.max(0, Math.min(performance.now() - this.card.started, cardLength(scene.project.cards[this.card.kind]) - 1));
+      return this.card.kind === "intro" ? elapsed : intro + scene.time.duration + elapsed;
+    }
+    return intro + Math.min(scene.time.toOutput(this.ui.video.currentTime * 1000), Math.max(0, scene.time.duration - 1));
+  }
+
+  private savingFrame = false;
+
+  /** Saves the frame at the playhead as a PNG next to the exports, styled like the export. */
+  async saveFrame() {
+    const scene = this.scene;
+    if (!scene || this.savingFrame) return;
+    this.savingFrame = true;
+    this.ui.saveFrame.disabled = true;
+    this.flushSave();
+    try {
+      const path = await exportStill(scene, this.outputNow(scene));
+      toast(`Imagem salva: ${path.split("\\").pop()}`, { label: "Mostrar na pasta", run: () => void revealItemInDir(path) });
+    } catch (error) {
+      toast(`Não foi possível salvar a imagem: ${error instanceof Error ? error.message : error}`);
+    } finally {
+      this.savingFrame = false;
+      this.ui.saveFrame.disabled = false;
+    }
   }
 
   openExport() {

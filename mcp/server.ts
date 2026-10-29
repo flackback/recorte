@@ -57,7 +57,8 @@ Regras:
 - Todos os tempos estão em milissegundos, na linha do tempo da gravação original (antes dos cortes).
 - Coordenadas de cliques e áreas estão em pixels do vídeo gravado.
 - Cada edição é salva no project.json da gravação. Se o editor do app estiver com a gravação aberta, ele mostra a mudança na hora. O usuário pode desfazer com Ctrl+Z no editor. Você pode desfazer com undo_last_edit.
-- transcribe, export_video, open_in_editor, import_video e a melhoria de voz precisam do app aberto.
+- transcribe, export_video, save_frame, open_in_editor, import_video e a melhoria de voz precisam do app aberto.
+- Para uma imagem PNG de um momento do vídeo editado (capa, miniatura): chame save_frame.
 - Para editar um vídeo que já está no computador (MP4 ou MOV em H.264): chame import_video com o caminho do arquivo.
 - Para tirar pausas: chame remove_silences (pelo áudio, precisa do app) ou find_pauses (pela transcrição) e depois add_cuts.
 - Para hesitações ("hã", "hum", "é" longo): chame cut_fillers.
@@ -1294,6 +1295,18 @@ tool(
       ...(files.length > 1 ? { files } : {}),
       seconds: Math.round(job.elapsedMs / 1000),
     };
+  },
+);
+
+tool(
+  "save_frame",
+  "Salva como imagem PNG o quadro do vídeo editado num momento, com fundo, moldura, cursor, webcam, textos e cartões, igual à exportação (lado maior de até 1920 px). O arquivo fica na pasta Exportados. Precisa do app aberto. Devolve o caminho da imagem.",
+  { take: takeArg, timeMs: ms("Momento do quadro. Num trecho cortado, vale o ponto mais próximo que fica no vídeo") },
+  async ({ take: ref, timeMs }) => {
+    const take = await store.findTake(ref);
+    await tryApp("flush", { takeId: take.id });
+    const result = await appRequest<{ path: string; width: number; height: number }>("frame", { takeId: take.id, timeMs });
+    return { take: take.id, file: result.path, size: `${result.width}×${result.height}` };
   },
 );
 

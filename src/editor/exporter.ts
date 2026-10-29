@@ -762,6 +762,46 @@ async function backgroundImage(scene: Scene): Promise<OffscreenCanvas | null> {
   return canvas;
 }
 
+/** Long side of a saved still: the export's default (1080p), never above the recording. */
+export const stillSide = (scene: Scene) => {
+  const source = sceneSource(scene);
+  return Math.min(1920, Math.round(Math.max(source.width, source.height) / 2) * 2);
+};
+
+/**
+ * Saves the frame the finished video shows at `outputMs` as a PNG next to the exports, rendered
+ * like an exported frame (background, frame, cursor, webcam, notes, title card). Resolves with its path.
+ */
+export async function exportStill(scene: Scene, outputMs: number, longSide = stillSide(scene), signal = new AbortController().signal): Promise<string> {
+  const output = outputSize(scene.project.aspect, sceneSource(scene), longSide);
+  const frames = new FrameRenderer(scene, output);
+  let png: Blob;
+  try {
+    await frames.start(signal);
+    const moment = outputMoment(scene, Math.min(Math.max(0, outputMs), Math.max(0, totalDuration(scene) - 1)));
+    await frames.draw(moment.t, signal, moment.card);
+    // Copied out right away, as the video export does, while the GPU canvas still holds the frame.
+    const frame = new VideoFrame(frames.canvas, { timestamp: 0 });
+    const still = new OffscreenCanvas(output.width, output.height);
+    still.getContext("2d")!.drawImage(frame, 0, 0);
+    frame.close();
+    png = await still.convertToBlob({ type: "image/png" });
+  } finally {
+    frames.close();
+  }
+  const created = await invoke<{ id: number; path: string }>("export_create", { takeId: scene.take.id, extension: "png", suffix: "-quadro" });
+  try {
+    const bytes = new Uint8Array(await png.arrayBuffer());
+    for (let offset = 0; offset < bytes.length; offset += WRITE_CHUNK) {
+      await invoke("export_write", bytes.subarray(offset, offset + WRITE_CHUNK), { headers: { "x-export-id": String(created.id), "x-position": String(offset) } });
+    }
+    return await invoke<string>("export_finish", { id: created.id });
+  } catch (error) {
+    await invoke("export_cancel", { id: created.id }).catch(() => undefined);
+    throw error;
+  }
+}
+
 /** Exports the scene's edit. Resolves with the saved file's path. */
 export async function exportVideo(
   scene: Scene,

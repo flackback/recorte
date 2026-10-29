@@ -2,12 +2,12 @@ import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 
-import { createScene, refreshTime, type Scene } from "./editor/composition";
+import { cardLength, createScene, refreshTime, sceneSource, type Scene } from "./editor/composition";
 import type { Editor } from "./editor/editor";
 import { findSilences } from "./editor/cleanup";
 import { PRESETS } from "./editor/export-dialog";
-import { ExportCancelled, exportBatch, maxFps, type ExportOptions } from "./editor/exporter";
-import { ASPECTS, defaultProject, normalizeProject, withSavedLook, type Aspect } from "./editor/project";
+import { ExportCancelled, exportBatch, exportStill, maxFps, stillSide, type ExportOptions } from "./editor/exporter";
+import { ASPECTS, defaultProject, normalizeProject, outputSize, withSavedLook, type Aspect } from "./editor/project";
 import { LANGUAGES, preferredLanguage, SAMPLE_RATE, speech, transcribe } from "./editor/transcribe";
 import { toast } from "./toast";
 import { joinPath, takeName, type CursorEvent, type KeyEvent, type Take, type Word } from "./types";
@@ -206,6 +206,20 @@ export function startAgent(host: AgentHost) {
         const job = jobs.get(String(payload.jobId));
         if (!job) throw new Error("tarefa não encontrada");
         return publicJob(job);
+      }
+      case "frame": {
+        // A still of the finished video at a source time, saved next to the exports.
+        const take = await findTake(payload.takeId);
+        if (host.editor.currentTakeId === take.id) host.editor.flush();
+        const scene = await loadScene(take);
+        const at = Number(payload.timeMs);
+        if (!Number.isFinite(at)) throw new Error("tempo inválido");
+        const { start, end } = scene.project.trim;
+        const outputMs = cardLength(scene.project.cards.intro) + scene.time.toOutput(Math.min(Math.max(at, start), end));
+        const path = await exportStill(scene, outputMs);
+        const size = outputSize(scene.project.aspect, sceneSource(scene), stillSide(scene));
+        toast(`A IA salvou uma imagem: ${path.split("\\").pop()}`, { label: "Mostrar na pasta", run: () => void revealItemInDir(path) });
+        return { path, width: size.width, height: size.height };
       }
       case "cancel": {
         const job = jobs.get(String(payload.jobId));

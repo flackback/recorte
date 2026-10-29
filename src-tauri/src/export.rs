@@ -50,7 +50,8 @@ pub fn export_create(
 
 /// Where an export of `take_id` goes: `<takes>/Exportados/<take>-<stamp><suffix>.<extension>`.
 pub(crate) fn export_target(app: &AppHandle, take_id: &str, extension: &str, stamp: Option<String>, suffix: Option<String>) -> Result<PathBuf, String> {
-    if !matches!(extension, "mp4" | "gif") {
+    // png: a still of the current frame ("Imagem" in the editor).
+    if !matches!(extension, "mp4" | "gif" | "png") {
         return Err("formato inválido".into());
     }
     if take_id.is_empty() || !take_id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
@@ -100,7 +101,7 @@ fn remove_leftovers(dir: &std::path::Path, exports: &Exports) {
     };
     for path in entries.filter_map(Result::ok).map(|entry| entry.path()) {
         let name = path.to_string_lossy();
-        let partial = name.ends_with(".mp4.part") || name.ends_with(".gif.part");
+        let partial = name.ends_with(".mp4.part") || name.ends_with(".gif.part") || name.ends_with(".png.part");
         if partial && !open.contains(&path) {
             let _ = fs::remove_file(&path);
         }
