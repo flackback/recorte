@@ -10,6 +10,8 @@
   --raised: #ffffff; /* selected segment or tab inside a capsule */
   --raised-shadow: 0 1px 2px rgb(0 0 0 / 0.1), 0 1px 1px rgb(0 0 0 / 0.04);
   --track: #d9d9de; /* empty part of sliders and switches */
+  --slider-fill: color-mix(in srgb, var(--accent) 38%, var(--surface-2)); /* filled part of a slider */
+  --slider-text: var(--text);
   --border: #e2e2e6;
   --window-radius: 10px;
   --window-edge: rgb(0 0 0 / 0.16);
@@ -65,6 +67,8 @@
     --raised: #3a3a3a;
     --raised-shadow: none;
     --track: #383838;
+    --slider-fill: var(--accent);
+    --slider-text: #fff;
     --border: #2a2a2a;
     --window-edge: rgb(255 255 255 / 0.08);
     --text: #f5f5f5;
@@ -695,20 +699,42 @@ kbd {
 }
 
 /* Range with a filled track; `--fill` is set from script. */
+/* A slider is one pill: it fills from the left, with its name inside on the left and its value on
+   the right, and is dragged anywhere along it. */
 .slider {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
+  position: relative;
+  display: block;
 }
 
 .slider > span {
+  position: absolute;
+  font-size: 12.5px;
+  white-space: nowrap;
+  inset: 0;
+  z-index: 1;
   display: flex;
+  align-items: center;
   justify-content: space-between;
+  gap: 6px;
+  padding: 0 14px;
+  color: var(--slider-text);
+  font-weight: 600;
+  pointer-events: none;
+}
+
+.slider > span .info {
+  pointer-events: auto;
 }
 
 .slider output {
-  color: var(--text);
+  margin-left: auto;
+  color: var(--slider-text);
   font-variant-numeric: tabular-nums;
+}
+
+.slider input[type="range"] {
+  display: block;
+  height: 38px;
 }
 
 input[type="range"] {
@@ -716,38 +742,39 @@ input[type="range"] {
   width: 100%;
   height: 18px;
   margin: 0;
+  border-radius: 999px;
   background: transparent;
   appearance: none;
-  cursor: pointer;
+  cursor: ew-resize;
 }
 
 input[type="range"]::-webkit-slider-runnable-track {
-  height: 6px;
+  height: 100%;
   border-radius: 999px;
-  background: linear-gradient(to right, var(--accent) var(--fill), var(--track) var(--fill));
+  background: linear-gradient(to right, var(--slider-fill) var(--fill), var(--surface-2) var(--fill));
+  transition: filter var(--fast) var(--ease);
 }
 
+input[type="range"]:hover:not(:disabled)::-webkit-slider-runnable-track {
+  filter: brightness(1.08);
+}
+
+/* No knob: the edge of the fill is the handle. */
 input[type="range"]::-webkit-slider-thumb {
-  width: 18px;
-  height: 18px;
-  margin-top: -6px;
+  width: 1px;
+  height: 100%;
   border: 0;
-  border-radius: 50%;
-  background: #fff;
-  box-shadow: 0 0 0 0.5px rgb(0 0 0 / 0.2), 0 1px 4px rgb(0 0 0 / 0.3);
+  background: transparent;
   appearance: none;
-  transition: transform var(--fast) var(--ease);
 }
 
-input[type="range"]:active::-webkit-slider-thumb {
-  transform: scale(1.15);
+input[type="range"]:disabled {
+  cursor: default;
+  opacity: 0.45;
 }
 
 input[type="range"]:focus-visible {
-  box-shadow: none;
-}
-
-input[type="range"]:focus-visible::-webkit-slider-thumb {
+  outline: none;
   box-shadow: var(--focus);
 }
 
@@ -1960,8 +1987,9 @@ input[type="range"]:focus-visible::-webkit-slider-thumb {
 
 .transport {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 12px;
+  gap: 8px 12px;
   padding: 12px 16px 10px;
   container-type: inline-size;
 }
@@ -2131,49 +2159,49 @@ input[type="range"]:focus-visible::-webkit-slider-thumb {
 
 /* ---------- inspector ---------- */
 
+/* The tab icons stand outside, on the canvas; the open tab's settings are the card. */
 .inspector {
   display: grid;
-  grid-template-columns: 74px minmax(0, 1fr);
+  grid-template-columns: 48px minmax(0, 1fr);
   grid-template-rows: minmax(0, 1fr);
+  gap: 8px;
   min-height: 0;
-  margin: 0 var(--gap-panel) var(--gap-panel);
-  overflow: hidden;
-  border: 1px solid var(--border);
-  border-radius: var(--r-xl);
-  background: var(--surface);
+  margin: 0 var(--gap-panel) var(--gap-panel) 0;
 }
 
-/* Tabs down the side in a rounded capsule: an icon with a short name under it;
-   the open tab is a brighter pill. */
+/* Round icon buttons down the side; the open tab is filled with the accent. The name shows on hover. */
 .tabs {
   display: flex;
   flex-direction: column;
+  align-items: center;
   align-self: start;
-  gap: 2px;
-  max-height: calc(100% - 20px);
-  margin: 10px 0 10px 10px;
-  padding: 5px;
+  gap: 6px;
+  max-height: 100%;
+  padding: 4px 0;
   overflow-y: auto;
-  border-radius: 28px;
-  background: var(--surface-2);
   scrollbar-width: none;
 }
 
 .tabs button {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 3px;
-  padding: 9px 0 7px;
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  flex: none;
   border: 0;
-  border-radius: 22px;
+  border-radius: 50%;
   background: none;
   color: var(--muted);
-  font-size: 10px;
-  font-weight: 500;
-  line-height: 12px;
   cursor: pointer;
-  transition: background var(--fast) var(--ease), color var(--fast) var(--ease);
+  transition: background var(--fast) var(--ease), color var(--fast) var(--ease), transform var(--fast) var(--ease);
+}
+
+.tabs button span {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
 }
 
 .tabs button .i {
@@ -2182,15 +2210,18 @@ input[type="range"]:focus-visible::-webkit-slider-thumb {
 }
 
 .tabs button:hover {
-  background: var(--surface-3);
+  background: var(--surface-2);
   color: var(--text);
 }
 
+.tabs button:active {
+  transform: scale(0.94);
+}
+
 .tabs button[aria-selected="true"] {
-  background: var(--raised);
-  color: var(--text);
-  font-weight: 600;
-  box-shadow: var(--raised-shadow);
+  background: var(--accent-strong);
+  color: #fff;
+  box-shadow: 0 4px 14px color-mix(in srgb, var(--accent) 40%, transparent);
 }
 
 .tab-panel {
@@ -2198,6 +2229,9 @@ input[type="range"]:focus-visible::-webkit-slider-thumb {
   grid-row: 1;
   min-height: 0;
   overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--r-xl);
+  background: var(--surface);
 }
 
 .inspector section {
@@ -3365,48 +3399,6 @@ input[type="range"]:focus-visible::-webkit-slider-thumb {
 
 /* ---------- inspector controls, in the reference style ---------- */
 
-/* Name on the left, value in a small pill on the right (like the reference's "100%"). */
-.inspector .slider {
-  gap: 10px;
-}
-
-.inspector .slider > span {
-  align-items: center;
-  color: var(--text);
-  font-size: 12.5px;
-}
-
-.inspector .slider output {
-  min-width: 44px;
-  padding: 2px 9px;
-  border-radius: var(--r-pill);
-  background: var(--surface-2);
-  color: var(--muted);
-  font-size: 11.5px;
-  font-weight: 600;
-  text-align: center;
-}
-
-/* A thicker track and a larger knob, easier to grab. */
-.inspector input[type="range"] {
-  height: 22px;
-}
-
-.inspector input[type="range"]::-webkit-slider-runnable-track {
-  height: 8px;
-}
-
-.inspector input[type="range"]::-webkit-slider-thumb {
-  width: 22px;
-  height: 22px;
-  margin-top: -7px;
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 35%, transparent), 0 2px 6px rgb(0 0 0 / 0.35);
-}
-
-.inspector input[type="range"]:disabled::-webkit-slider-thumb {
-  box-shadow: 0 1px 3px rgb(0 0 0 / 0.3);
-}
-
 /* On/off rows grouped in one rounded block, with hairlines between them. */
 .inspector .switch {
   min-height: 42px;
@@ -3479,14 +3471,9 @@ input[type="range"]:focus-visible::-webkit-slider-thumb {
   outline: none;
 }
 
-.inspector .slider > span .info {
-  margin-right: auto;
-}
-
 /* One style for every control name; section titles stay small and quiet. */
 .inspector .field > span,
 .inspector .field-label,
-.inspector .slider > span,
 .inspector .switch > span {
   color: var(--text);
   font-size: 12.5px;
