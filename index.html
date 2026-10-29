@@ -159,7 +159,6 @@
 
     <!-- Our own title bar: the native one is turned off (decorations: false). -->
     <header class="titlebar" data-tauri-drag-region>
-      <button class="titlebar-button sidebar-toggle" id="sidebar-toggle" title="Esconder o painel (Ctrl+\)" aria-label="Esconder o painel" aria-expanded="true"><svg class="i"><use href="#i-sidebar" /></svg></button>
       <div class="titlebar-brand" data-tauri-drag-region>
         <img class="brand-mark" src="/icon.svg" alt="" data-tauri-drag-region />
         <strong data-tauri-drag-region>Recorte</strong>
@@ -167,6 +166,7 @@
       <div class="titlebar-status" id="titlebar-status" data-tauri-drag-region hidden>
         <span class="rec-dot" data-tauri-drag-region></span><span id="titlebar-time" data-tauri-drag-region>Gravando</span>
       </div>
+      <button class="titlebar-button" id="shortcuts" title="Atalhos de teclado (?)" aria-label="Atalhos de teclado"><svg class="i"><use href="#i-keyboard" /></svg></button>
       <button class="titlebar-button" id="settings-open" title="Configurações (Ctrl+,)" aria-label="Configurações"><svg class="i"><use href="#i-gear" /></svg></button>
       <button class="update-button" id="update" hidden><svg class="i"><use href="#i-export" /></svg><span>Atualizar</span></button>
       <div class="window-controls">
@@ -188,7 +188,10 @@
           <div class="source-picker">
             <div class="picker-head">
               <span>Fonte</span>
-              <button class="secondary compact" id="refresh" title="Atualizar telas e janelas"><svg class="i"><use href="#i-refresh" /></svg>Atualizar</button>
+              <div class="picker-actions">
+                <button class="secondary compact" id="refresh" title="Atualizar telas e janelas"><svg class="i"><use href="#i-refresh" /></svg>Atualizar</button>
+                <button class="icon-button sidebar-toggle" id="sidebar-toggle" title="Esconder o painel (Ctrl+\)" aria-label="Esconder o painel" aria-expanded="true"><svg class="i"><use href="#i-sidebar" /></svg></button>
+              </div>
             </div>
             <div class="segmented small with-icons" id="source-kind" role="radiogroup" aria-label="Tipo de fonte">
               <label><input type="radio" name="source-kind" value="m" checked /><svg class="i"><use href="#i-monitor" /></svg>Tela</label>
@@ -308,17 +311,6 @@
               <strong id="take-title"></strong>
               <span class="save-state" id="save-state" aria-live="polite"></span>
             </div>
-            <div class="editor-actions">
-              <!-- Single actions: a circle with the name under it. -->
-              <button class="round-action" id="shortcuts" title="Atalhos de teclado (?)" aria-label="Atalhos de teclado"><span class="round-face"><svg class="i"><use href="#i-keyboard" /></svg></span><span class="round-label">Atalhos</span></button>
-              <button class="round-action" id="undo" title="Desfazer (Ctrl+Z)" aria-label="Desfazer"><span class="round-face"><svg class="i"><use href="#i-undo" /></svg></span><span class="round-label">Desfazer</span></button>
-              <button class="round-action" id="redo" title="Refazer (Ctrl+Y)" aria-label="Refazer"><span class="round-face"><svg class="i"><use href="#i-redo" /></svg></span><span class="round-label">Refazer</span></button>
-              <!-- Related actions share a capsule; Exportar keeps the accent. -->
-              <div class="capsule" role="group" aria-label="Arquivo">
-                <button class="secondary capsule-item" id="reveal" title="Mostrar os arquivos desta gravação no Explorer"><svg class="i"><use href="#i-folder" /></svg><span>Mostrar na pasta</span></button>
-                <button class="primary capsule-item" id="export" title="Exportar o vídeo editado (Ctrl+E)"><svg class="i"><use href="#i-export" /></svg><span>Exportar</span></button>
-              </div>
-            </div>
           </header>
 
           <div class="editor-body">
@@ -347,6 +339,10 @@
                 </button>
                 <span class="time" id="time">0:00.0 <span class="total">/ 0:00.0</span></span>
                 <button class="secondary compact preview-speed" id="preview-speed" title="Velocidade da prévia (não muda o vídeo final)" aria-label="Velocidade da prévia">1×</button>
+                <div class="capsule history" role="group" aria-label="Histórico">
+                  <button class="capsule-item" id="undo" title="Desfazer (Ctrl+Z)" aria-label="Desfazer"><svg class="i"><use href="#i-undo" /></svg><span class="tool-label">Desfazer</span></button>
+                  <button class="capsule-item" id="redo" title="Refazer (Ctrl+Y)" aria-label="Refazer"><svg class="i"><use href="#i-redo" /></svg><span class="tool-label">Refazer</span></button>
+                </div>
                 <div class="tools capsule" role="toolbar" aria-label="Ferramentas da timeline">
                   <button class="tool" id="add-cut" title="Cortar um trecho no ponto atual (X)" aria-label="Cortar"><svg class="i"><use href="#i-cut" /></svg><span class="tool-label">Cortar</span></button>
                   <button class="tool" id="add-split" title="Dividir no ponto atual, sem cortar; a emenda aceita transição (D)" aria-label="Dividir"><svg class="i" viewBox="0 0 24 24"><path d="M12 3v18M8 8l-4 4 4 4M16 8l4 4-4 4" /></svg><span class="tool-label">Dividir</span></button>
@@ -355,6 +351,11 @@
                   <button class="tool" id="add-note" title="Texto, seta ou destaque a partir do ponto atual (T)" aria-label="Texto"><svg class="i"><use href="#i-text" /></svg><span class="tool-label">Texto</span></button>
                   <button class="tool" id="add-speed" title="Acelerar um trecho a partir do ponto atual (S)" aria-label="Acelerar"><svg class="i"><use href="#i-speed" /></svg><span class="tool-label">Acelerar</span></button>
                   <button class="tool" id="add-blur" title="Desfocar uma área a partir do ponto atual (B)" aria-label="Desfocar"><svg class="i"><use href="#i-blur" /></svg><span class="tool-label">Desfocar</span></button>
+                </div>
+                <!-- Related actions share a capsule; Exportar keeps the accent. -->
+                <div class="capsule" role="group" aria-label="Arquivo">
+                  <button class="secondary capsule-item" id="reveal" title="Mostrar os arquivos desta gravação no Explorer" aria-label="Mostrar na pasta"><svg class="i"><use href="#i-folder" /></svg><span class="tool-label">Mostrar na pasta</span></button>
+                  <button class="primary capsule-item" id="export" title="Exportar o vídeo editado (Ctrl+E)"><svg class="i"><use href="#i-export" /></svg><span>Exportar</span></button>
                 </div>
               </div>
               <div class="timeline-wrap">

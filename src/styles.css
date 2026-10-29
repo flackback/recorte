@@ -282,8 +282,10 @@ body {
   transform: scale(0.94);
 }
 
-.sidebar-toggle {
-  margin-right: 2px;
+.picker-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
 }
 
 /* ---------- title bar ---------- */
@@ -482,7 +484,7 @@ select:hover:not(:disabled) {
 .secondary:active:not(:disabled),
 .primary:active:not(:disabled),
 .tool:active:not(:disabled),
-.round-action:active:not(:disabled) .round-face,
+.capsule-item:active:not(:disabled),
 .play:active,
 .swatch:active {
   transform: scale(0.96);
@@ -1706,9 +1708,9 @@ input[type="range"]:focus-visible::-webkit-slider-thumb {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  height: 66px;
+  height: 44px;
   flex: none;
-  padding: 0 calc(var(--gap-panel) + 4px) 4px 20px;
+  padding: 0 calc(var(--gap-panel) + 4px) 0 20px;
   background: var(--stage);
 }
 
@@ -1727,15 +1729,8 @@ input[type="range"]:focus-visible::-webkit-slider-thumb {
   font-weight: 600;
 }
 
-.editor-actions {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-}
-
-/* ---------- capsules and round actions ----------
-   Related buttons share a pill (.capsule); each shows its icon with a small label under it.
-   A single action is a circle with its label under it (.round-action). */
+/* ---------- capsules ----------
+   Related buttons share a pill (.capsule); each shows its icon with a small label under it. */
 
 .capsule {
   display: inline-flex;
@@ -1797,59 +1792,6 @@ input[type="range"]:focus-visible::-webkit-slider-thumb {
   background: var(--accent-strong);
   color: #fff;
   font-weight: 600;
-}
-
-.round-action {
-  display: inline-flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 4px;
-  min-width: 52px;
-  padding: 0;
-  border: 0;
-  background: none;
-  color: var(--muted);
-  font-size: 11px;
-  font-weight: 500;
-  line-height: 13px;
-  cursor: pointer;
-  transition: color var(--fast) var(--ease);
-}
-
-.round-face {
-  display: grid;
-  place-items: center;
-  width: 40px;
-  height: 40px;
-  border-radius: 50%;
-  background: var(--surface-2);
-  color: var(--text);
-  transition: background var(--fast) var(--ease), transform var(--fast) var(--ease);
-}
-
-.round-face .i {
-  width: 18px;
-  height: 18px;
-}
-
-.round-action:hover:not(:disabled) {
-  color: var(--text);
-}
-
-.round-action:hover:not(:disabled) .round-face {
-  background: var(--surface-3);
-}
-
-.round-action:focus-visible {
-  box-shadow: none;
-}
-
-.round-action:focus-visible .round-face {
-  box-shadow: var(--focus);
-}
-
-.editor-actions .capsule {
-  margin-left: 8px;
 }
 
 .save-state {
@@ -2041,13 +1983,14 @@ input[type="range"]:focus-visible::-webkit-slider-thumb {
   container-type: inline-size;
 }
 
-/* On a narrow preview the tools keep only their icons; the title still names them. */
-@container (max-width: 760px) {
+/* On a narrow preview the buttons keep only their icons; the title still names them. */
+@container (max-width: 1080px) {
   .tool-label {
     display: none;
   }
 
-  .tool {
+  .tool,
+  .capsule-item:has(.tool-label) {
     min-width: 40px;
     padding: 9px 10px;
   }
@@ -2099,8 +2042,9 @@ input[type="range"]:focus-visible::-webkit-slider-thumb {
   color: var(--accent-text);
 }
 
-/* The tools capsule: icon over label; .tool shares the .capsule-item look. */
-.tools {
+/* Undo and redo, the tools and the file actions sit together at the right.
+   The tools capsule: icon over label; .tool shares the .capsule-item look. */
+.history {
   margin-left: auto;
 }
 
