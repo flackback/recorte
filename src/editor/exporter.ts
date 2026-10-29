@@ -1007,38 +1007,44 @@ async function exportWindowsHevc(
   const buffers = [new Uint8Array(0), new Uint8Array(0)];
   let sending: Promise<void> | null = null;
 
+  // The sound goes as 16-bit PCM (the encoder makes it AAC), one mix block ahead of the frames:
+  // the encoder queues whatever it is sent, so all of it at once would sit in memory.
+  let limiter: GainLimiter | null = null;
+  let audioBlock = 0;
+  const audioUntil = async (seconds: number) => {
+    while (mixer && audioBlock < mixer.blocks && audioBlock * MIX_BLOCK <= seconds) {
+      const mixed = await abortable(mixer.block(audioBlock), signal);
+      check();
+      limiter?.process(Array.from({ length: mixed.numberOfChannels }, (_, channel) => mixed.getChannelData(channel)));
+      const left = mixed.getChannelData(0);
+      const right = mixed.numberOfChannels > 1 ? mixed.getChannelData(1) : left;
+      const pcm = new Int16Array(mixed.length * CHANNELS);
+      for (let i = 0; i < mixed.length; i++) {
+        pcm[i * 2] = Math.max(-32768, Math.min(32767, Math.round(left[i] * 32767)));
+        pcm[i * 2 + 1] = Math.max(-32768, Math.min(32767, Math.round(right[i] * 32767)));
+      }
+      await send("audio", new Uint8Array(pcm.buffer));
+      audioBlock++;
+    }
+  };
+
   try {
-    // Sound first, as 16-bit PCM: the encoder makes it AAC.
-    if (mixer) {
+    // To a loudness standard: the whole mix is measured first, and the gain applied as it goes.
+    if (mixer && scene.project.audio.loudness) {
       onProgress({ phase: "audio", done: 0, total: totalFrames });
-      let limiter: GainLimiter | null = null;
-      if (scene.project.audio.loudness) {
-        const meter = new LoudnessMeter(SAMPLE_RATE);
-        for (let index = 0; index < mixer.blocks; index++) {
-          meter.add(await abortable(mixer.block(index), signal));
-          check();
-        }
-        limiter = new GainLimiter(loudnessGain(meter.lufs()), SAMPLE_RATE);
-      }
+      const meter = new LoudnessMeter(SAMPLE_RATE);
       for (let index = 0; index < mixer.blocks; index++) {
-        const mixed = await abortable(mixer.block(index), signal);
+        meter.add(await abortable(mixer.block(index), signal));
         check();
-        limiter?.process(Array.from({ length: mixed.numberOfChannels }, (_, channel) => mixed.getChannelData(channel)));
-        const left = mixed.getChannelData(0);
-        const right = mixed.numberOfChannels > 1 ? mixed.getChannelData(1) : left;
-        const pcm = new Int16Array(mixed.length * CHANNELS);
-        for (let i = 0; i < mixed.length; i++) {
-          pcm[i * 2] = Math.max(-32768, Math.min(32767, Math.round(left[i] * 32767)));
-          pcm[i * 2 + 1] = Math.max(-32768, Math.min(32767, Math.round(right[i] * 32767)));
-        }
-        await send("audio", new Uint8Array(pcm.buffer));
       }
+      limiter = new GainLimiter(loudnessGain(meter.lufs()), SAMPLE_RATE);
     }
     check();
 
     await frames.start(signal);
     for (let index = 0; index < totalFrames; index++) {
       check();
+      await audioUntil(index / fps);
       const moment = outputMoment(scene, (index * 1000) / fps);
       await frames.draw(moment.t, signal, moment.card);
       const frame = new VideoFrame(frames.canvas, { timestamp: Math.round((index * 1e6) / fps) });
@@ -1063,6 +1069,7 @@ async function exportWindowsHevc(
     }
 
     await sending;
+    await audioUntil(Infinity);
     onProgress({ phase: "finishing", done: totalFrames, total: totalFrames });
     check();
     return { path: await invoke<string>("hevc_finish", { id: created.id }), codec: "hevc" };

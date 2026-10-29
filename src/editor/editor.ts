@@ -482,14 +482,13 @@ export class Editor {
     const fallback = defaultProject(take, events);
     // A recording opened for the first time starts with the look and sound picked before recording.
     let project = withSavedLook(fallback);
-    let firstOpen = true;
+    // Only a take with no project yet; one that failed to load is left alone.
+    let firstOpen = false;
     try {
       const saved = await invoke<string | null>("load_project", { dir: take.dir });
       if (gen !== this.openGen) return;
-      if (saved) {
-        project = normalizeProject(JSON.parse(saved), fallback);
-        firstOpen = false;
-      }
+      if (saved) project = normalizeProject(JSON.parse(saved), fallback);
+      else firstOpen = true;
     } catch (error) {
       if (gen !== this.openGen) return;
       console.warn("projeto não carregado", error);

@@ -9,10 +9,17 @@ use webview2_com::Microsoft::Web::WebView2::Win32::{
 use webview2_com::SetPermissionStateCompletedHandler;
 use windows::core::{Interface, HSTRING};
 
-/// Answers WebView2's prompt for any window: camera and microphone are allowed, the rest as usual.
-pub fn on_request<R: Runtime>(_: Webview<R>, kind: PermissionKind) -> PermissionResponse {
+/// Answers WebView2's prompt: the app's own pages get the camera and microphone; any other page,
+/// and any other permission, is asked as usual.
+pub fn on_request<R: Runtime>(webview: Webview<R>, kind: PermissionKind) -> PermissionResponse {
+    let own = webview.url().is_ok_and(|url| match url.scheme() {
+        "tauri" => true,
+        // Built pages come from tauri.localhost; in development, from the dev server here.
+        "http" | "https" => matches!(url.host_str(), Some("tauri.localhost" | "localhost" | "127.0.0.1")),
+        _ => false,
+    });
     match kind {
-        PermissionKind::Camera | PermissionKind::Microphone => PermissionResponse::Allow,
+        PermissionKind::Camera | PermissionKind::Microphone if own => PermissionResponse::Allow,
         _ => PermissionResponse::Default,
     }
 }

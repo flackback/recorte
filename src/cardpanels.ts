@@ -434,11 +434,12 @@ export class CamLook extends CardPanel {
     canvas.style.transform = this.look.mirror ? "scaleX(-1)" : "none";
     const context = canvas.getContext("2d", { willReadFrequently: true })!;
     context.drawImage(video, 0, 0, width, height);
+    const background = this.look.background;
+    // Nothing to change: the camera as drawn.
+    if (background === "original" && this.look.light === 0 && this.look.warmth === 0) return;
     const image = context.getImageData(0, 0, width, height);
     const pixels = image.data;
     const [red, green, blue] = this.grade;
-
-    const background = this.look.background;
     if (background !== "original") this.requestMatte(width, height);
     const matte = background === "original" ? null : this.latest;
     const behind = !matte ? null : background === "blur" ? matte.blurred : this.backdropPixels(width, height);

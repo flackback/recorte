@@ -27,7 +27,9 @@ async function dropUnused(dtype: string) {
       if (!url.includes("/onnx-community/whisper-")) continue;
       const ours = url.includes(`/${MODEL}/`);
       const file = url.split("/").pop() ?? "";
-      const otherWeights = ours && file.endsWith(".onnx") && !file.endsWith(`_${dtype}.onnx`);
+      // transformers.js names 8-bit weights "_quantized".
+      const suffix = dtype === "q8" ? "quantized" : dtype;
+      const otherWeights = ours && file.endsWith(".onnx") && !file.endsWith(`_${suffix}.onnx`);
       if (!ours || otherWeights) await cache.delete(request);
     }
   } catch {

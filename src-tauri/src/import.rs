@@ -214,7 +214,9 @@ fn parse_moof(moof: &[u8], tracks: &mut [Track], defaults: &HashMap<u32, u32>) {
             }
             let mut at = 8 + if flags & 0x1 != 0 { 4 } else { 0 } + if flags & 0x4 != 0 { 4 } else { 0 };
             let stride = [0x100, 0x200, 0x400, 0x800].iter().filter(|bit| flags & **bit != 0).count() * 4;
-            for _ in 0..count {
+            // A damaged count can't make the loop run past the box.
+            let listed = (trun.len().saturating_sub(at) / stride) as u64;
+            for _ in 0..count.min(listed) {
                 track.length += u32_at(trun, at) as u64;
                 at += stride;
             }
@@ -245,7 +247,11 @@ fn top_level(file: &mut File, len: u64) -> io::Result<Vec<(FourCc, u64, u64)>> {
             break;
         }
         found.push((kind, at + head, (size - head).min(len.saturating_sub(at + head))));
-        at += size;
+        // A damaged size can't wrap around and send the scan back to the start.
+        let Some(next) = at.checked_add(size) else {
+            break;
+        };
+        at = next;
     }
     Ok(found)
 }
