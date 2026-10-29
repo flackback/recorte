@@ -36,6 +36,8 @@ ndarray = "0.15"
 tauri-plugin-global-shortcut = "2.4.1"
 trash = "5.2.9"
 tiny_http = "0.12"
+# The same WebView2 bindings Tauri uses, to manage the page's camera and microphone permission.
+webview2-com = "0.39"
 tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
 tauri-plugin-dialog = "2"

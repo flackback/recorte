@@ -6,6 +6,7 @@ mod cursor;
 mod export;
 mod hevc;
 mod import;
+mod media;
 mod meter;
 mod overlay;
 pub mod recorder;
@@ -313,6 +314,7 @@ pub fn run() {
         .manage(AppState::default())
         .manage(export::Exports::default())
         .manage(control::Pending::default())
+        .on_permission_request(media::on_request)
         .setup(|app| {
             use tauri_plugin_global_shortcut::GlobalShortcutExt;
             // One at a time: a shortcut another program already owns only loses that shortcut.
@@ -320,6 +322,9 @@ pub fn run() {
                 if let Err(error) = app.global_shortcut().register(shortcut) {
                     eprintln!("atalho global {shortcut} indisponível: {error}");
                 }
+            }
+            if let Some(window) = app.get_webview_window("main") {
+                media::allow_saved(&window);
             }
             if control::enabled(app.handle()) {
                 if let Err(error) = control::start(app.handle()) {
