@@ -929,6 +929,12 @@ input[type="range"]:focus-visible::-webkit-slider-thumb {
   display: none;
 }
 
+/* The webcam card's panel opens beside it. */
+#cam-pick .device-chevron,
+#cam-pick[aria-expanded="true"] .device-chevron {
+  transform: none;
+}
+
 .meters {
   display: flex;
   flex: 1;

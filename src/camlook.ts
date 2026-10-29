@@ -193,10 +193,13 @@ export class CamLook {
     const card = this.options.anchor.getBoundingClientRect();
     const width = panel.offsetWidth;
     const height = panel.offsetHeight;
-    const left = Math.max(8, Math.min(card.left, window.innerWidth - width - 8));
-    // Under the card, or above it when there is no room below.
-    const below = card.bottom + 6;
-    const top = below + height <= window.innerHeight - 8 ? below : Math.max(8, card.top - 6 - height);
+    // Beside the panel the card is in, level with the card and kept on screen; under it when the
+    // window is too narrow.
+    const side = this.options.anchor.closest(".sidebar")?.getBoundingClientRect().right ?? card.right;
+    const beside = side + 8 + width <= window.innerWidth - 8;
+    const left = beside ? side + 8 : Math.max(8, Math.min(card.left, window.innerWidth - width - 8));
+    const wanted = beside ? card.top : card.bottom + 6;
+    const top = Math.max(8, Math.min(wanted, window.innerHeight - height - 8));
     panel.style.left = `${left}px`;
     panel.style.top = `${top}px`;
   };
