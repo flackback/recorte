@@ -13,7 +13,7 @@ import { resetTips, showTour } from "./tips";
 import { toast } from "./toast";
 import { Settings } from "./settings";
 import { Updates } from "./updates";
-import { CamLook, MicPanel, SoundPanel } from "./cardpanels";
+import { CamLook, MicPanel, OptionsPanel, SoundPanel } from "./cardpanels";
 import { joinPath, levelFill, takeName, type Levels, type Take } from "./types";
 
 type MonitorInfo = { index: number; name: string; width: number; height: number; primary: boolean; x: number; y: number; refreshRate: number };
@@ -47,7 +47,8 @@ const ui = {
   sidebarToggle: $<HTMLButtonElement>("sidebar-toggle"),
   railRecord: $<HTMLButtonElement>("rail-record"),
   railTakes: $<HTMLButtonElement>("rail-takes"),
-  recOptions: $<HTMLDetailsElement>("rec-options"),
+  optionsOpen: $<HTMLButtonElement>("options-open"),
+  optionsBody: $("options-body"),
   optionsSummary: $("options-summary"),
   recordHint: $("record-hint"),
   warnings: $<HTMLUListElement>("warnings"),
@@ -1712,7 +1713,6 @@ ui.railRecord.addEventListener("click", toggleRecording);
 // ---------- sidebar ----------
 
 const SIDEBAR_KEY = "recorte.sidebarCollapsed";
-const OPTIONS_KEY = "recorte.optionsOpen";
 
 /** Folds the panel into a thin rail (more room for the editor), or opens it again. Remembered. */
 function setSidebarCollapsed(collapsed: boolean) {
@@ -1750,18 +1750,12 @@ function updateOptionsSummary() {
 }
 
 for (const control of [ui.keystrokes, ui.showCursor, ui.countdown, ui.drawZoom, ui.fps]) control.addEventListener("change", updateOptionsSummary);
-ui.recOptions.addEventListener("toggle", () => {
-  try {
-    localStorage.setItem(OPTIONS_KEY, ui.recOptions.open ? "1" : "0");
-  } catch {
-    // Only a convenience.
-  }
-});
+const optionsPanel = new OptionsPanel(ui.optionsOpen, ui.optionsBody);
+ui.optionsOpen.addEventListener("click", () => optionsPanel.toggle());
 try {
   setSidebarCollapsed(localStorage.getItem(SIDEBAR_KEY) === "1");
-  ui.recOptions.open = localStorage.getItem(OPTIONS_KEY) === "1";
 } catch {
-  // Defaults: panel open, options folded.
+  // Default: panel open.
 }
 updateOptionsSummary();
 ui.takeSelectionTrash.addEventListener("click", () => void trashTakes(takes.filter((take) => picked.has(take.id))));

@@ -1160,33 +1160,32 @@ input[type="range"]:focus-visible::-webkit-slider-thumb {
 
 /* Folded options under the chips. */
 /* A rounded panel with its own outline; the chips inside keep the control color. */
-.options {
-  border: 1px solid var(--border);
-  border-radius: var(--r-lg);
-  background: transparent;
-  transition: background var(--fast) var(--ease);
-}
-
-.options[open] {
-  background: color-mix(in srgb, var(--surface-2) 35%, transparent);
-}
-
-.options summary {
+.options-head {
   display: flex;
   align-items: center;
   gap: 8px;
+  width: 100%;
   min-height: 40px;
   padding: 0 14px;
+  border: 1px solid var(--border);
   border-radius: var(--r-lg);
+  background: transparent;
   color: var(--text);
+  font: inherit;
   font-weight: 600;
+  text-align: left;
   cursor: pointer;
-  list-style: none;
-  user-select: none;
+  transition: background var(--fast) var(--ease);
 }
 
-.options summary::-webkit-details-marker {
-  display: none;
+.options-head:hover,
+.options-head[aria-expanded="true"] {
+  background: var(--surface-2);
+}
+
+.options-head:focus-visible {
+  outline: none;
+  box-shadow: var(--focus);
 }
 
 .options-summary {
@@ -1201,38 +1200,22 @@ input[type="range"]:focus-visible::-webkit-slider-thumb {
   text-align: right;
 }
 
-.options .chevron {
+.options-head .chevron {
   width: 14px;
   height: 14px;
   flex: none;
   color: var(--muted);
-  transition: transform var(--fast) var(--ease);
 }
 
-.options[open] .chevron {
-  transform: rotate(90deg);
-}
-
-.options[open] .options-summary {
-  visibility: hidden;
-}
-
-.options summary:hover .chevron {
-  color: var(--text);
-}
-
-.options summary:focus-visible {
-  border-radius: var(--r-lg);
-  outline: none;
-  box-shadow: var(--focus);
-}
-
+/* In the panel beside the card. */
 .options-body {
   display: flex;
   flex-direction: column;
   gap: 12px;
-  padding: 2px 12px 14px;
-  animation: fade-in var(--base) var(--ease);
+}
+
+.options-body[hidden] {
+  display: none;
 }
 
 .options-body .hint {

@@ -243,9 +243,10 @@
           </div>
 
           <!-- Less used options, folded; the summary says how they are set. -->
-          <details class="options" id="rec-options">
-            <summary><span>Opções</span><span class="options-summary" id="options-summary"></span><svg class="i chevron"><use href="#i-chevron" /></svg></summary>
-            <div class="options-body">
+          <!-- The options open in a panel beside the card, like the source cards. -->
+          <div class="options">
+            <button class="options-head" id="options-open" title="Opções da gravação" aria-haspopup="dialog" aria-expanded="false"><span>Opções</span><span class="options-summary" id="options-summary"></span><svg class="i chevron"><use href="#i-chevron" /></svg></button>
+            <div class="options-body" id="options-body" hidden>
               <div class="chips" role="group" aria-label="Mais opções">
                 <label class="chip" title="Grava as teclas para mostrar atalhos no vídeo. Atenção: inclui o que for digitado em senhas"><input type="checkbox" id="keystrokes" /><svg class="i"><use href="#i-keyboard" /></svg>Teclas</label>
                 <label class="chip" title="Grava o cursor dentro do vídeo. Deixe desligado para o editor redesenhar e suavizar o cursor"><input type="checkbox" id="show-cursor" /><svg class="i"><use href="#i-cursor" /></svg>Cursor no vídeo</label>
@@ -259,7 +260,7 @@
               </div>
               <p class="hint" id="record-keys">De qualquer programa: <kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>R</kbd> grava e para · <kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>M</kbd> marca um momento</p>
             </div>
-          </details>
+          </div>
 
           <button class="record" id="record" title="Gravar (Alt+Shift+R, de qualquer programa)">
             <span class="dot"></span>

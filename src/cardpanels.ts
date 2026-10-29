@@ -289,6 +289,31 @@ export class SoundPanel extends CardPanel {
   }
 }
 
+// ---------- recording options ----------
+
+/** The recording options (keys, cursor, countdown, zoom, fps): their controls move into the panel while it is open. */
+export class OptionsPanel extends CardPanel {
+  private home: HTMLElement | null = null;
+
+  constructor(
+    anchor: HTMLElement,
+    private body: HTMLElement,
+  ) {
+    super(anchor, "Opções da gravação");
+  }
+
+  protected build(panel: HTMLElement) {
+    this.home ??= this.body.parentElement;
+    this.body.hidden = false;
+    panel.append(this.body);
+  }
+
+  protected closed() {
+    this.body.hidden = true;
+    this.home?.append(this.body);
+  }
+}
+
 // ---------- webcam ----------
 
 export class CamLook extends CardPanel {
