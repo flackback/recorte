@@ -1916,6 +1916,7 @@ async function importDropped(file: File) {
 
 ui.importVideo.addEventListener("click", () => void pickVideo());
 editor.onVideoDrop = (file) => void importDropped(file);
+editor.videoDropTarget = () => document.querySelector<HTMLElement>(".sidebar .takes");
 // Copy progress from Rust, also for imports the AI asks for; the last report ends it.
 void listen<{ done: number; total: number }>("import-progress", ({ payload }) => {
   showImportProgress(payload.done >= payload.total && !importing ? null : payload.done / Math.max(1, payload.total));

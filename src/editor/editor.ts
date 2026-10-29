@@ -238,6 +238,7 @@ export class Editor {
     bgSpeed: $<HTMLInputElement>("bg-speed"),
     styles: $("styles"),
     bgImage: $<HTMLButtonElement>("bg-image"),
+    bgImageLabel: $("bg-image-label"),
     bgFile: $<HTMLInputElement>("bg-file"),
     bgBlurRow: $("bg-blur-row"),
     bgBlur: $<HTMLInputElement>("bg-blur"),
@@ -399,6 +400,8 @@ export class Editor {
   private openGen = 0;
   /** Set by the main window: a video dropped anywhere becomes a new take instead of an asset. */
   onVideoDrop: ((file: File) => void) | null = null;
+  /** Set by the main window: the panel a dragged video is shown landing in (the takes list). */
+  videoDropTarget: (() => HTMLElement | null) | null = null;
   /** The renderer being created, so concurrent callers share one device. */
   private rendererPromise: Promise<void> | null = null;
   /** The GPU device was lost; the next frame creates the renderer again. */
@@ -707,7 +710,11 @@ export class Editor {
 
   // ---------- dropping files ----------
 
-  /** Dragging files over the window: a sign says what dropping them will do. */
+  /**
+   * Dragging files over the window: a sign says what dropping them will do. A video lands on the
+   * takes list, outlined like a drop area; images and sounds can go on their own drop areas, so
+   * the window is not dimmed over them.
+   */
   private buildDrop() {
     const zone = document.createElement("div");
     zone.className = "drop-zone";
@@ -715,8 +722,17 @@ export class Editor {
     zone.setAttribute("aria-hidden", "true");
     const sign = document.createElement("div");
     sign.className = "drop-sign";
+    const signIcon = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    signIcon.classList.add("i");
+    const use = document.createElementNS("http://www.w3.org/2000/svg", "use");
+    use.setAttribute("href", "#i-upload");
+    signIcon.append(use);
+    const signTitle = document.createElement("strong");
+    const signHint = document.createElement("span");
+    sign.append(signIcon, signTitle, signHint);
     zone.append(sign);
     document.body.append(zone);
+    const root = document.documentElement;
     // dragenter/dragleave fire for every element crossed; a count tells when the pointer left the window.
     let depth = 0;
     // A video is imported as a new take, with or without a take open.
@@ -725,6 +741,7 @@ export class Editor {
     const hide = () => {
       depth = 0;
       zone.hidden = true;
+      root.classList.remove("dragging-files");
     };
     window.addEventListener("dragenter", (event) => {
       if (!hasFiles(event)) return;
@@ -743,8 +760,21 @@ export class Editor {
               : kinds.includes("audio")
                 ? "Solte para usar como música de fundo"
                 : "Solte uma imagem, um som ou um vídeo";
-      sign.textContent = message;
-      zone.classList.toggle("refuse", !video && (!this.scene || (!kinds.includes("image") && !kinds.includes("audio") && kinds.every((kind) => kind === "other"))));
+      const refuse = !video && (!this.scene || (!kinds.includes("image") && !kinds.includes("audio") && kinds.every((kind) => kind === "other")));
+      // Over the takes list when it shows (or the whole sidebar when the list is short); the whole window otherwise.
+      let panel = video ? (this.videoDropTarget?.() ?? null) : null;
+      if (panel && panel.getBoundingClientRect().height < 160) panel = panel.parentElement;
+      const rect = panel?.getBoundingClientRect();
+      const onPanel = Boolean(rect && rect.width > 80 && rect.height > 80);
+      zone.classList.toggle("panel", onPanel);
+      zone.classList.toggle("subtle", !video && !refuse);
+      zone.classList.toggle("refuse", refuse);
+      zone.style.cssText = onPanel ? `left:${rect!.left}px;top:${rect!.top}px;width:${rect!.width}px;height:${rect!.height}px` : "";
+      signTitle.textContent = video && onPanel ? "Importar vídeo" : message;
+      signHint.textContent = video && onPanel ? "solte o arquivo para criar uma gravação" : "";
+      signHint.hidden = !signHint.textContent;
+      signIcon.style.display = video && onPanel ? "" : "none";
+      root.classList.add("dragging-files");
       zone.hidden = false;
     });
     window.addEventListener("dragover", (event) => {
@@ -759,8 +789,11 @@ export class Editor {
     });
     window.addEventListener("drop", (event) => {
       if (!hasFiles(event)) return;
+      // A drop area already used the file.
+      const used = event.defaultPrevented;
       event.preventDefault();
       hide();
+      if (used) return;
       const files = Array.from(event.dataTransfer?.files ?? []);
       const movie = files.find((file) => dropKind(file.type, file.name) === "video");
       if (movie && this.onVideoDrop) {
@@ -779,6 +812,37 @@ export class Editor {
       }
       if (image) void this.useBackgroundFile(image);
       if (audio) void this.useMusicFile(audio);
+    });
+  }
+
+  /**
+   * A drop area: lights up while files are dragged over it and uses a dropped file of its kind.
+   * Other files fall through to the window, which says what it can do with them.
+   */
+  private fileDrop(area: HTMLElement, kind: "image" | "audio", use: (file: File) => void) {
+    const hasFiles = (event: DragEvent) => Array.from(event.dataTransfer?.types ?? []).includes("Files");
+    let depth = 0;
+    area.addEventListener("dragenter", (event) => {
+      if (!hasFiles(event)) return;
+      depth++;
+      area.classList.add("over");
+    });
+    area.addEventListener("dragover", (event) => {
+      if (!hasFiles(event)) return;
+      event.preventDefault();
+      if (event.dataTransfer) event.dataTransfer.dropEffect = "copy";
+    });
+    area.addEventListener("dragleave", () => {
+      depth = Math.max(0, depth - 1);
+      if (!depth) area.classList.remove("over");
+    });
+    area.addEventListener("drop", (event) => {
+      depth = 0;
+      area.classList.remove("over");
+      const file = Array.from(event.dataTransfer?.files ?? []).find((candidate) => dropKind(candidate.type, candidate.name) === kind);
+      if (!file || !this.scene) return;
+      event.preventDefault();
+      use(file);
     });
   }
 
@@ -1853,6 +1917,8 @@ export class Editor {
     this.radios(ui.captionsPosition, (value) => this.change((p) => (p.captions.position = value as Project["captions"]["position"])));
 
     ui.bgImage.addEventListener("click", () => ui.bgFile.click());
+    this.fileDrop(ui.bgImage, "image", (file) => void this.useBackgroundFile(file));
+    this.fileDrop(ui.musicPick, "audio", (file) => void this.useMusicFile(file));
     ui.bgFile.addEventListener("change", () => {
       const file = ui.bgFile.files?.[0];
       ui.bgFile.value = "";
@@ -2202,6 +2268,7 @@ export class Editor {
     ui.bgSpeedRow.hidden = !animated;
     ui.bgSpeed.value = String(project.background.speed);
     ui.bgImage.classList.toggle("selected", project.background.kind === "image");
+    ui.bgImageLabel.textContent = project.background.image ? "Trocar imagem" : "Enviar imagem";
     ui.bgBlurRow.hidden = project.background.kind !== "image";
     ui.bgBlur.value = String(project.background.blur);
     ui.padding.value = String(project.background.padding);
@@ -2366,7 +2433,7 @@ export class Editor {
     ui.volumeMusic.disabled = !project.audio.music;
     ui.duck.checked = project.audio.duck;
     ui.duck.disabled = !project.audio.music || !take.mic;
-    ui.musicLabel.textContent = project.audio.music ? "Trocar música…" : "Escolher música…";
+    ui.musicLabel.textContent = project.audio.music ? "Trocar música" : "Enviar música";
     ui.musicRemove.hidden = !project.audio.music;
 
     ui.captionsVisible.checked = project.captions.visible;

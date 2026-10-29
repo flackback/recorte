@@ -151,6 +151,7 @@
       <symbol id="i-sidebar" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2.5" /><path d="M9 4v16" /></symbol>
       <symbol id="i-chevron" viewBox="0 0 24 24"><path d="m9 6 6 6-6 6" /></symbol>
       <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" /></symbol>
+      <symbol id="i-upload" viewBox="0 0 24 24"><path d="M12 15V4M7.5 8.5 12 4l4.5 4.5" /><path d="M4 15v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3" /></symbol>
       <symbol id="i-win-min" viewBox="0 0 24 24"><path d="M6 12h12" /></symbol>
       <symbol id="i-win-max" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2" /></symbol>
       <symbol id="i-win-restore" viewBox="0 0 24 24"><rect x="5.5" y="8.5" width="10" height="10" rx="2" /><path d="M9 5.5h7.5a2 2 0 0 1 2 2V15" /></symbol>
@@ -399,10 +400,12 @@
                     <span>Velocidade do movimento <output data-value-for="bg-speed"></output></span>
                     <input type="range" id="bg-speed" min="0.25" max="3" step="0.25" />
                   </label>
-                  <div class="row">
-                    <button class="secondary wide" id="bg-image"><svg class="i"><use href="#i-image" /></svg>Usar imagem…</button>
-                    <input type="file" id="bg-file" accept="image/*" hidden />
-                  </div>
+                  <button type="button" class="file-drop" id="bg-image" title="Usar uma imagem do computador como fundo (PNG, JPG ou WebP)">
+                    <svg class="i"><use href="#i-upload" /></svg>
+                    <strong id="bg-image-label">Enviar imagem</strong>
+                    <span>clique ou solte um arquivo</span>
+                  </button>
+                  <input type="file" id="bg-file" accept="image/*" hidden />
                   <label class="slider" id="bg-blur-row" hidden>
                     <span>Desfoque da imagem <output data-value-for="bg-blur"></output></span>
                     <input type="range" id="bg-blur" min="0" max="40" step="1" />
@@ -769,7 +772,11 @@
                 <section>
                   <h3>Música de fundo</h3>
                   <div class="row">
-                    <button class="secondary wide" id="music-pick"><svg class="i"><use href="#i-plus" /></svg><span id="music-label">Escolher música…</span></button>
+                    <button type="button" class="file-drop" id="music-pick" title="Usar um som do computador como música de fundo (MP3, WAV, M4A, OGG ou FLAC)">
+                      <svg class="i"><use href="#i-upload" /></svg>
+                      <strong id="music-label">Enviar música</strong>
+                      <span>clique ou solte um arquivo</span>
+                    </button>
                     <button class="icon" id="music-remove" title="Remover música" aria-label="Remover música" hidden><svg class="i"><use href="#i-trash" /></svg></button>
                     <input type="file" id="music-file" accept="audio/*" hidden />
                   </div>

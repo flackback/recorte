@@ -3405,7 +3405,25 @@ input[type="range"]:focus-visible {
   background: rgb(0 0 0 / 0.6);
 }
 
+/* Images and sounds have their own drop areas: only a sign at the bottom, nothing dimmed. */
+.drop-zone.subtle {
+  align-items: end;
+  padding-bottom: 28px;
+  border: 0;
+  background: none;
+}
+
+/* A video lands on the takes list, outlined like a drop area. */
+.drop-zone.panel {
+  inset: auto;
+  border-radius: var(--r-lg);
+  background: color-mix(in srgb, var(--accent) 10%, var(--surface));
+}
+
 .drop-sign {
+  display: grid;
+  justify-items: center;
+  gap: 2px;
   padding: 12px 20px;
   border-radius: var(--r-pill);
   background: var(--surface);
@@ -3413,6 +3431,97 @@ input[type="range"]:focus-visible {
   color: var(--text);
   font-size: 14px;
   font-weight: 600;
+  text-align: center;
+}
+
+.drop-sign span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 400;
+}
+
+.drop-zone.panel .drop-sign {
+  padding: 0 12px;
+  background: none;
+  box-shadow: none;
+}
+
+.drop-zone.panel .drop-sign .i {
+  width: 26px;
+  height: 26px;
+  margin-bottom: 6px;
+  color: var(--accent);
+}
+
+/* A dashed area that takes a file: click to pick one, or drop it there. */
+.file-drop {
+  display: grid;
+  flex: 1;
+  justify-items: center;
+  gap: 2px;
+  width: 100%;
+  padding: 14px 12px;
+  border: 1.5px dashed color-mix(in srgb, var(--muted) 45%, transparent);
+  border-radius: var(--r-lg);
+  background: none;
+  color: var(--text);
+  font: inherit;
+  text-align: center;
+  cursor: pointer;
+  transition: border-color var(--fast) var(--ease), background var(--fast) var(--ease), transform var(--fast) var(--ease);
+}
+
+.file-drop .i {
+  width: 20px;
+  height: 20px;
+  margin-bottom: 4px;
+  color: var(--muted);
+  transition: color var(--fast) var(--ease), transform var(--fast) var(--ease);
+}
+
+.file-drop strong {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.file-drop span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.file-drop:hover {
+  border-color: color-mix(in srgb, var(--accent) 60%, transparent);
+  background: var(--surface-2);
+}
+
+.file-drop:active {
+  transform: scale(0.99);
+}
+
+.file-drop:focus-visible {
+  outline: none;
+  box-shadow: var(--focus);
+}
+
+/* An image is in use. */
+.file-drop.selected {
+  border-color: color-mix(in srgb, var(--accent) 55%, transparent);
+}
+
+/* Files are being dragged somewhere over the window; the area under the pointer lights up. */
+.dragging-files .file-drop {
+  border-color: color-mix(in srgb, var(--accent) 55%, transparent);
+}
+
+.file-drop.over,
+.dragging-files .file-drop.over {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+.file-drop.over .i {
+  color: var(--accent);
+  transform: translateY(-2px);
 }
 
 /* ---------- inspector controls, in the reference style ---------- */
