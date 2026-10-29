@@ -1187,7 +1187,7 @@ tool(
 
 tool(
   "transcribe",
-  "Transcreve a fala da gravação com o Whisper, no próprio computador. Precisa do app aberto. Na primeira vez, baixa o modelo (cerca de 80 MB). Os cortes de palavras anteriores são apagados, porque os índices mudam.",
+  "Transcreve a fala da gravação com o Whisper, no próprio computador. Precisa do app aberto. Na primeira vez, baixa o modelo (cerca de 800 MB). Os cortes de palavras anteriores são apagados, porque os índices mudam.",
   {
     take: takeArg,
     language: z.enum(["pt", "en", "es", "fr", "de", "it"]).optional().describe("Idioma da fala. Padrão: o último usado no app, ou o idioma do Windows."),
