@@ -381,4 +381,13 @@ window.addEventListener("keydown", (event) => {
     void setTool("mouse");
   }
 });
+// Any change in size (pause label, levels, tray, confirm, fonts) refits the window, so the bar is
+// never cut. One fit per frame at most.
+let fitFrame = 0;
+new ResizeObserver(() => {
+  fitFrame ||= requestAnimationFrame(() => {
+    fitFrame = 0;
+    void fit();
+  });
+}).observe(ui.shell);
 void document.fonts.ready.then(() => fit());

@@ -178,10 +178,16 @@
 
     <div class="app">
       <aside class="sidebar">
-        <!-- With the panel collapsed: just a way to record and to bring the panel back. -->
+        <!-- With the panel collapsed: a compact floating pill with what matters most while recording. -->
         <nav class="rail" aria-label="Painel recolhido">
+          <button class="rail-button" id="rail-expand" title="Mostrar o painel (Ctrl+\)" aria-label="Mostrar o painel"><svg class="i"><use href="#i-sidebar" /></svg></button>
           <button class="rail-record" id="rail-record" title="Gravar (Alt+Shift+R)" aria-label="Gravar"><span class="dot"></span></button>
-          <button class="rail-button" id="rail-takes" title="Mostrar as gravações" aria-label="Mostrar as gravações"><svg class="i"><use href="#i-folder" /></svg></button>
+          <span class="rail-sep" aria-hidden="true"></span>
+          <button class="rail-button rail-toggle" id="rail-system" data-for="system-audio" aria-pressed="true" title="Som do sistema" aria-label="Som do sistema"><svg class="i"><use href="#i-audio" /></svg></button>
+          <button class="rail-button rail-toggle" id="rail-mic" data-for="microphone" aria-pressed="false" title="Microfone" aria-label="Microfone"><svg class="i"><use href="#i-mic" /></svg></button>
+          <button class="rail-button rail-toggle" id="rail-webcam" data-for="webcam" aria-pressed="false" title="Webcam" aria-label="Webcam"><svg class="i"><use href="#i-camera" /></svg></button>
+          <span class="rail-sep" aria-hidden="true"></span>
+          <button class="rail-button" id="rail-takes" title="Ver as gravações" aria-label="Ver as gravações"><svg class="i"><use href="#i-folder" /></svg></button>
         </nav>
 
         <section class="panel" id="record-panel">
@@ -300,8 +306,12 @@
             <button class="primary" id="empty-record"><span class="rec-mark"></span>Gravar agora</button>
             <button class="secondary" id="empty-open" hidden>Abrir a última gravação</button>
           </div>
+          <p class="empty-hint"><kbd>Alt</kbd> + <kbd>Shift</kbd> + <kbd>R</kbd> grava e para de qualquer programa.</p>
           <section class="recent" id="recent" aria-label="Gravações recentes" hidden>
-            <h3>Gravações recentes</h3>
+            <div class="recent-head">
+              <h3>Gravações recentes</h3>
+              <button class="link-button" id="recent-all" hidden>Ver todas</button>
+            </div>
             <div class="recent-row" id="recent-row" role="list"></div>
           </section>
         </div>

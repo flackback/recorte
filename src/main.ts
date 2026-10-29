@@ -47,6 +47,8 @@ const ui = {
   sidebarToggle: $<HTMLButtonElement>("sidebar-toggle"),
   railRecord: $<HTMLButtonElement>("rail-record"),
   railTakes: $<HTMLButtonElement>("rail-takes"),
+  railExpand: $<HTMLButtonElement>("rail-expand"),
+  recentAll: $<HTMLButtonElement>("recent-all"),
   optionsOpen: $<HTMLButtonElement>("options-open"),
   optionsBody: $("options-body"),
   optionsSummary: $("options-summary"),
@@ -1357,21 +1359,23 @@ function recentCard(take: Take) {
   return card;
 }
 
+/** How many recent takes the start screen shows; the panel lists them all. */
+const RECENT_MAX = 8;
+
 function renderRecent() {
   ui.recent.hidden = takes.length === 0;
-  ui.recentRow.replaceChildren(...takes.map(recentCard));
+  // With takes to show, the start screen sits higher instead of floating in the middle.
+  ui.empty.classList.toggle("with-recent", takes.length > 0);
+  ui.recentRow.replaceChildren(...takes.slice(0, RECENT_MAX).map(recentCard));
+  ui.recentAll.hidden = takes.length <= RECENT_MAX;
+  ui.recentAll.textContent = `Ver todas (${takes.length})`;
 }
 
-// The row scrolls sideways with the mouse wheel too.
-ui.recentRow.addEventListener(
-  "wheel",
-  (event) => {
-    if (Math.abs(event.deltaY) <= Math.abs(event.deltaX)) return;
-    event.preventDefault();
-    ui.recentRow.scrollLeft += event.deltaY;
-  },
-  { passive: false },
-);
+// "Ver todas": opens the panel on the full list, ready to search.
+ui.recentAll.addEventListener("click", () => {
+  setSidebarCollapsed(false);
+  ui.takeSearch.focus();
+});
 
 function focusTake(id: string) {
   takeRows.get(id)?.button.focus();
@@ -1730,7 +1734,24 @@ function setSidebarCollapsed(collapsed: boolean) {
 
 const sidebarCollapsed = () => document.querySelector(".app")!.classList.contains("collapsed");
 ui.sidebarToggle.addEventListener("click", () => setSidebarCollapsed(!sidebarCollapsed()));
-ui.railTakes.addEventListener("click", () => setSidebarCollapsed(false));
+ui.railTakes.addEventListener("click", () => {
+  setSidebarCollapsed(false);
+  ui.takeSearch.focus();
+});
+ui.railExpand.addEventListener("click", () => setSidebarCollapsed(false));
+
+// Rail toggles mirror the panel chips (Som do sistema, Microfone, Webcam): same inputs, same events.
+for (const toggle of document.querySelectorAll<HTMLButtonElement>(".rail-toggle")) {
+  const input = $<HTMLInputElement>(toggle.dataset.for!);
+  const sync = () => toggle.setAttribute("aria-pressed", String(input.checked));
+  input.addEventListener("change", sync);
+  toggle.addEventListener("click", () => {
+    if (input.disabled) return;
+    input.checked = !input.checked;
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+  });
+  sync();
+}
 window.addEventListener("keydown", (event) => {
   if (event.ctrlKey && event.key === "\\") {
     event.preventDefault();

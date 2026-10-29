@@ -114,8 +114,9 @@ fn bring_to_top(window: &tauri::WebviewWindow) {
 }
 
 pub const RECBAR: &str = "recbar";
-/// Starting size; the bar then fits itself to its content (and to the drawing tray).
-const RECBAR_SIZE: (u32, u32) = (576, 68);
+/// Starting size, a little larger than the bar with sound levels so nothing is cut before the page
+/// fits the window to its content (and to the drawing tray).
+const RECBAR_SIZE: (u32, u32) = (680, 84);
 
 /// The small floating bar shown while recording (time, pause, mark, drawing tools, stop), at the top of the
 /// recorded monitor. It is kept out of the recording.
