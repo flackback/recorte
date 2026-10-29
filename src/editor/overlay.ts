@@ -1,5 +1,5 @@
 import { backgroundColors, type Note, type Project } from "./project";
-import type { CardView, OverlayContent } from "./composition";
+import type { CardView, NoteView, OverlayContent } from "./composition";
 
 type Text = OverlayContent;
 
@@ -26,7 +26,10 @@ export class OverlayPainter {
 
   /** Returns true when the canvas changed and must be uploaded again. */
   paint(text: Text, project: Project, card: CardView | null = null): boolean {
-    const notes = text.notes.map(({ note, opacity }) => [note.kind, note.x, note.y, note.width, note.height, note.text, note.color, note.size, note.direction, Math.round(opacity * 20)]);
+    const notes = text.notes.map(({ note, opacity, appear, leave }) => [
+      note.kind, note.x, note.y, note.width, note.height, note.text, note.color, note.size, note.direction, note.animation,
+      Math.round(opacity * 20), Math.round(appear * 120), Math.round(leave * 120),
+    ]);
     const cardKey = card && [card.card.title, card.card.subtitle, Math.round(card.opacity * 30), project.background.kind, project.background.preset, project.background.animation];
     const key = JSON.stringify([text.keys, text.caption?.words.map((word) => word.i), text.caption?.current, project.captions, notes, cardKey, this.canvas.width, this.canvas.height]);
     if (key === this.lastKey) return false;
@@ -42,10 +45,9 @@ export class OverlayPainter {
     const short = Math.min(canvas.width, canvas.height);
     this.visible = Boolean(text.keys || text.caption || text.notes.length || (card && card.opacity > 0));
 
-    for (const { note, opacity } of text.notes) {
+    for (const view of text.notes) {
       context.save();
-      context.globalAlpha = opacity;
-      drawNote(context, note, canvas.width, canvas.height, blur);
+      drawAnimatedNote(context, view, canvas.width, canvas.height, blur);
       context.restore();
     }
 
@@ -118,8 +120,41 @@ export class OverlayPainter {
   }
 }
 
-/** One note, in a frame of `width` × `height` pixels; `blur` scales the shadow to the canvas. */
-function drawNote(context: OffscreenCanvasRenderingContext2D, note: Note, width: number, height: number, blur = 1) {
+const easeOut = (x: number) => 1 - Math.pow(1 - x, 3);
+const easeIn = (x: number) => x * x * x;
+/** Rises past 1 and settles back, for "Pop". */
+const backOut = (x: number) => 1 + 2.70158 * Math.pow(x - 1, 3) + 1.70158 * Math.pow(x - 1, 2);
+
+/** A note with its entry or exit motion applied (same math in preview and export). */
+function drawAnimatedNote(context: OffscreenCanvasRenderingContext2D, { note, opacity, appear, leave }: NoteView, width: number, height: number, blur: number) {
+  const kind = note.animation;
+  if (kind === "none") {
+    context.globalAlpha = opacity;
+    drawNote(context, note, width, height, blur);
+    return;
+  }
+  const short = Math.min(width, height);
+  const inEased = easeOut(appear);
+  const outEased = easeIn(leave);
+  const enter = kind === "fade" || kind === "slide" ? inEased : kind === "pop" ? Math.min(1, appear * 2.5) : 1;
+  context.globalAlpha = enter * (1 - outEased);
+  if (kind === "slide") context.translate(0, (1 - inEased) * short * 0.05 - outEased * short * 0.03);
+  if (kind === "pop") {
+    const scale = appear < 1 ? 0.5 + 0.5 * backOut(appear) : 1 - 0.15 * outEased;
+    const cx = (note.x + note.width / 2) * width;
+    const cy = (note.y + note.height / 2) * height;
+    context.translate(cx, cy);
+    context.scale(scale, scale);
+    context.translate(-cx, -cy);
+  }
+  drawNote(context, note, width, height, blur, kind === "type" || kind === "draw" ? appear : 1);
+}
+
+/**
+ * One note, in a frame of `width` × `height` pixels; `blur` scales the shadow to the canvas.
+ * `reveal` below 1 draws part of it: the outline or arrow so far, or the first letters of the text.
+ */
+function drawNote(context: OffscreenCanvasRenderingContext2D, note: Note, width: number, height: number, blur = 1, reveal = 1) {
   const short = Math.min(width, height);
   const x = note.x * width;
   const y = note.y * height;
@@ -132,6 +167,11 @@ function drawNote(context: OffscreenCanvasRenderingContext2D, note: Note, width:
     const line = Math.max(3, short * 0.006 * note.size);
     context.strokeStyle = note.color;
     context.lineWidth = line;
+    if (reveal < 1) {
+      if (reveal <= 0) return;
+      const perimeter = 2 * (w + h);
+      context.setLineDash([perimeter * reveal, perimeter]);
+    }
     context.beginPath();
     context.roundRect(x, y, w, h, Math.min(w, h) * 0.12);
     context.stroke();
@@ -142,10 +182,14 @@ function drawNote(context: OffscreenCanvasRenderingContext2D, note: Note, width:
     const line = Math.max(4, short * 0.008 * note.size);
     const fromLeft = note.direction === "se" || note.direction === "ne";
     const fromTop = note.direction === "se" || note.direction === "sw";
+    if (reveal <= 0) return;
     const from = { x: fromLeft ? x : x + w, y: fromTop ? y : y + h };
-    const to = { x: fromLeft ? x + w : x, y: fromTop ? y + h : y };
-    const angle = Math.atan2(to.y - from.y, to.x - from.x);
-    const head = line * 3.6;
+    const end = { x: fromLeft ? x + w : x, y: fromTop ? y + h : y };
+    // Drawing on: the shaft grows from the tail, then the head opens at its tip.
+    const drawn = Math.min(1, reveal / 0.75);
+    const to = { x: from.x + (end.x - from.x) * drawn, y: from.y + (end.y - from.y) * drawn };
+    const angle = Math.atan2(end.y - from.y, end.x - from.x);
+    const head = line * 3.6 * Math.max(0, Math.min(1, (reveal - 0.6) / 0.4));
     // The shaft stops where the head starts, so the tip stays sharp.
     const neck = { x: to.x - Math.cos(angle) * head * 0.8, y: to.y - Math.sin(angle) * head * 0.8 };
     context.strokeStyle = note.color;
@@ -156,6 +200,7 @@ function drawNote(context: OffscreenCanvasRenderingContext2D, note: Note, width:
     context.moveTo(from.x, from.y);
     context.lineTo(neck.x, neck.y);
     context.stroke();
+    if (head <= 0) return;
     context.beginPath();
     context.moveTo(to.x, to.y);
     context.lineTo(to.x - Math.cos(angle - 0.45) * head, to.y - Math.sin(angle - 0.45) * head);
@@ -189,10 +234,20 @@ function drawNote(context: OffscreenCanvasRenderingContext2D, note: Note, width:
   context.fill();
   context.shadowColor = "transparent";
   context.fillStyle = note.color;
-  context.textAlign = "center";
   context.textBaseline = "middle";
-  lines.forEach((line, index) => context.fillText(line, x + w / 2, top + padY + lineHeight * (index + 0.5)));
-  context.textAlign = "start";
+  if (reveal >= 1) {
+    context.textAlign = "center";
+    lines.forEach((line, index) => context.fillText(line, x + w / 2, top + padY + lineHeight * (index + 0.5)));
+    context.textAlign = "start";
+    return;
+  }
+  // Typing: each line keeps the place it has when complete, so letters don't shift as they appear.
+  let letters = Math.round(lines.reduce((sum, line) => sum + line.length, 0) * reveal);
+  lines.forEach((line, index) => {
+    if (letters <= 0) return;
+    context.fillText(line.slice(0, letters), x + w / 2 - context.measureText(line).width / 2, top + padY + lineHeight * (index + 0.5));
+    letters -= line.length;
+  });
 }
 
 /** A full-frame title screen on the style's gradient (an animated background's colors, held still). */

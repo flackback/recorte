@@ -529,20 +529,46 @@ export function outputMoment(scene: Pick<Scene, "project" | "time">, output: num
   return { t: scene.time.toSource(Math.min(inside, body)), card: null };
 }
 
-/** Notes fade in and out over this long. */
+/** Notes without an animation fade in and out over this long (source ms). */
 const NOTE_FADE = 200;
+/** Animated notes come in and go out over these lengths (output ms); typing takes longer for long text. */
+const NOTE_IN = 350;
+const NOTE_OUT = 250;
+const NOTE_TYPE_PER_CHAR = 30;
+const NOTE_TYPE_MAX = 1200;
+
+/** A note on screen: `appear` runs 0–1 while it comes in, `leave` 0–1 while it goes out. */
+export type NoteView = { note: Note; opacity: number; appear: number; leave: number };
 
 export type OverlayContent = {
   keys: string | null;
   caption: { words: Word[]; current: number } | null;
-  notes: { note: Note; opacity: number }[];
+  notes: NoteView[];
 };
+
+/** How far a note is into its entry and exit at source time `t`, timed on the output so speed-ups don't rush it. */
+function noteView(scene: Pick<Scene, "time">, note: Note, t: number): NoteView {
+  if (note.animation === "none") return { note, opacity: Math.max(0, Math.min(1, (t - note.start) / NOTE_FADE, (note.end - t) / NOTE_FADE)), appear: 1, leave: 0 };
+  const now = scene.time.toOutput(t);
+  const start = scene.time.toOutput(note.start);
+  const end = scene.time.toOutput(note.end);
+  const length = Math.max(1, end - start);
+  const typing = note.kind === "text" && (note.animation === "type" || note.animation === "draw");
+  const entry = typing ? Math.min(NOTE_TYPE_MAX, Math.max(NOTE_IN, note.text.length * NOTE_TYPE_PER_CHAR)) : NOTE_IN;
+  const clamp = (value: number) => Math.max(0, Math.min(1, value));
+  return {
+    note,
+    opacity: 1,
+    appear: clamp((now - start) / Math.max(1, Math.min(entry, length * 0.6))),
+    leave: clamp(1 - (end - now) / Math.max(1, Math.min(NOTE_OUT, length * 0.4))),
+  };
+}
 
 export function overlayText(scene: Scene, t: number): OverlayContent {
   const { project } = scene;
   const notes = project.notes
     .filter((note) => t >= note.start && t <= note.end)
-    .map((note) => ({ note, opacity: Math.max(0, Math.min(1, (t - note.start) / NOTE_FADE, (note.end - t) / NOTE_FADE)) }));
+    .map((note) => noteView(scene, note, t));
   let keys: string | null = null;
   if (project.keys.visible && scene.keys.length) {
     const last = lastAt(scene.keys, t);

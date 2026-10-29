@@ -117,7 +117,23 @@ export type Note = Range & {
   color: string;
   size: number;
   direction: "se" | "sw" | "ne" | "nw";
+  /** How it comes in and goes out (NOTE_ANIMATIONS). */
+  animation: NoteAnimation;
 };
+
+/**
+ * Entry and exit motion of a note. "type" writes text letter by letter and "draw" draws arrows and
+ * boxes; each stands in for the other on the wrong kind, so switching kinds keeps a reveal.
+ */
+export type NoteAnimation = "none" | "fade" | "slide" | "pop" | "type" | "draw";
+export const NOTE_ANIMATIONS: { id: NoteAnimation; name: string; kinds: NoteKind[] }[] = [
+  { id: "none", name: "Nenhuma", kinds: ["text", "arrow", "box"] },
+  { id: "fade", name: "Surgir", kinds: ["text", "arrow", "box"] },
+  { id: "slide", name: "Deslizar", kinds: ["text", "arrow", "box"] },
+  { id: "pop", name: "Pop", kinds: ["text", "arrow", "box"] },
+  { id: "type", name: "Digitar", kinds: ["text"] },
+  { id: "draw", name: "Desenhar", kinds: ["arrow", "box"] },
+];
 /** A title screen before or after the video, on the same background as the style. */
 export type TitleCard = { enabled: boolean; title: string; subtitle: string; durationMs: number };
 
@@ -128,7 +144,7 @@ export const NOTE_COLORS = ["#ffffff", "#ffd60a", "#ff453a", "#30d158", "#0a84ff
 
 export function newNote(range: Range, kind: NoteKind = "text"): Note {
   const area = kind === "text" ? { x: 0.25, y: 0.07, width: 0.5, height: 0.12 } : kind === "box" ? { x: 0.35, y: 0.35, width: 0.3, height: 0.3 } : { x: 0.3, y: 0.3, width: 0.18, height: 0.18 };
-  return { ...range, kind, ...area, text: kind === "text" ? "Seu texto aqui" : "", color: kind === "text" ? "#ffffff" : "#ffd60a", size: 1, direction: "se" };
+  return { ...range, kind, ...area, text: kind === "text" ? "Seu texto aqui" : "", color: kind === "text" ? "#ffffff" : "#ffd60a", size: 1, direction: "se", animation: "pop" };
 }
 export type Rect = { x: number; y: number; width: number; height: number };
 
@@ -631,7 +647,8 @@ export function normalizeProject(raw: unknown, fallback: Project): Project {
     cameras: list(value.cameras, []),
     media: normalizeMedia(value.media),
     speed: list(value.speed, []),
-    notes: list(value.notes, []),
+    // Notes from before animations appear without motion.
+    notes: list(value.notes, []).map((note) => ({ ...note, animation: NOTE_ANIMATIONS.some((candidate) => candidate.id === note.animation) ? note.animation : "none" })),
     cards: {
       intro: { ...fallback.cards.intro, ...value.cards?.intro },
       outro: { ...fallback.cards.outro, ...value.cards?.outro },

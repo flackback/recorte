@@ -754,6 +754,10 @@ const noteShape = {
   color: z.string().regex(/^#[0-9a-fA-F]{6}$/).optional().describe(`Cor em hexadecimal. Sugestões: ${NOTE_COLORS.join(", ")}.`),
   size: z.number().min(0.5).max(2.5).optional().describe("Tamanho do texto ou espessura da linha. Padrão: 1."),
   direction: z.enum(["se", "sw", "ne", "nw"]).optional().describe("Para onde a seta aponta: se (baixo-direita), sw, ne, nw. A seta cruza a caixa de um canto ao oposto."),
+  animation: z
+    .enum(["none", "fade", "slide", "pop", "type", "draw"])
+    .optional()
+    .describe("Animação de entrada e saída: none (nenhuma), fade (surgir), slide (deslizar para cima), pop (cresce com um leve quique), type (digitar, para texto) ou draw (desenhar, para seta e destaque). Padrão em itens novos: pop."),
 };
 
 function applyNote(note: Note, values: Partial<Note>) {
@@ -781,7 +785,7 @@ tool(
 
 tool(
   "update_note",
-  "Altera um texto, seta ou destaque pelo id: tempo, tipo, texto, posição, cor, tamanho ou direção.",
+  "Altera um texto, seta ou destaque pelo id: tempo, tipo, texto, posição, cor, tamanho, direção ou animação.",
   { take: takeArg, id: z.string(), start: ms("Novo início").optional(), end: ms("Novo fim").optional(), kind: z.enum(["text", "arrow", "box"]).optional(), ...noteShape },
   ({ take, id, start, end, ...values }) =>
     edit(take, (project, { take: meta }) => {

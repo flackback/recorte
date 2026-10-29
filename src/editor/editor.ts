@@ -34,6 +34,7 @@ import {
   mergeRange,
   newId,
   newNote,
+  NOTE_ANIMATIONS,
   NOTE_COLORS,
   SPEEDS,
   STYLES,
@@ -225,6 +226,7 @@ export class Editor {
     noteColors: $("note-colors"),
     noteSize: $<HTMLInputElement>("note-size"),
     noteDirection: $("note-direction"),
+    noteAnimation: $("note-animation"),
     notePlace: $<HTMLButtonElement>("note-place"),
     selectionSpeed: $("selection-speed"),
     speedRate: $("speed-rate"),
@@ -1824,6 +1826,18 @@ export class Editor {
       if (this.selected?.track === "notes") this.setNoteKind(this.selected.id, value as NoteKind);
     });
     this.radios(ui.noteDirection, (value) => this.updateNote((note) => (note.direction = value as Note["direction"])));
+    ui.noteAnimation.replaceChildren(
+      ...NOTE_ANIMATIONS.map((animation) => {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "choice";
+        button.setAttribute("role", "radio");
+        button.dataset.value = animation.id;
+        button.textContent = animation.name;
+        button.addEventListener("click", () => this.updateNote((note) => (note.animation = animation.id)));
+        return button;
+      }),
+    );
     this.radios(ui.speedRate, (value) => {
       if (this.selected?.track === "speed") this.setSpeed(this.selected.id, Number(value));
     });
@@ -2281,6 +2295,13 @@ export class Editor {
         ui.noteSize.value = String(note.size);
         ui.noteDirection.hidden = note.kind !== "arrow";
         this.setRadio(ui.noteDirection, note.direction);
+        // "Digitar" is for text and "Desenhar" for arrows and boxes; each lights up for the other on the wrong kind.
+        const shown = note.animation === "type" || note.animation === "draw" ? (note.kind === "text" ? "type" : "draw") : note.animation;
+        for (const button of ui.noteAnimation.querySelectorAll<HTMLElement>(".choice")) {
+          const animation = NOTE_ANIMATIONS.find((candidate) => candidate.id === button.dataset.value)!;
+          button.hidden = !animation.kinds.includes(note.kind);
+          button.setAttribute("aria-checked", String(animation.id === shown));
+        }
         for (const swatch of ui.noteColors.querySelectorAll<HTMLElement>(".swatch")) swatch.classList.toggle("selected", swatch.dataset.color === note.color);
       }
       if (kind === "speed") {
