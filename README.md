@@ -102,7 +102,7 @@ Gravador de tela e editor para Windows, feito com Tauri 2 (Rust + TypeScript, We
 
 ## Configurações
 
-- **Edição por IA:** estado do servidor MCP, Node.js, Claude Code e Claude Desktop, com botões para conectar; liga e desliga o acesso da IA.
+- **Edição por IA:** estado do servidor MCP, do Claude Code e do Claude Desktop, com botões para conectar; liga e desliga o acesso da IA.
 - **Gravação:** pasta das gravações, atalhos globais e "Rever dicas".
 - **Atualizações:** versão instalada, procurar agora, procurar sozinho (liga e desliga) e novidades.
 - **Sobre:** versão e link do código.
@@ -152,19 +152,21 @@ O Recorte tem um servidor MCP. Com ele, uma IA (Claude Code, Claude Desktop ou o
 Abra **Configurações** (engrenagem na barra de título ou **Ctrl+,**) → **Edição por IA**. A tela mostra:
 
 - se a IA pode usar o app (um botão liga e desliga o canal local);
-- onde está o servidor MCP, que vem junto com o app instalado;
-- se o Node.js está instalado (o servidor precisa dele);
+- se o servidor MCP está pronto. Ele roda dentro do próprio Recorte (`recorte.exe --mcp`), num motor de JavaScript pequeno (QuickJS). Não precisa de Node.js;
 - se o Claude Code e o Claude Desktop já conhecem o Recorte, com um botão **Conectar** para cada um;
 - exemplos de pedidos e o comando ou a configuração para conectar outros programas.
 
 ### Instalar à mão (desenvolvimento)
 
 1. Gere o servidor: `npm run build:mcp`. O arquivo fica em `mcp/dist/recorte-mcp.mjs`.
-2. Registre no Claude Code, para todas as pastas: `claude mcp add --scope user recorte -- node E:/slice/mcp/dist/recorte-mcp.mjs`.
-3. Confira com `claude mcp get recorte`. O estado deve ser "Connected".
-4. No Claude Desktop (aba de chat), adicione em `claude_desktop_config.json`: `"recorte": { "command": "node", "args": ["E:/slice/mcp/dist/recorte-mcp.mjs"] }`.
+2. Compile o app: `cargo build` em `src-tauri`. O build de debug lê o servidor de `mcp/dist`.
+3. Registre no Claude Code, para todas as pastas: `claude mcp add --scope user recorte -- E:/slice/src-tauri/target/debug/recorte.exe --mcp`.
+4. Confira com `claude mcp get recorte`. O estado deve ser "Connected".
+5. No Claude Desktop (aba de chat), adicione em `claude_desktop_config.json`: `"recorte": { "command": "E:/slice/src-tauri/target/debug/recorte.exe", "args": ["--mcp"] }`.
 
 Depois de mudar o código em `mcp/` ou em `src/editor/project.ts`, rode `npm run build:mcp` de novo.
+
+O servidor não usa o Node.js. `mcp/host.ts` dá a ele os arquivos, os timers e o canal com o app, e `src-tauri/src/mcp.rs` implementa essas funções. Não importe módulos `node:` em `mcp/` nem no código do editor que ele usa.
 
 ### Segurança
 

@@ -1,9 +1,8 @@
+// First: it fills in the timers and web APIs the rest needs.
+import { files as disk, HostTransport, resolve } from "./host";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import type { RequestHandlerExtra } from "@modelcontextprotocol/sdk/shared/protocol.js";
 import type { CallToolResult, ServerNotification, ServerRequest } from "@modelcontextprotocol/sdk/types.js";
-import fs from "node:fs/promises";
-import path from "node:path";
 import * as z from "zod";
 
 import {
@@ -1187,9 +1186,9 @@ tool(
     open: z.boolean().optional().describe("Abre a nova gravação no editor do app. Padrão: não."),
   },
   async ({ path: file, open }) => {
-    const absolute = path.resolve(file);
-    const stat = await fs.stat(absolute).catch(() => null);
-    if (!stat?.isFile()) throw new Error(`Arquivo não encontrado: ${absolute}`);
+    const absolute = resolve(file);
+    const stat = disk.stat(absolute);
+    if (!stat?.file) throw new Error(`Arquivo não encontrado: ${absolute}`);
     // Copying a large video takes a while; the app answers when the take is ready.
     const imported = await appRequest<{ takeId: string; title: string | null; durationMs: number; width: number; height: number; fps: number; audio: boolean; warnings: string[] }>(
       "import",
@@ -1277,7 +1276,7 @@ tool(
     const paths = result.paths ?? [result.path];
     const files = await Promise.all(
       paths.map(async (file, index) => {
-        const bytes = (await fs.stat(file).catch(() => null))?.size ?? null;
+        const bytes = disk.stat(file)?.size ?? null;
         const output = outputSize(list[index] ?? list[0], source, longSide);
         return { file, aspect: list[index] ?? list[0], size: `${output.width}×${output.height}`, megabytes: bytes === null ? null : Number((bytes / 1e6).toFixed(1)) };
       }),
@@ -1310,4 +1309,4 @@ tool(
   },
 );
 
-await server.connect(new StdioServerTransport());
+await server.connect(new HostTransport());

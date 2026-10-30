@@ -7,6 +7,7 @@ mod export;
 mod hevc;
 mod import;
 mod media;
+pub mod mcp;
 mod meter;
 mod overlay;
 pub mod recorder;
@@ -326,6 +327,7 @@ pub fn run() {
             if let Some(window) = app.get_webview_window("main") {
                 media::allow_saved(&window);
             }
+            ai::migrate();
             if control::enabled(app.handle()) {
                 if let Err(error) = control::start(app.handle()) {
                     eprintln!("canal do MCP desligado: {error}");

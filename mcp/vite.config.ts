@@ -1,16 +1,16 @@
 import { defineConfig } from "vite";
 
 // Bundles the MCP server, with the editor's project model and its dependencies, into one file
-// that runs with plain Node.
+// that `recorte.exe --mcp` runs in QuickJS (see mcp/host.ts). Nothing in it may need Node.js.
 export default defineConfig({
   publicDir: false,
   build: {
     ssr: "mcp/server.ts",
     outDir: "mcp/dist",
     emptyOutDir: true,
-    target: "node20",
+    target: "es2023",
     minify: false,
     rollupOptions: { output: { entryFileNames: "recorte-mcp.mjs", format: "es" } },
   },
-  ssr: { noExternal: true, target: "node" },
+  ssr: { noExternal: true, target: "webworker" },
 });

@@ -15,8 +15,6 @@ type AiStatus = {
   port: number | null;
   serverPath: string;
   serverFound: boolean;
-  node: string | null;
-  nodePath: string | null;
   claudeCode: Client;
   claudeDesktop: Client;
   command: string;
@@ -219,10 +217,7 @@ export class Settings {
 
     ui.checks.replaceChildren(
       row(status.enabled ? "ok" : "off", "Canal local", status.enabled ? `Ligado, só neste computador (porta ${status.port ?? "?"})` : "Desligado: a IA não consegue usar o app"),
-      row(status.serverFound ? "ok" : "warn", "Servidor MCP", status.serverFound ? status.serverPath : "Arquivo do servidor não encontrado; reinstale o Recorte"),
-      status.node
-        ? row("ok", "Node.js", `${status.node} · ${status.nodePath ?? ""}`)
-        : row("warn", "Node.js", "Necessário para o servidor MCP", button("Baixar", () => openUrl("https://nodejs.org/pt-br/download"))),
+      row(status.serverFound ? "ok" : "warn", "Servidor MCP", status.serverFound ? "Dentro do Recorte, sem outros programas" : "Arquivo do servidor não encontrado; reinstale o Recorte"),
       client("Claude Code", "code", status.claudeCode, "Vale para as próximas sessões."),
       client("Claude Desktop", "desktop", status.claudeDesktop, "Reinicie o Claude Desktop para ver as ferramentas."),
     );

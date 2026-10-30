@@ -41,6 +41,8 @@ webview2-com = "0.39"
 tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
 tauri-plugin-dialog = "2"
+rquickjs = "0.14.0"
+dirs = "7"
 
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration
@@ -50,3 +52,7 @@ lto = true
 opt-level = 3
 panic = "abort"
 strip = true
+
+# The MCP server runs in QuickJS; unoptimized, it answers several times slower even in development.
+[profile.dev.package.rquickjs-sys]
+opt-level = 3
